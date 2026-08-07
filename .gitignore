@@ -27,3 +27,9 @@ graphify-out
 
 # pytest cache
 .pytest_cache/
+
+# log
+logs
+
+# dataset
+*.jsonl
