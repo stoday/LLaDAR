@@ -120,3 +120,6 @@ python -m pytest
 ```
 
 See `docs/PRD-lladar-test-dataset.md` for the complete product requirements.
+## License
+
+LLaDAR is released under the [MIT License](LICENSE).

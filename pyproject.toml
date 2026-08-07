@@ -7,9 +7,17 @@ name = "lladar"
 version = "0.1.0"
 description = "Generate contrastive datasets for detecting unsupported assumptions in LLM agents"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
   "akasha-terminal>=1.4",
+]
+
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
 ]
 
 [project.scripts]
