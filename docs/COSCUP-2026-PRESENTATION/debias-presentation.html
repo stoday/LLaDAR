@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>邁向可信任 AI｜Agents 偏見檢測與緩解框架</title>
+  <style>
+    :root{--ink:#17202a;--navy:#17324d;--teal:#168c8c;--mint:#ddf4ef;--coral:#e66a5d;--amber:#f0b44d;--paper:#f7f8fa;--line:#d8dee5;--muted:#5c6770;--white:#fff}
+    *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#0e2538;color:var(--ink);font-family:"Microsoft JhengHei","Noto Sans TC",Arial,sans-serif}
+    body{overflow:hidden}.deck{height:100vh;position:relative}.slide{display:none;height:100vh;min-height:520px;padding:5.3vh 6vw 5.2vh;background:var(--white);position:relative;overflow:hidden}.slide.active{display:block}.slide.dark{background:var(--navy);color:var(--white)}.slide.teal{background:var(--teal);color:var(--white)}
+    .eyebrow{font-size:clamp(10px,1.05vw,15px);font-weight:800;letter-spacing:.12em;color:var(--teal);text-transform:uppercase}.dark .eyebrow,.teal .eyebrow{color:var(--mint)}
+    h1,h2,h3,p{margin:0}h1{font-size:clamp(32px,4.2vw,66px);line-height:1.1;letter-spacing:-.035em}.title{margin-top:2.6vh;max-width:1000px}.subtitle{font-size:clamp(16px,1.55vw,25px);line-height:1.45;color:var(--muted);margin-top:2.5vh;max-width:930px}.dark .subtitle,.teal .subtitle{color:#d5e4e9}.section-title{font-size:clamp(27px,3vw,48px);line-height:1.15;letter-spacing:-.03em;margin-top:1.8vh;color:var(--navy)}.dark .section-title,.teal .section-title{color:var(--white)}
+    .lead{font-size:clamp(19px,1.8vw,30px);line-height:1.45;font-weight:800;color:var(--navy)}.dark .lead,.teal .lead{color:var(--white)}.muted{color:var(--muted)}
+    .grid{display:grid;gap:1.5vw}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}.cards{margin-top:5vh}.card{border:1px solid var(--line);border-radius:18px;background:var(--paper);padding:1.45rem;min-height:145px}.card.white{background:#fff}.card.coral{background:#fff0ed;border-color:#f4c6bf}.card.mint{background:var(--mint);border-color:#b8e4dc}.card h3{font-size:clamp(17px,1.45vw,24px);line-height:1.25;color:var(--navy);margin-bottom:.8rem}.card p,.card li{font-size:clamp(14px,1.15vw,19px);line-height:1.55;color:var(--muted)}.card ul{padding-left:1.25rem;margin:.35rem 0 0}.dot{width:10px;height:10px;border-radius:50%;display:inline-block;background:var(--teal);margin-right:.55rem}.coral-dot{background:var(--coral)}
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:2vw;margin-top:6vh}.panel{border-radius:22px;padding:2rem;min-height:270px}.panel.dark-panel{background:var(--navy);color:var(--white)}.panel.teal-panel{background:var(--teal);color:var(--white)}.panel h3{font-size:clamp(20px,2vw,32px);margin-bottom:1rem}.panel p{font-size:clamp(16px,1.45vw,24px);line-height:1.5}
+    .quote{border-left:7px solid var(--coral);padding:1.1rem 1.4rem;margin-top:4vh;background:#fff7f5;border-radius:0 16px 16px 0;font-size:clamp(19px,1.7vw,29px);line-height:1.45;font-weight:800;color:var(--navy)}
+    .flow{display:flex;align-items:stretch;gap:.75rem;margin-top:6vh}.flow-item{flex:1;background:var(--navy);border-radius:16px;padding:1.15rem;color:#fff;min-height:180px}.flow-item.emph{background:#8d3d48}.flow-item b{display:block;color:var(--mint);font-size:clamp(14px,1.2vw,20px);margin-bottom:1.2rem}.flow-item strong{font-size:clamp(16px,1.4vw,23px);display:block;margin-bottom:.8rem}.flow-item span{font-size:clamp(13px,1.05vw,17px);line-height:1.5;color:#d5e4e9}.arrow{display:flex;align-items:center;color:var(--coral);font-size:2rem;font-weight:900}
+    .compare{margin-top:5vh;border-radius:16px;overflow:hidden;border:1px solid var(--line)}.compare .head,.compare .row{display:grid;grid-template-columns:1fr 1fr}.compare .head div{padding:1rem 1.3rem;background:var(--navy);color:#fff;font-weight:800;font-size:clamp(16px,1.3vw,22px);text-align:center}.compare .head div:last-child{background:var(--teal)}.compare .row div{padding:.95rem 1.3rem;font-size:clamp(14px,1.15vw,19px);line-height:1.4}.compare .row:nth-child(odd) div{background:#f0f3f6}.compare .row:nth-child(even) div{background:#fff}.compare .row div:last-child{color:var(--coral);font-weight:700;background:#eaf7f4}
+    .six{margin-top:5vh}.six .card{min-height:130px}.number{font-size:clamp(18px,1.5vw,25px);font-weight:900;color:var(--teal);margin-bottom:.55rem}.card.coral .number{color:var(--coral)}
+    .defense{display:grid;grid-template-columns:.8fr 2fr 4fr;align-items:center;gap:1vw;margin-top:4vh}.defense>*{min-height:83px;display:flex;align-items:center;padding:1rem 1.2rem;border-radius:14px}.defense .tag{justify-content:center;font-weight:900;background:var(--mint);color:var(--teal)}.defense .name{font-size:clamp(17px,1.45vw,23px);font-weight:900;color:#fff;background:var(--teal)}.defense .body{font-size:clamp(15px,1.25vw,21px);color:var(--navy);background:var(--paper)}.defense:nth-child(3n) .tag{background:#fff3d9;color:#a36e00}.defense:nth-child(3n) .name{background:var(--amber)}
+    .quote-card{background:var(--navy);border-radius:22px;padding:2.1rem;color:#fff;margin-top:7vh}.quote-card p{font-size:clamp(24px,2.6vw,44px);line-height:1.3;font-weight:900;max-width:980px}.quote-card small{display:block;color:var(--mint);font-size:clamp(14px,1.2vw,19px);margin-top:1rem}
+    .footer{position:absolute;left:6vw;right:6vw;bottom:2.1vh;border-top:1px solid var(--line);padding-top:.7rem;display:flex;justify-content:space-between;color:var(--muted);font-size:11px;letter-spacing:.1em;font-weight:800}.dark .footer,.teal .footer{border-color:rgba(255,255,255,.24);color:#b7cdd9}.progress{position:fixed;left:0;bottom:0;height:4px;background:var(--coral);z-index:20;transition:width .25s}.controls{position:fixed;right:1.2rem;bottom:.8rem;z-index:25;display:flex;gap:.4rem;opacity:.35;transition:opacity .2s}.controls:hover{opacity:1}.controls button{border:0;background:rgba(255,255,255,.85);color:var(--navy);border-radius:999px;width:36px;height:30px;cursor:pointer;font-weight:800}.help{position:fixed;right:1rem;top:.8rem;color:#fff;font-size:11px;z-index:25;opacity:.55}.notes{display:none;position:fixed;right:1.2rem;top:1.2rem;width:min(360px,35vw);max-height:70vh;overflow:auto;background:rgba(16,42,67,.96);color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:14px;padding:1rem;z-index:30;box-shadow:0 10px 35px rgba(0,0,0,.25)}.notes.show{display:block}.notes b{color:var(--mint);display:block;margin-bottom:.45rem}.notes p{font-size:14px;line-height:1.55}
+    .metric{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-top:5vh}.metric .card{min-height:180px}.metric .card h3{font-size:clamp(18px,1.6vw,26px)}.metric .card p{font-size:clamp(14px,1.2vw,19px)}
+    @media(max-width:800px){body{overflow:auto}.slide{height:auto;min-height:100vh;padding:8vh 7vw 9vh}.grid-3,.grid-4,.grid-2,.metric,.split{grid-template-columns:1fr}.flow{display:block}.flow-item{margin-bottom:.7rem;min-height:auto}.arrow{display:none}.defense{grid-template-columns:1fr}.defense>*{min-height:auto}.compare .row div,.compare .head div{padding:.7rem}.help{display:none}.notes{width:80vw}.footer{bottom:2vh}}
+    @media print{body{overflow:visible;background:#fff}.slide,.slide.active{display:block;height:100vh;page-break-after:always}.controls,.help,.progress,.notes{display:none!important}}
+    /* Dark conference redesign: larger type, denser stage layout, stronger contrast */
+    body{background:#081522}
+    .slide{background:#0f1d2d;color:#f4f8fb;padding:4.8vh 5.6vw 5.2vh}
+    .slide.dark{background:#081522}.slide.teal{background:#0b7778}
+    .eyebrow{font-size:clamp(12px,1.2vw,18px);color:#55d0c0;letter-spacing:.14em}
+    .dark .eyebrow,.teal .eyebrow{color:#b8fff2}
+    h1{font-size:clamp(42px,5.6vw,86px);line-height:1.08}
+    .section-title{font-size:clamp(36px,4.1vw,66px);line-height:1.1;color:#f7fbff;margin-top:2.3vh}
+    .subtitle{font-size:clamp(20px,2vw,32px);line-height:1.4;color:#c9d6e0;max-width:1080px;margin-top:2.7vh}
+    .dark .subtitle,.teal .subtitle{color:#d9f7f1}
+    .lead{font-size:clamp(22px,2.25vw,36px);line-height:1.35;color:#f5fbff}
+    .cards{margin-top:4.5vh}.grid{gap:1.25vw}
+    .card{background:#172a40;border:1px solid #35526c;border-radius:20px;padding:1.55rem;min-height:175px;box-shadow:0 12px 28px rgba(0,0,0,.16)}
+    .card.white,.card.mint,.card.coral{background:#172a40;border-color:#35526c}
+    .card h3{font-size:clamp(20px,1.75vw,30px);line-height:1.22;color:#f8fbff;margin-bottom:1rem}
+    .card p,.card li{font-size:clamp(17px,1.35vw,23px);line-height:1.52;color:#d5e1ea}
+    .panel{background:#172a40!important;border:1px solid #35526c!important;box-shadow:0 12px 28px rgba(0,0,0,.18)}
+    .panel h3{font-size:clamp(25px,2.3vw,38px);color:#f8fbff}.panel p{font-size:clamp(19px,1.7vw,28px);color:#e0eaf0}.panel .muted{color:#b8c8d4!important}
+    .quote{background:#183247!important;border-left-color:#ff806f;color:#fff;padding:1.35rem 1.6rem;margin-top:3.5vh;font-size:clamp(23px,2.15vw,35px);line-height:1.4}
+    .split{margin-top:4.5vh;gap:1.5vw}.flow{margin-top:4.5vh;gap:.65rem}.flow-item{background:#173149;min-height:205px;padding:1.35rem;box-shadow:0 10px 24px rgba(0,0,0,.16)}.flow-item.emph{background:#8d3d48}.flow-item strong{font-size:clamp(19px,1.55vw,26px)}.flow-item span{font-size:clamp(16px,1.2vw,21px)}.flow-item b{font-size:clamp(16px,1.25vw,22px)}
++    .compare{border-color:#35526c;margin-top:4.5vh}.compare .head div{font-size:clamp(19px,1.7vw,28px);padding:1.15rem;background:#172f49}.compare .head div:last-child{background:#167f7d}.compare .row div{font-size:clamp(17px,1.35vw,23px);padding:1.05rem 1.3rem;background:#172a40!important;color:#e4edf3}.compare .row div:last-child{background:#173e42!important;color:#b8fff2}
++    .six .card{min-height:165px}.number{font-size:clamp(21px,1.8vw,30px);color:#55d0c0}.card.coral .number{color:#ff806f}
++    .defense{margin-top:4vh;gap:1vw}.defense>*{min-height:100px;padding:1.15rem 1.3rem}.defense .body{font-size:clamp(17px,1.45vw,24px);background:#172a40;color:#e2edf2}.defense .name{font-size:clamp(20px,1.7vw,28px)}.defense .tag{font-size:clamp(17px,1.4vw,23px)}
++    .metric{margin-top:4.5vh;gap:1.2vw}.metric .card{min-height:220px}.metric .card[style]{background:#172a40!important;border-color:#a98234!important}.metric .card h3{font-size:clamp(22px,1.9vw,32px)}.metric .card p{font-size:clamp(17px,1.35vw,23px)}
++    .quote-card{margin-top:5vh;padding:2.4rem;background:#173247}.quote-card p{font-size:clamp(30px,3.1vw,52px)}.quote-card small{font-size:clamp(16px,1.35vw,22px)}
++    .footer{left:5.6vw;right:5.6vw;border-color:#38516a;color:#91a8b9;font-size:12px}.dark .footer,.teal .footer{border-color:#38516a;color:#b5ceda}
++    .dot{width:12px;height:12px;background:#55d0c0}.coral-dot{background:#ff806f}
++    @media(max-width:800px){.slide{padding:8vh 7vw 10vh}.section-title{font-size:clamp(31px,8vw,48px)}.subtitle{font-size:20px}.lead{font-size:22px}.card p,.card li{font-size:17px}.card h3{font-size:23px}.panel p{font-size:19px}.quote{font-size:22px}.footer{left:7vw;right:7vw}}
+*** End Patch    /* Global box contrast pass: separate content containers from the dark stage */
+    .card,.panel,.flow-item,.defense .body{border:1px solid #547694!important}
+    .card,.card.white,.card.mint,.card.coral{background:#1b3550!important;border-color:#547694!important}
+    .panel{background:#1b3550!important;border-color:#547694!important}
+    .flow-item{background:#1a3652;border:1px solid #547694}.flow-item.emph{background:#8d3d48;border-color:#d86b69}
+    .defense .body{background:#23425f!important;border-color:#6485a0!important;color:#f0f6fa!important}
+    .compare{border-color:#547694!important}.compare .row div{border-top:1px solid #405f7a}.compare .row div:last-child{border-left:1px solid #547694}
+    .metric .card[style]{background:#1b3550!important;border-color:#b08a3b!important}    /* Stronger box/background separation */
+    .card,.panel,.flow-item,.defense .body{border:2px solid #7ea5c0!important}
+    .card,.card.white,.card.mint,.card.coral{background:#254a69!important;border-color:#7ea5c0!important}
+    .panel{background:#254a69!important;border-color:#7ea5c0!important}
+    .flow-item{background:#244a6b;border-color:#7ea5c0}.flow-item.emph{background:#963f4a;border-color:#ff9b8e}
+    .defense .body{background:#315b7c!important;border-color:#98bad1!important;color:#ffffff!important}
+    .metric .card[style]{background:#254a69!important;border-color:#d0ad55!important}    /* Cover composition: move the subtitle lower to balance the title block */
+    .slide.dark:first-child .subtitle{margin-top:6vh;max-width:900px}
+    .slide.dark:first-child .quote-card{margin-top:3vh}    /* Page number: keep it clear of the bottom-right controls */
+    .footer{position:absolute}
+    .footer span:last-child{position:absolute;right:0;top:-1.8rem}
+    @media(max-width:800px){.footer span:last-child{top:-1.6rem}}    .resource-table{margin-top:4vh;border:2px solid #7ea5c0;border-radius:16px;overflow:hidden;background:#254a69;box-shadow:0 12px 28px rgba(0,0,0,.16)}
+    .resource-table .tr{display:grid;grid-template-columns:1.55fr 3fr 3.7fr;border-bottom:1px solid #6f94ae}
+    .resource-table .tr:last-child{border-bottom:0}.resource-table .th{background:#168c8c;color:#fff;font-weight:900;font-size:clamp(17px,1.4vw,24px);padding:1rem 1.15rem}.resource-table .td{color:#f1f7fa;font-size:clamp(15px,1.2vw,20px);line-height:1.4;padding:.95rem 1.15rem;background:#254a69}.resource-table .td:first-child{font-weight:900;color:#b8fff2;background:#2d5b7c}.resource-table .tr:nth-child(odd) .td{background:#2a5272}.resource-table .tr:nth-child(odd) .td:first-child{background:#35698b}    .card h3 a{color:inherit;text-decoration:none}.card h3 a:hover{text-decoration:underline;color:#b8fff2}  </style>
+</head>
+<body>
+<main class="deck" aria-label="邁向可信任 AI：Agents 偏見檢測與緩解框架">
+  <section class="slide dark active" data-notes="開場：今天不只談模型是否有偏見，而是談 Agent 如何把偏見帶進搜尋、排序、工具呼叫與現實行動。">
+    <div class="eyebrow">Trustworthy AI / Developer Talk</div><h1 class="title">邁向可信任 AI<br><span style="color:var(--mint)">開發者必備的 Agents 偏見檢測與緩解框架</span></h1><p class="subtitle">從模型輸出，到整條決策路徑的系統責任</p>
+  </section>
+
+
+
+
+
+
+
+
+
+
+
+
+
+  <section class="slide" data-notes="說明多款主流 LLM 在履歷評估中的隱性偏向。重點是交叉性測試：相同履歷只替換姓名或身份線索，就可能改變面試推薦結果。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">履歷評估中的隱性與交叉性偏向</h2><p class="subtitle">當內容完全相同，只替換姓名或身份線索，Agent 的推薦是否仍然一致？</p>
+    <div class="split"><div class="panel" style="background:var(--paper)"><h3>研究設計</h3><p>使用數百份真實履歷，替換可辨識種族與性別的姓名，進行配對推薦測試。</p><p style="margin-top:1rem">比較面試推薦、首選比例與理由是否出現系統性差異。</p></div><div class="panel dark-panel"><h3>觀察到的風險</h3><p>部分研究發現，典型白人姓名的推薦比例高於黑人姓名；在對抗測試中，黑人男性姓名幾乎不被評為首選。</p><p style="margin-top:1rem;color:var(--mint)">這也促使地方政府建立招聘 AI 使用規範，例如 NYC Local Law 144。</p></div></div><div class="quote">只測單一身份維度，可能看不到真正嚴重的偏向。</div><div class="footer"><span>01 / FAILURE CASES</span><span>00</span></div>
+  </section>
+
+
+
+
+
+
+
+  <section class="slide" data-notes="說明 Gemini 歷史人物影像生成爭議與 Amazon 招募系統。兩個案例放在一起，可以對照「過度對齊」與「資料中的結構性偏向」如何導致不同型態的翻車。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">生成式 AI 與 LLM 的翻車案例</h2><p class="subtitle">一個是過度矯正，一個是從歷史資料學到性別偏向；兩者都不是單靠一句 Prompt 能解決。</p>
+    <div class="grid grid-2 cards"><article class="card"><h3>Gemini 歷史人物影像爭議｜2024</h3><p><span class="dot coral-dot"></span>為避免清一色白人／男性，加入強制多樣性與對齊調校<br><span class="dot coral-dot"></span>生成美國建國先賢、1940 年代德國士兵等歷史角色時，出現歷史不合常理的多樣性<br><span class="dot coral-dot"></span>功能緊急暫停，品牌與 AI 信任度受損</p></article><article class="card"><h3>Amazon AI 履歷篩選</h3><p><span class="dot"></span>以過去成功入職者履歷訓練，學到科技業的男多女少<br><span class="dot"></span>「女性」字眼、女子大學等線索導致評分下降<br><span class="dot"></span>移除欄位後仍會從語氣與選詞抓出代理特徵，專案最終放棄</p></article></div><p class="lead" style="text-align:center;margin-top:4vh">過度修正與資料偏向，看似相反，卻都會讓系統偏離原本服務方向。</p><div class="footer"><span>01 / FAILURE CASES</span><span>00</span></div>
+  </section>
+  <section class="slide" data-notes="開場延伸：將常用的 LLM 偏見、真實性與安全性資料集整理成一張資源表，讓聽眾先掌握目前社群可使用的評測基礎。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">LLM 偏見評估資源</h2><p class="subtitle">先用成熟的資料集與 benchmark 建立基準，再把方法延伸到 Agent 的完整執行流程。</p>
+    <div class="resource-table"><div class="tr"><div class="th">資源</div><div class="th">主要用途</div><div class="th">評估重點</div></div><div class="tr"><div class="td">BBQ</div><div class="td">偏見問答基準</div><div class="td">9 個社會維度；比較模糊與明確情境，測試資訊不足時是否依賴刻板印象</div></div><div class="tr"><div class="td">ToxiGen</div><div class="td">隱性毒性與偏見</div><div class="td">大量表面正常、沒有髒話但帶有少數族群偏見的語句</div></div><div class="tr"><div class="td">StereoSet／CrowS-Pairs</div><div class="td">刻板印象偏好</div><div class="td">比較刻板與反刻板選項，觀察模型內建的群體偏好</div></div><div class="tr"><div class="td">CLEAR-Bias</div><div class="td">對抗性與交叉性偏見</div><div class="td">LLM-as-a-Judge、提示攻擊、越獄，以及性別×種族等交叉性偏見</div></div><div class="tr"><div class="td">TruthfulQA／HHH</div><div class="td">真實性與安全性</div><div class="td">錯誤信念、迷思、有用性、誠實性與無害性</div></div></div><p class="lead" style="text-align:center;margin-top:3.5vh">共同核心：把抽象的偏見與安全風險，轉成可重現、可比較的測試。</p><div class="footer"><span>01 / EVALUATION LANDSCAPE</span><span>00</span></div>
+  </section>
+
+  <section class="slide" data-notes="介紹 DeepEval、Fairlearn 與 Responsible AI Toolbox。重點是把偏見測試放進 Python 開發流程、人口統計分組分析與 CI/CD。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">開源工具：從單次測試走向自動化</h2><p class="subtitle">如果要在開發流程或 CI/CD 中持續測試，工具需要能重複執行、量化結果並保留證據。</p>
+    <div class="grid grid-3 cards"><article class="card"><h3>DeepEval</h3><p>Python 開源 LLM 單元測試框架，提供 BiasMetric、ToxicityMetric 與 LLM-as-a-Judge 評分。</p></article><article class="card"><h3>Fairlearn</h3><p>以不同人口統計分組比較模型表現差異，協助把服務原則轉成可觀測指標。</p></article><article class="card coral"><h3><a href="https://github.com/microsoft/responsible-ai-toolbox" target="_blank" rel="noopener">Responsible AI Toolbox ↗</a></h3><p>提供微軟開源的負責任 AI 分析工具，可延伸到生成式 AI 的風險與偏差檢視。</p></article></div><div class="quote">工具的價值不只是給分數，而是讓測試能被重跑、比較、審查與納入發布門檻。</div><div class="footer"><span>01 / TOOLS</span><span>00</span></div>
+  </section>
+
+  <section class="slide" data-notes="介紹 LM-Evaluation-Harness 與 Giskard。前者適合標準化、批次化 benchmark；後者適合 LLM 應用、RAG 與 Agent 的 QA、安全性與紅隊測試。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">標準化評測與 Agent 紅隊</h2><p class="subtitle">從模型 benchmark 到應用層測試，兩種工具互補：一個建立可比較基線，一個逼近真實使用風險。</p>
+    <div class="grid grid-2 cards"><article class="card"><h3>LM-Evaluation-Harness</h3><p><span class="dot"></span>LLM 社群常用的標準化評估框架<br><span class="dot"></span>可整合 BBQ、TruthfulQA、HellaSwag 等資料集<br><span class="dot"></span>適合以 command line 批次比較不同模型</p></article><article class="card coral"><h3>Giskard</h3><p><span class="dot coral-dot"></span>針對 LLM 應用、RAG 與 Agent 的 QA 與安全性測試<br><span class="dot coral-dot"></span>提供自動化 Red-Teaming，生成偏見誘導 Prompt<br><span class="dot coral-dot"></span>觀察系統是否產出有害或偏見內容</p></article></div><p class="lead" style="text-align:center;margin-top:4vh">真正的 Agent 評測，需要同時測模型能力、應用流程與外部行動。</p><div class="footer"><span>01 / TOOLS</span><span>00</span></div>
+  </section>  <section class="slide" data-notes="開場第 1 段：先從聽眾熟悉的 AI 偏見案例開始，讓大家看到模型會把群體與特徵的關聯帶入預測、生成與決策。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">傳統的 AI 偏見</h2><p class="subtitle">講到 AI 偏見，通常會想到模型對不同群體產生刻板的判斷。</p>
+    <div class="grid grid-2 cards"><article class="card"><h3><span class="dot coral-dot"></span>招募與信用</h3><p>招募模型較常推薦男性擔任工程師。<br>信用評估模型對特定年齡或族群較不利。</p></article><article class="card"><h3><span class="dot coral-dot"></span>生成與語言</h3><p>圖像生成模型把護理師畫成女性。<br>語言模型對不同國籍產生文化刻板印象。</p></article></div><div class="quote">「台灣人都很熱情、很愛幫忙。」聽起來正面，卻仍把群體印象套用到個人，是一種正向的文化刻板印象。</div><p class="lead" style="text-align:center;margin-top:3vh">只要系統有所偏向，就一定需要消除嗎？</p><div class="footer"><span>OPENING</span><span>02</span></div>
+  </section>
+
+  <section class="slide" data-notes="開場第 2 段：用女性美容 Agent、Python Agent、素食餐廳 Agent 等例子說明，有些偏向正是服務定位，不必然是需要修正的問題。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">有偏向，不一定代表應用服務有問題</h2><p class="subtitle">中立不是目標，關鍵是偏向是否符合提供者有意設計的價值。</p>
+    <div class="grid grid-4 cards"><article class="card mint"><h3>女性美容 Agent</h3><p>保養、彩妝與髮型內容主要面向女性。</p></article><article class="card"><h3>Python Agent</h3><p>優先提供 Python 解法。</p></article><article class="card"><h3>素食餐廳 Agent</h3><p>偏好推薦素食餐廳。</p></article><article class="card"><h3>企業知識 Agent</h3><p>優先採用公司內部文件。</p></article></div><div class="quote">Agent 有偏向，不等於 Agent 有我們想要去除的偏見。</div><p class="lead" style="text-align:center;margin-top:3vh">有些偏向是服務存在的理由；有些則是運作過程中非預期產生的。</p><div class="footer"><span>OPENING</span><span>18</span></div>
+  </section>
+
+  <section class="slide" data-notes="開場第 3 段：把偏見從社會群體擴展到 Agent 的資訊、策略與行動選擇。重點是持續而穩定地偏向某些選項，並可能偏離產品原本的意圖。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">Agent 的偏見不只涉及社會群體</h2><p class="subtitle">當模型開始搜尋、規劃、呼叫工具與採取行動，偏向會出現在整個執行流程。</p>
+    <div class="grid grid-3 cards"><article class="card"><h3>資訊偏向</h3><p>搜尋 Agent 總是優先採用英文資料。<br>研究 Agent 過度依賴排名較前的資料。</p></article><article class="card"><h3>策略偏向</h3><p>程式 Agent 總想重寫，而不是修改既有程式。<br>購物 Agent 無論需求為何都偏好高價商品。</p></article><article class="card coral"><h3>行動偏向</h3><p>維修 Agent 過度偏好更換零件，而不是先嘗試修復。<br>多 Agent 彼此認同，形成錯誤共識。</p></article></div><div class="quote">Agent 持續而穩定地偏向某些資訊、選項或行動，而且可能偏離服務提供者原本想打造的產品。</div><div class="footer"><span>OPENING</span><span>19</span></div>
+  </section>
+
+  <section class="slide" data-notes="開場第 4 段＋範圍銜接：正式提出 Agent 偏見的工作定義，並說明系統性、廣義性、相對性三個要點。最後用範圍聲明銜接下一節。">
+    <div class="eyebrow">01 / 開場</div><h2 class="section-title">Agent 偏見的定義</h2><p class="subtitle">定義：Agent 在資訊選擇、推理、工具使用、決策或行動中，持續表現出不符合服務提供者意圖的系統性傾向。</p>
+    <div class="grid grid-3 cards"><article class="card"><h3>系統性</h3><p>不是一次偶發錯誤，而是反覆出現的傾向。</p></article><article class="card"><h3>廣義性</h3><p>不限於性別、族群與文化，也包含資料、工具、策略和行動選擇。</p></article><article class="card"><h3>相對性</h3><p>是否需要校正，要相對於服務提供者想打造的服務來判斷。</p></article></div><div class="quote">去偏見不是讓 Agent 完全不偏，而是保留有意設計的偏向，校正非預期的系統性偏向。</div><div class="footer"><span>OPENING → AGENT ANATOMY</span><span>17</span></div>
+  </section>
+
+
+
+
+
+  <section class="slide" data-notes="第二段：把 Agent 當成系統，不是單一模型。這個循環觀點是後面分析偏見來源的基礎。">
+    <div class="eyebrow">02 / 基本結構</div><h2 class="section-title">什麼是 Agent？一個會循環的決策系統</h2><p class="subtitle">它把目標拆成步驟，使用工具取得資訊，再依結果調整下一步。</p>
+    <div class="grid grid-3 cards"><article class="card"><h3><span class="dot"></span>目標</h3><p>使用者希望完成什麼</p></article><article class="card"><h3><span class="dot"></span>規劃</h3><p>將任務拆成步驟</p></article><article class="card"><h3><span class="dot"></span>模型</h3><p>進行推理與決策</p></article><article class="card"><h3><span class="dot coral-dot"></span>工具</h3><p>搜尋、資料庫、程式、郵件</p></article><article class="card"><h3><span class="dot"></span>記憶</h3><p>保存過去經驗與使用者資訊</p></article><article class="card"><h3><span class="dot"></span>行動與回饋</h3><p>執行結果後調整下一步</p></article></div>
+    <p class="lead" style="text-align:center;margin-top:4vh">每一次工具呼叫與記憶寫入，都可能改變下一步的決策空間。</p><div class="footer"><span>AGENT ANATOMY</span><span>18</span></div>
+  </section>
+
+  <section class="slide" data-notes="第二段：逐列比較。請特別停在第三、四列，說明風險從可見文字，延伸到不可見的流程選擇。">
+    <div class="eyebrow">02 / 比較</div><h2 class="section-title">為什麼 Agent 的偏見更複雜？</h2><p class="subtitle">偏見可能藏在輸出之外：搜尋什麼、相信什麼、做什麼。</p>
+    <div class="compare"><div class="head"><div>一般 LLM</div><div>AI Agent</div></div><div class="row"><div>主要產生文字</div><div>可能採取實際行動</div></div><div class="row"><div>通常是單次回答</div><div>多步驟、持續決策</div></div><div class="row"><div>偏見較容易在輸出中被看見</div><div>偏見可能藏在搜尋、排序與工具選擇中</div></div><div class="row"><div>影響多半停留在資訊層面</div><div>可能影響工作、金融、醫療與公共服務</div></div></div><p class="lead" style="text-align:center;margin-top:4vh">判斷單位從「一句回答」變成「整條決策路徑」。</p><div class="footer"><span>AGENT ANATOMY</span><span>19</span></div>
+  </section>
+
+  <section class="slide" data-notes="第三段：先展示全貌。接下來把六個層次拆開，讓聽眾看到它們如何彼此串接。">
+    <div class="eyebrow">03 / 偏見來源</div><h2 class="section-title">Agent 的偏見：六個相互連結的層次</h2><p class="subtitle">不要只問「模型有沒有偏見」，要問偏見在哪個環節被引入、被放大、被固化。</p>
+    <div class="grid grid-3 six"><article class="card"><div class="number">01</div><h3>模型偏見</h3><p>刻板印象被當成合理判斷</p></article><article class="card"><div class="number">02</div><h3>目標與指令</h3><p>「適合」未定義；效率壓過服務原則</p></article><article class="card"><div class="number">03</div><h3>資料與檢索</h3><p>曝光度高的資料被過度採用</p></article><article class="card"><div class="number">04</div><h3>工具與流程</h3><p>查詢詞、資料庫、評分器都會偏</p></article><article class="card"><div class="number">05</div><h3>記憶與回饋</h3><p>一次推測變事實，形成循環</p></article><article class="card coral"><div class="number">06</div><h3>多代理人</h3><p>彼此引用，形成假共識</p></article></div><p class="lead" style="text-align:center;margin-top:4vh;color:var(--coral)">偏見不只是一個模型問題，而是一個系統問題。</p><div class="footer"><span>BIAS SOURCES</span><span>17</span></div>
+  </section>
+
+  <section class="slide" data-notes="第三段：用履歷篩選來對應四層來源。提醒大家，bias audit 的第一個問題不是「模型說了什麼」，而是「任務被怎麼定義」。">
+    <div class="eyebrow">03 / 偏見來源</div><h2 class="section-title">前四層：偏見如何進入 Agent</h2><p class="subtitle">偏見可能在「定義任務」以前就已經被寫進系統。</p>
+    <div class="grid grid-4 cards"><article class="card coral"><h3>模型偏見</h3><p>訓練資料裡的性別、職業、族群與文化刻板印象。<br><br>常見關聯，不等於合理判斷。</p></article><article class="card"><h3>目標與指令</h3><p>「找最適合的人」中的「適合」沒有定義。<br><br>使用者的假設可能被 Agent 直接繼承。</p></article><article class="card mint"><h3>資料與檢索</h3><p>搜尋結果不是完整世界。資料稀少、曝光不足，容易被誤判成能力不足。</p></article><article class="card"><h3>工具與流程</h3><p>查詢詞、資料庫、評分工具的選擇，會改變誰被看見。</p></article></div><p class="lead" style="text-align:center;margin-top:4vh">設計提醒：先把「成功」與服務原則都寫成可檢查的要求。</p><div class="footer"><span>BIAS SOURCES</span><span>18</span></div>
+  </section>
+
+  <section class="slide" data-notes="第三段：強調時間維度。偏見不只存在於一次執行，也可能在記憶與回饋中累積。">
+    <div class="eyebrow">03 / 偏見來源</div><h2 class="section-title">後兩層：偏見如何被放大與固化</h2><p class="subtitle">當 Agent 能記住、回饋、互相引用，偏見就可能變成系統慣性。</p>
+    <div class="grid grid-2 cards"><article class="card coral" style="min-height:300px"><h3>05 / 記憶與回饋偏見</h3><p>一次「資料不足」的推測，被寫入記憶，下一輪便被當成事實。<br><br>越常選擇某類人 → 系統越認為這類人更適合 → 下一輪更常選擇同類人。</p></article><article class="card mint" style="min-height:300px"><h3>06 / 多代理人偏見</h3><p>多個 Agent 彼此引用，不代表偏見會消失。<br><br>評審 Agent 可能與執行 Agent 共享相同資料、模型與盲點，形成「彼此同意」的假共識。</p></article></div><p class="lead" style="text-align:center;margin-top:4vh">記憶讓過去影響未來；多代理人讓單一盲點看起來像共識。</p><div class="footer"><span>BIAS SOURCES</span><span>19</span></div>
+  </section>
+
+  <section class="slide dark" data-notes="第四段：完整講解履歷篩選案例。請明確指出，這裡不需要一個明顯歧視句子，整條 pipeline 就可能產生不符合服務方向的結果。">
+    <div class="eyebrow">04 / 案例</div><h2 class="section-title">案例：履歷篩選 Agent</h2><p class="subtitle">500 份履歷 → 20 位 AI 工程師候選人：偏見不是一句話，而是一條鏈。</p>
+    <div class="flow"><div class="flow-item"><b>01</b><strong>定義優秀</strong><span>學校、公司、工作連續性</span></div><div class="arrow">›</div><div class="flow-item"><b>02</b><strong>補充資料</strong><span>搜尋網路曝光與履歷缺口</span></div><div class="arrow">›</div><div class="flow-item"><b>03</b><strong>形成推測</strong><span>育兒中斷、非典型背景</span></div><div class="arrow">›</div><div class="flow-item emph"><b>04</b><strong>排序決策</strong><span>資料不足被當成能力不足</span></div><div class="arrow">›</div><div class="flow-item"><b>05</b><strong>固化結果</strong><span>排序存入系統，成為下一輪依據</span></div></div><p class="lead" style="text-align:center;margin-top:5vh">每個局部判斷都「看似合理」，串起來卻可能排除同一批人。</p><div class="footer"><span>CASE STUDY</span><span>17</span></div>
+  </section>
+
+  <section class="slide" data-notes="第四段：用「資料不足 ≠ 能力不足」這句話做記憶點。把注意力從輸出文字轉向資料流與決策流。">
+    <div class="eyebrow">04 / 案例</div><h2 class="section-title">放大的關鍵：資料不足 ≠ 能力不足</h2><p class="subtitle">Agent 很容易把「看不見」誤讀成「不存在」。</p>
+    <div class="flow"><div class="flow-item" style="background:#fff;color:var(--navy);border:1px solid var(--line)"><b style="color:var(--teal)">原始履歷</b><strong>非典型背景<br>網路曝光少<br>職涯有中斷</strong></div><div class="arrow">›</div><div class="flow-item" style="background:#fff;color:var(--navy);border:1px solid var(--line)"><b style="color:var(--teal)">搜尋與排序</b><strong>資料不足<br>↓<br>能力評分下降</strong></div><div class="arrow">›</div><div class="flow-item" style="background:#fff;color:var(--navy);border:1px solid var(--line)"><b style="color:var(--teal)">系統記憶</b><strong>排序結果被保存成「成功模式」</strong></div><div class="arrow">›</div><div class="flow-item emph"><b>下一輪決策</b><strong>偏差累積</strong></div></div><div class="quote">要審計的是整條路徑：輸入 → 檢索 → 推論 → 排序 → 記憶 → 行動。</div><div class="footer"><span>CASE STUDY</span><span>18</span></div>
+  </section>
+
+
+
+
+
+  <section class="slide" data-notes="第五段：說明偏見識別要先定義應用情境中的偏見樣態，再決定基準與比較方式。">
+    <div class="eyebrow">05</div><h2 class="section-title">偏見識別維度</h2><p class="subtitle">先定義 Agent 在應用情境中的偏見樣態，再調整適合這個服務的基準。</p>
+    <div class="grid grid-3 cards"><article class="card"><h3>服務目標</h3><p>什麼是提供者想要的方向？哪些偏向是產品定位的一部分？</p></article><article class="card"><h3>偏見樣態</h3><p>資訊選擇、推理策略、工具使用、排序決策、記憶與行動。</p></article><article class="card coral"><h3>基準調整</h3><p>依應用情境設定比較基準，不以「所有選項平均」作為唯一答案。</p></article></div><div class="quote">識別目標不是找出所有偏向，而是找出「持續出現、又偏離服務原則或方向」的傾向。</div><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
+  </section>
+
+  <section class="slide" data-notes="第五段：介紹自動化評測工具架構。重點是用多樣化輸入、配對測試與多輪執行，讓潛在偏見有機會被誘發並留下證據。">
+    <div class="eyebrow">05</div><h2 class="section-title">評測工具架構</h2><p class="subtitle">利用開源框架建構自動化測試腳本，模擬多樣化用戶輸入與 Agent 執行路徑。</p>
+    <div class="flow"><div class="flow-item"><b>01</b><strong>輸入矩陣</strong><span>不同身份、語言、需求、背景與任務條件</span></div><div class="arrow">›</div><div class="flow-item"><b>02</b><strong>測試腳本</strong><span>開源框架＋Prompt template＋配對案例</span></div><div class="arrow">›</div><div class="flow-item"><b>03</b><strong>Agent 執行</strong><span>記錄搜尋、工具呼叫、排序與最終行動</span></div><div class="arrow">›</div><div class="flow-item emph"><b>04</b><strong>報告與基準</strong><span>差異比較、重現案例、風險門檻</span></div></div><p class="lead" style="text-align:center;margin-top:4vh">測試不只問「回答對不對」，也問「換一組輸入後，行為是否穩定」。</p><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
+  </section>
+
+  <section class="slide" data-notes="第五段：展示徵才 Agent 與決策輔助 Agent 的示意檢測成果。這些是測試報告的呈現方式，不代表已對特定產品完成實測。">
+    <div class="eyebrow">05</div><h2 class="section-title">實戰案例分析：從結果追溯偏向</h2><p class="subtitle">示意檢測成果：同一任務，只改變輸入線索，觀察 Agent 的資訊、排序與行動是否改變。</p>
+    <div class="grid grid-2 cards"><article class="card"><h3>徵才 Agent</h3><p><span class="dot coral-dot"></span>職涯中斷被解讀為穩定性不足<br><span class="dot coral-dot"></span>資料曝光少被誤當成能力證據不足<br><span class="dot coral-dot"></span>推薦排序與「成功模式」記憶逐輪接近</p></article><article class="card"><h3>決策輔助 Agent</h3><p><span class="dot coral-dot"></span>高價方案被持續視為較可靠<br><span class="dot coral-dot"></span>搜尋排名被當成可信度代理變數<br><span class="dot coral-dot"></span>多個 Agent 的相同資料造成假共識</p></article></div><div class="quote">案例分析的產出不只是分數，而是可重現的輸入、路徑、差異與責任證據。</div><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
+  </section>
+
+  <section class="slide" data-notes="第五段：說明兩類緩解策略。Prompt Engineering 用來明確化服務方向與不確定性；Guardrails 用來在開發與執行階段限制高風險行為。">
+    <div class="eyebrow">05</div><h2 class="section-title">緩解策略：Prompt Engineering＋Guardrails</h2><p class="subtitle">把服務方向寫清楚，再用約束層把高風險行為攔在可控範圍內。</p>
+    <div class="grid grid-2 cards"><article class="card mint"><h3>Prompt Engineering</h3><p><span class="dot"></span>明確定義服務目標、評估標準與不可使用的代理變數<br><span class="dot"></span>要求提供不確定性、反例與替代方案<br><span class="dot"></span>要求說明資料來源與選擇理由</p></article><article class="card coral"><h3>Guardrails</h3><p><span class="dot coral-dot"></span>限制敏感資料的使用與工具權限<br><span class="dot coral-dot"></span>對排序、拒絕與外部行動設定門檻<br><span class="dot coral-dot"></span>高風險行動轉人工核准並保留紀錄</p></article></div><p class="lead" style="text-align:center;margin-top:4vh">設計 → 測試 → 觀測 → 修正：緩解策略必須回到評測結果持續迭代。</p><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
+  </section>
+  <section class="slide" data-notes="第六段：避免把服務原則簡化成單一分數。不同評估指標的衝突與補償性措施，最後都需要組織明確承擔價值選擇。">
+    <div class="eyebrow">06 / 限制</div><h2 class="section-title">去偏見本身也有兩難</h2><p class="subtitle">工程控制可以降低風險，但不能替人決定所有價值取捨。</p>
+    <div class="split"><div class="panel" style="background:var(--paper)"><p><span class="dot coral-dot"></span>服務原則沒有唯一的數學定義；不同指標可能互相衝突</p><p style="margin-top:1rem"><span class="dot coral-dot"></span>移除敏感欄位，不代表其他欄位不會成為代理變數</p><p style="margin-top:1rem"><span class="dot coral-dot"></span>要求模型完全「看不見差異」，有時反而無法補償既有不平等</p><p style="margin-top:1rem"><span class="dot coral-dot"></span>多一個評審 Agent，不代表一定更符合服務原則</p></div><div class="panel dark-panel" style="text-align:center"><h3>最後的問題</h3><p style="font-size:clamp(28px,3vw,48px);font-weight:900;margin-top:2rem">誰來決定？</p><p style="margin-top:1.5rem;color:var(--mint)">可接受的價值取捨，需要人負責。</p></div></div><div class="footer"><span>LIMITS</span><span>17</span></div>
+  </section>
+
+  <section class="slide dark" data-notes="結語：依序念出三句話，將焦點從模型責任拉到系統責任。">
+    <div class="eyebrow">07 / 結語</div><h2 class="section-title">從模型去偏見，走向系統責任</h2>
+    <div style="margin-top:5vh;display:grid;gap:1.3rem"><p class="lead"><span style="color:var(--mint);margin-right:1rem">01</span>Agent 的偏見不只來自模型，也來自目標、資料、工具、記憶與回饋。</p><p class="lead"><span style="color:var(--mint);margin-right:1rem">02</span>Agent 能夠行動，因此小偏差可能經過多步決策被放大。</p><p class="lead"><span style="color:var(--mint);margin-right:1rem">03</span>真正的去偏見需要評測、權限控制、人工監督與持續治理。</p></div><div class="quote-card" style="margin-top:5vh;background:var(--teal)"><p>可信任 AI 不是「沒有偏見」的承諾，而是「能發現、能限制、能負責」的能力。</p></div><div class="footer"><span>CLOSING</span><span>18</span></div>
+  </section>
+
+
+
+
+</main>
+<div class="progress" id="progress"></div><div class="help">← → 切換　N 講者備註　H 說明</div>
+<div class="controls"><button id="prev" aria-label="上一頁">←</button><button id="next" aria-label="下一頁">→</button><button id="notesBtn" aria-label="顯示講者備註">N</button></div>
+<aside class="notes" id="notes"><b>講者備註</b><p id="notesText"></p></aside>
+<script>
+  const slides=[...document.querySelectorAll('.slide')];slides.forEach((s,n)=>{const page=s.querySelector('.footer span:last-child');if(page)page.textContent=String(n+1).padStart(2,'0')});let current=0;const progress=document.getElementById('progress'),notes=document.getElementById('notes'),notesText=document.getElementById('notesText');
+  function show(i){current=Math.max(0,Math.min(slides.length-1,i));slides.forEach((s,n)=>s.classList.toggle('active',n===current));progress.style.width=((current+1)/slides.length*100)+'%';notesText.textContent=slides[current].dataset.notes||'';document.title=(current+1)+' / '+slides[current].querySelector('h1,h2')?.textContent.trim()+'｜可信任 AI';history.replaceState(null,'','#'+(current+1));}
+  function toggleNotes(){notes.classList.toggle('show')};document.getElementById('prev').onclick=()=>show(current-1);document.getElementById('next').onclick=()=>show(current+1);document.getElementById('notesBtn').onclick=toggleNotes;
+  document.addEventListener('keydown',e=>{if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();show(current+1)}else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();show(current-1)}else if(e.key==='Home'){show(0)}else if(e.key==='End'){show(slides.length-1)}else if(e.key.toLowerCase()==='n'){toggleNotes()}else if(e.key.toLowerCase()==='h'){alert('使用 ← → 或空白鍵切換投影片；Home/End 跳到首尾；N 開關講者備註。')}});
+  let touchX=null;document.addEventListener('touchstart',e=>touchX=e.changedTouches[0].screenX,{passive:true});document.addEventListener('touchend',e=>{if(touchX===null)return;const dx=e.changedTouches[0].screenX-touchX;if(Math.abs(dx)>45)show(current+(dx<0?1:-1));touchX=null},{passive:true});
+  show(Number(location.hash.slice(1))-1||0);
+</script>
+</body>
+</html>

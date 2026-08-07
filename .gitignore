@@ -8,3 +8,22 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Environment variables
+.env
+
+# IDEs and editors
+.vscode/
+.codex
+
+# LLaDAR local model cache
+.lladar/
+
+# Knowledge files
+knowledge/
+
+# Graphify output
+graphify-out
+
+# pytest cache
+.pytest_cache/
