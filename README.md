@@ -10,7 +10,7 @@ The package provides dataset generation and answer evaluation with JSON reports 
 python -m pip install lladar
 ```
 
-Python 3.11, 3.12, and 3.13 are supported.
+Python 3.11 and 3.12 are supported.
 
 ## Python API
 

@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.1.0"
+version = "0.1.1"
 description = "Generate contrastive datasets for detecting unsupported assumptions in LLM agents"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
   "akasha-terminal>=1.4",
 ]
