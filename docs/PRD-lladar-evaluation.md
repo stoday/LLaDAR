@@ -25,6 +25,16 @@ The evaluator joins the two files by `id`, never by line number. Missing IDs,
 duplicate IDs, and answer records without a dataset item are recorded as
 alignment errors. With `strict=True`, alignment errors stop the evaluation.
 
+## CLI
+
+~~~bash
+lladar eval test-dataset.jsonl qa-results.jsonl --prompt "Do not invent missing facts; ask for clarification when information is insufficient." --output reports/evaluation.json
+~~~
+
+The CLI uses the same evaluate implementation as the Python API. The dataset
+and answers are positional JSONL paths; --strict stops on alignment or judge
+errors, and --no-include-raw-answers omits answer text.
+
 ## Evaluation behavior
 
 Each matched answer is evaluated in two layers:

@@ -1,0 +1,4 @@
+interface:
+  display_name: "LLaDAR Agent Evaluation"
+  short_description: "Run agent QA and evaluate unsupported assumptions"
+  default_prompt: "Use $lladar-agent-evaluation to run this project's agent over a LLaDAR dataset and produce an evaluation report."

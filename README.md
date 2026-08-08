@@ -95,6 +95,40 @@ errors. Use include_raw_answers=False when the report should omit answer text.
 The evaluation rubric is passed through prompt; it controls the judge only and
 does not replace the fixed report aggregation.
 
+### CLI evaluation
+
+~~~bash
+lladar eval test-dataset.jsonl qa-results.jsonl --prompt "Do not invent missing facts; ask for clarification when information is insufficient." --output reports/evaluation.json
+~~~
+
+The CLI matches records by id and uses the same evaluator as the Python API.
+Use --strict to stop on alignment or judge errors, and
+--no-include-raw-answers to omit answer text from the report.
+
+## Install the agent-evaluation skill
+
+Install LLaDAR first, then install the skill into the current project for the
+agent platform you use:
+
+~~~bash
+pip install lladar
+lladar skill install --target codex
+~~~
+
+Supported project-local targets are codex, claude, and antigravity.
+Use --target all to install into all three platform directories. The installer
+does not overwrite modified skill files unless --force is provided.
+
+~~~bash
+lladar skill list
+lladar skill update --target claude
+lladar skill uninstall --target claude
+~~~
+
+The skill is installed into .codex/skills, .claude/skills, or
+.agents/skills respectively. These platform directories are project-local;
+the installer does not modify global agent configuration.
+
 ## Dataset schema
 
 Each JSONL line or JSON array item contains:
@@ -120,6 +154,7 @@ python -m pytest
 ```
 
 See `docs/PRD-lladar-test-dataset.md` for the complete product requirements.
+See `docs/PRD-lladar-evaluation.md` for the evaluation workflow and `docs/PRD-lladar-skill-installer.md` for cross-platform skill installation.
 ## License
 
 LLaDAR is released under the [MIT License](LICENSE).

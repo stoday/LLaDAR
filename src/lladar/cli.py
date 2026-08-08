@@ -6,8 +6,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from .api import DEFAULT_MODEL, create_test_dataset
+from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
 from .providers import LLMProvider
+from .skill import SkillError, install_skill, list_skills, uninstall_skill
 
 
 def _parse_chunk_size(value: str) -> int | str:
@@ -242,6 +244,42 @@ def build_parser() -> argparse.ArgumentParser:
             "when --cache is enabled."
         ),
     )
+    evaluation = commands.add_parser(
+        "eval",
+        help="Evaluate agent answers and write a report.",
+        description="Compare answer JSONL records with a LLaDAR test dataset by id.",
+        formatter_class=_HelpFormatter,
+    )
+    evaluation.add_argument("dataset", metavar="DATASET", help="Original test dataset JSONL.")
+    evaluation.add_argument("answers", metavar="ANSWERS", help="Agent answer JSONL.")
+    evaluation.add_argument("--prompt", required=True, help="Evaluation rubric sent to the judge.")
+    evaluation.add_argument("--output", default="evaluation-report.json", metavar="PATH")
+    evaluation.add_argument("--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL")
+    evaluation.add_argument("--env-file", default=".env", metavar="PATH")
+    evaluation.add_argument("--strict", action="store_true", help="Fail on alignment or judge errors.")
+    evaluation.add_argument(
+        "--include-raw-answers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include answer text in the report. Default: enabled.",
+    )
+    skill = commands.add_parser(
+        "skill",
+        help="Install and manage the LLaDAR agent-evaluation skill.",
+        description="Install the project-local LLaDAR agent-evaluation skill for an agent platform.",
+        formatter_class=_HelpFormatter,
+    )
+    skill_commands = skill.add_subparsers(dest="skill_command", required=True, metavar="ACTION")
+    skill_install = skill_commands.add_parser("install", help="Install the skill into project-local platform directories.")
+    skill_install.add_argument("--target", required=True, choices=("codex", "claude", "antigravity", "all"))
+    skill_install.add_argument("--force", action="store_true", help="Replace modified installed files.")
+    skill_update = skill_commands.add_parser("update", help="Update an installed skill.")
+    skill_update.add_argument("--target", required=True, choices=("codex", "claude", "antigravity", "all"))
+    skill_update.add_argument("--force", action="store_true", help="Replace modified installed files.")
+    skill_list = skill_commands.add_parser("list", help="List installed project-local skill targets.")
+    skill_uninstall = skill_commands.add_parser("uninstall", help="Remove an installed skill.")
+    skill_uninstall.add_argument("--target", required=True, choices=("codex", "claude", "antigravity", "all"))
+    skill_uninstall.add_argument("--force", action="store_true", help="Remove modified installed files.")
     return parser
 
 
@@ -252,6 +290,37 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "skill":
+            if args.skill_command in ("install", "update"):
+                destinations = install_skill(args.target, force=args.force)
+                action = "Installed" if args.skill_command == "install" else "Updated"
+                for destination in destinations:
+                    print(f"{action} {destination}")
+            elif args.skill_command == "list":
+                entries = list_skills()
+                if not entries:
+                    print("No LLaDAR skills installed.")
+                for entry in entries:
+                    print(f"{entry['target']}: {entry['path']} (version={entry['package_version'] or 'unknown'})")
+            else:
+                destinations = uninstall_skill(args.target, force=args.force)
+                for destination in destinations:
+                    print(f"Uninstalled {destination}")
+            return 0
+        if args.command == "eval":
+            report = evaluate(
+                args.dataset,
+                args.answers,
+                prompt=args.prompt,
+                output=args.output,
+                model=args.model,
+                env_file=args.env_file,
+                provider=provider,
+                strict=args.strict,
+                include_raw_answers=args.include_raw_answers,
+            )
+            print(f"Evaluated {report['summary']['total']} item(s) at {args.output}")
+            return 0
         dataset = create_test_dataset(
             knowledge=[Path(value) for value in args.knowledge],
             prompt=args.prompt,
@@ -274,6 +343,9 @@ def main(
             refresh_cache=args.refresh_cache,
             verbose=args.verbose,
         )
+    except SkillError as error:
+        print(f"lladar: {error}", file=sys.stderr)
+        return 2
     except ProviderError:
         print("lladar: provider generation failed", file=sys.stderr)
         return 2
