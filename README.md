@@ -23,6 +23,19 @@ python -m pip install lladar
 
 Python 3.11 and 3.12 are supported.
 
+### Optional Codex skill
+
+The optional project-local Codex skill is
+`.codex/skills/lladar-agent-evaluation`. When that skill is installed in this
+checkout, Codex discovers it automatically; it is not a separate Python
+package and does not require another `pip install` command. Invoke it with
+`$lladar-agent-evaluation` when you want Codex to run the complete dataset,
+agent, and evaluation workflow.
+
+The skill uses `lladar run-agent` for an existing project agent. It keeps the
+original project unchanged, writes the managed copy under `.lladar/runs/`, and
+produces the `qa-results.jsonl` artifact for `lladar eval`.
+
 ## Python API
 
 ```python
