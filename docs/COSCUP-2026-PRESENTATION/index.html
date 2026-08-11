@@ -186,9 +186,13 @@
     <div class="flow"><div class="flow-item"><b>01</b><strong>輸入矩陣</strong><span>不同身份、語言、需求、背景與任務條件</span></div><div class="arrow">›</div><div class="flow-item"><b>02</b><strong>測試腳本</strong><span>開源框架＋Prompt template＋配對案例</span></div><div class="arrow">›</div><div class="flow-item"><b>03</b><strong>Agent 執行</strong><span>記錄搜尋、工具呼叫、排序與最終行動</span></div><div class="arrow">›</div><div class="flow-item emph"><b>04</b><strong>報告與基準</strong><span>差異比較、重現案例、風險門檻</span></div></div><p class="lead" style="text-align:center;margin-top:4vh">測試不只問「回答對不對」，也問「換一組輸入後，行為是否穩定」。</p><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
   </section>
 
-  <section class="slide" data-notes="第五段：展示徵才 Agent 與決策輔助 Agent 的示意檢測成果。這些是測試報告的呈現方式，不代表已對特定產品完成實測。">
-    <div class="eyebrow">05</div><h2 class="section-title">實戰案例分析：從結果追溯偏向</h2><p class="subtitle">示意檢測成果：同一任務，只改變輸入線索，觀察 Agent 的資訊、排序與行動是否改變。</p>
-    <div class="grid grid-2 cards"><article class="card"><h3>徵才 Agent</h3><p><span class="dot coral-dot"></span>職涯中斷被解讀為穩定性不足<br><span class="dot coral-dot"></span>資料曝光少被誤當成能力證據不足<br><span class="dot coral-dot"></span>推薦排序與「成功模式」記憶逐輪接近</p></article><article class="card"><h3>決策輔助 Agent</h3><p><span class="dot coral-dot"></span>高價方案被持續視為較可靠<br><span class="dot coral-dot"></span>搜尋排名被當成可信度代理變數<br><span class="dot coral-dot"></span>多個 Agent 的相同資料造成假共識</p></article></div><div class="quote">案例分析的產出不只是分數，而是可重現的輸入、路徑、差異與責任證據。</div><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
+  <section class="slide" data-notes="資訊不足時，模型可能把猜測包裝成合理答案。比較 ChatGPT、Gemini 與 Grok 的不同腦補方式。">
+    <div class="eyebrow">05</div><h2 class="section-title">資訊不夠的腦補</h2><p class="subtitle">當可用資訊不足，模型會如何補上不存在的細節？</p>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1.2vw;margin-top:4vh;align-items:center">
+      <img src="images/ChatGPT-reponse.jpg" alt="ChatGPT 回應" style="display:block;width:100%;height:clamp(280px,56vh,520px);object-fit:contain;background:transparent;border:0;border-radius:0;padding:0">
+      <img src="images/Gemini-resposne.jpg" alt="Gemini 回應" style="display:block;width:100%;height:clamp(280px,56vh,520px);object-fit:contain;background:transparent;border:0;border-radius:0;padding:0">
+      <img src="images/Grok-response.jpg" alt="Grok 回應" style="display:block;width:100%;height:clamp(280px,56vh,520px);object-fit:contain;background:transparent;border:0;border-radius:0;padding:0">
+    </div><div class="footer"><span>05 / MITIGATION FRAMEWORK</span><span>00</span></div>
   </section>
 
   <section class="slide" data-notes="第五段：說明兩類緩解策略。Prompt Engineering 用來明確化服務方向與不確定性；Guardrails 用來在開發與執行階段限制高風險行為。">

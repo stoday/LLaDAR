@@ -33,3 +33,6 @@ logs
 
 # dataset
 *.jsonl
+
+# Skills lock file
+skills-lock.json
