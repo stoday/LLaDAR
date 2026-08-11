@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.2.1"
+version = "0.2.2"
 description = "Generate contrastive datasets for detecting unsupported assumptions in LLM agents"
 readme = "README.md"
 license = "MIT"
