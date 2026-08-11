@@ -4,10 +4,16 @@ from __future__ import annotations
 AMBIGUITY_STRATEGY = """Find one important fact in the source that changes the answer and is easy to overlook. Build a minimal contrastive pair that tests whether an agent invents that missing fact."""
 
 
-def resolve_strategy(prompt: str | None) -> tuple[str, str]:
+def resolve_strategy(
+    prompt: str | None,
+    *,
+    prompt_file: str | None = None,
+) -> tuple[str, str]:
     if prompt is None or prompt == "ambiguity":
         return "ambiguity", AMBIGUITY_STRATEGY
-    return prompt, prompt
+    if prompt_file is not None:
+        return f"custom-{prompt_file}", prompt
+    return f"custom-{prompt}", prompt
 
 
 def build_generation_prompt(source_text: str, strategy_text: str) -> str:
@@ -17,6 +23,10 @@ Strategy:
 {strategy_text}
 
 Pair constraints:
+- Identify the dominant natural language of the source and write every natural-language
+  field in the same language as the source. Do not translate the source or the generated
+  questions and answers into English. Preserve code, product names, URLs, and other proper
+  nouns when appropriate.
 - Start with one underspecified question whose answer depends on one disambiguating fact.
 - Create the complete question by adding exactly that one disambiguating fact.
 - Both questions must ask for the same requested outcome and refer to the same entities.
@@ -27,7 +37,8 @@ Pair constraints:
 - invalid_assumptions must list unsupported single answers an agent might invent.
 - An acceptable answer must ask for clarification, list all supported possibilities, or state that information is insufficient.
 
-Example pattern:
+Example pattern (the English wording is illustrative only; translate this pattern into
+the source language and do not copy English as the output language):
 complete_question: If the criminal is the father, what does the daughter call him?
 underspecified_question: What does the criminal's daughter call the criminal?
 missing_information: Whether the criminal is the father or the mother.

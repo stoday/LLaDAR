@@ -9,6 +9,7 @@ from .api import DEFAULT_MODEL, create_test_dataset
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
 from .providers import LLMProvider
+from .runner import AkashaAdapterController, AdapterController, run_agent
 from .skill import SkillError, install_skill, list_skills, uninstall_skill
 
 
@@ -141,6 +142,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of question pairs generated per chunk. Default: 1.",
     )
     dataset.add_argument(
+        "--random-select",
+        type=_positive_int,
+        metavar="N",
+        help=(
+            "Randomly select at most N generated question pairs. If N exceeds "
+            "the available pairs, all pairs are selected."
+        ),
+    )
+    dataset.add_argument(
         "--model",
         default=DEFAULT_MODEL,
         metavar="MODEL",
@@ -263,6 +273,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Include answer text in the report. Default: enabled.",
     )
+    runner = commands.add_parser(
+        "run-agent",
+        help="Run a project agent against a LLaDAR test dataset.",
+        description=(
+            "Copy a project to a managed .lladar/runs workspace, adapt the copy with Akasha, "
+            "and produce id-keyed agent answers."
+        ),
+        formatter_class=_HelpFormatter,
+    )
+    runner.add_argument("dataset", metavar="DATASET", help="LLaDAR test dataset JSONL.")
+    runner.add_argument("--project", required=True, metavar="PATH", help="Project directory to copy.")
+    runner.add_argument("--entrypoint", required=True, metavar="PATH", help="Python entrypoint inside the project.")
+    runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH")
+    runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL")
+    runner.add_argument("--env-file", default=".env", metavar="PATH")
+    runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file.")
+    runner.add_argument(
+        "--verbose",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show timestamped run progress and errors on stderr. Default: enabled.",
+    )
     skill = commands.add_parser(
         "skill",
         help="Install and manage the LLaDAR agent-evaluation skill.",
@@ -287,6 +319,8 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     provider: LLMProvider | None = None,
+    adapter_controller: AdapterController | None = None,
+    runs_root: str | Path | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -321,6 +355,21 @@ def main(
             )
             print(f"Evaluated {report['summary']['total']} item(s) at {args.output}")
             return 0
+        if args.command == "run-agent":
+            completed = run_agent(
+                args.dataset,
+                args.output,
+                project=args.project,
+                entrypoint=args.entrypoint,
+                adapter=adapter_controller
+                or AkashaAdapterController(model=args.model, env_file=args.env_file),
+                env_file=args.env_file,
+                force=args.force,
+                verbose=args.verbose,
+                runs_root=runs_root,
+            )
+            print(f"Answered {completed} item(s) at {args.output}")
+            return 0
         dataset = create_test_dataset(
             knowledge=[Path(value) for value in args.knowledge],
             prompt=args.prompt,
@@ -328,6 +377,7 @@ def main(
             chunk_size=args.chunk_size,
             overlap=args.overlap,
             num_pairs=args.num_pairs,
+            random_select=args.random_select,
             model=args.model,
             output=args.output,
             format=args.format,

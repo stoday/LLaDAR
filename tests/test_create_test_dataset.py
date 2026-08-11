@@ -252,7 +252,23 @@ class CreateTestDatasetTests(unittest.TestCase):
                 strict=True,
             )
 
-        self.assertEqual(dataset[0]["metadata"]["strategy"], "CUSTOM STRATEGY")
+        self.assertEqual(dataset[0]["metadata"]["strategy"], "custom-CUSTOM STRATEGY")
+
+    def test_prompt_file_strategy_metadata_keeps_only_the_file_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            knowledge = root / "family.txt"
+            prompt_file = root / "strategy.md"
+            knowledge.write_text("家庭成員資料。", encoding="utf-8")
+            prompt_file.write_text("這是一份很長的策略指引。" * 100, encoding="utf-8")
+
+            dataset = lladar.create_test_dataset(
+                knowledge=knowledge,
+                prompt_file=prompt_file,
+                provider=FakeProvider(),
+            )
+
+        self.assertEqual(dataset[0]["metadata"]["strategy"], f"custom-{prompt_file}")
     def test_generation_prompt_requires_a_minimal_contrastive_pair(self):
         class ConstraintAwareProvider:
             def generate_structured(self, prompt, *, model, temperature):

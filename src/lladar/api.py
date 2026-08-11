@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import random
 from pathlib import Path
 from typing import Any, Literal
 
@@ -32,6 +33,7 @@ def create_test_dataset(
     chunk_size: int | Literal["auto"] = 2000,
     overlap: float = 0.1,
     num_pairs: int = 1,
+    random_select: int | None = None,
     model: str = DEFAULT_MODEL,
     output: str | Path | None = None,
     format: str = "jsonl",
@@ -59,6 +61,8 @@ def create_test_dataset(
         prompt = Path(prompt_file).read_text(encoding="utf-8")
     if num_pairs <= 0:
         raise ValueError("num_pairs must be greater than 0")
+    if random_select is not None and random_select <= 0:
+        raise ValueError("random_select must be greater than 0")
 
     profile = resolve_model_profile(
         model,
@@ -66,7 +70,10 @@ def create_test_dataset(
         max_output_tokens=max_output_tokens,
         auto_window_ratio=auto_window_ratio,
     )
-    strategy, strategy_text = resolve_strategy(prompt)
+    strategy, strategy_text = resolve_strategy(
+        prompt,
+        prompt_file=str(prompt_file) if prompt_file is not None else None,
+    )
     active_provider = provider or AkashaProvider(
         env_file=str(env_file),
         max_input_tokens=profile.max_input_tokens,
@@ -81,6 +88,7 @@ def create_test_dataset(
             "chunk_size": chunk_size,
             "overlap": overlap,
             "num_pairs": num_pairs,
+            "random_select": random_select,
             "model": model,
             "output": output,
             "format": format,
@@ -139,106 +147,116 @@ def create_test_dataset(
             for chunk_index, knowledge_chunk in enumerate(chunks)
         )
 
-    total_pairs = len(prepared) * num_pairs
-    reporter.emit("PAIR", f"planned={total_pairs} chunks={len(prepared)}")
+    planned_pairs = [
+        (path, chunk_index, knowledge_chunk, pair_index)
+        for path, chunk_index, knowledge_chunk in prepared
+        for pair_index in range(num_pairs)
+    ]
+    planned_total = len(planned_pairs)
+    if random_select is not None and random_select < planned_total:
+        planned_pairs = random.sample(planned_pairs, random_select)
+    total_pairs = len(planned_pairs)
+    reporter.emit(
+        "PAIR",
+        f"planned={planned_total} selected={total_pairs} chunks={len(prepared)}",
+    )
     dataset: list[dict[str, Any]] = []
     completed = 0
-    for path, chunk_index, knowledge_chunk in prepared:
+    for path, chunk_index, knowledge_chunk, pair_index in planned_pairs:
         chunk = knowledge_chunk.text
-        for pair_index in range(num_pairs):
-            key = cache_key(
-                chunk,
-                knowledge_chunk.method,
-                knowledge_chunk.source_start,
-                knowledge_chunk.source_end,
-                strategy,
-                model,
-                temperature,
-                profile.max_input_tokens,
-                profile.max_output_tokens,
-                profile.auto_window_ratio,
-                pair_index,
+        key = cache_key(
+            chunk,
+            knowledge_chunk.method,
+            knowledge_chunk.source_start,
+            knowledge_chunk.source_end,
+            strategy,
+            model,
+            temperature,
+            profile.max_input_tokens,
+            profile.max_output_tokens,
+            profile.auto_window_ratio,
+            pair_index,
+        )
+        generated = None
+        from_cache = False
+        if cache and not refresh_cache:
+            generated = read_cache(cache_dir, key)
+            from_cache = generated is not None
+            reporter.emit(
+                "CACHE",
+                f"pair={completed + 1}/{total_pairs} {'hit' if from_cache else 'miss'}",
             )
-            generated = None
-            from_cache = False
-            if cache and not refresh_cache:
-                generated = read_cache(cache_dir, key)
-                from_cache = generated is not None
-                reporter.emit(
-                    "CACHE",
-                    f"pair={completed + 1}/{total_pairs} {'hit' if from_cache else 'miss'}",
-                )
-            if generated is None:
-                last_error: DatasetValidationError | ProviderError | None = None
-                for attempt in range(1, 4):
-                    try:
-                        candidate = active_provider.generate_structured(
-                            build_generation_prompt(chunk, strategy_text),
-                            model=model,
-                            temperature=temperature,
-                        )
-                        generated = validate_generated_pair(candidate)
-                        break
-                    except (DatasetValidationError, ProviderError) as error:
-                        last_error = error
-                        reporter.emit(
-                            "RETRY",
-                            f"pair={completed + 1}/{total_pairs} attempt={attempt}/3 error_type={type(error).__name__}",
-                        )
-                else:
-                    assert last_error is not None
-                    completed += 1
-                    if strict:
-                        raise last_error
-                    reporter.emit(
-                        "WARN",
-                        f"pair={completed}/{total_pairs} skipped after 3 failed attempts",
+        if generated is None:
+            last_error: DatasetValidationError | ProviderError | None = None
+            for attempt in range(1, 4):
+                try:
+                    candidate = active_provider.generate_structured(
+                        build_generation_prompt(chunk, strategy_text),
+                        model=model,
+                        temperature=temperature,
                     )
-                    reporter.pair(completed, total_pairs, "skipped")
-                    continue
-                if cache:
-                    write_cache(cache_dir, key, generated)
-                    reporter.emit("CACHE", f"pair={completed + 1}/{total_pairs} saved")
+                    generated = validate_generated_pair(candidate)
+                    break
+                except (DatasetValidationError, ProviderError) as error:
+                    last_error = error
+                    reporter.emit(
+                        "RETRY",
+                        f"pair={completed + 1}/{total_pairs} attempt={attempt}/3 error_type={type(error).__name__}",
+                    )
             else:
-                generated = validate_generated_pair(generated)
+                assert last_error is not None
+                completed += 1
+                if strict:
+                    raise last_error
+                reporter.emit(
+                    "WARN",
+                    f"pair={completed}/{total_pairs} skipped after 3 failed attempts",
+                )
+                reporter.pair(completed, total_pairs, "skipped")
+                continue
+            if cache:
+                write_cache(cache_dir, key, generated)
+                reporter.emit("CACHE", f"pair={completed + 1}/{total_pairs} saved")
+        else:
+            generated = validate_generated_pair(generated)
 
-            item_id = hashlib.sha256(
-                f"{path.resolve()}\0{chunk}\0{chunk_index}\0{pair_index}".encode(
-                    "utf-8"
-                )
-            ).hexdigest()[:24]
-            metadata: dict[str, Any] = {
-                "strategy": strategy,
-                "model": model,
-                "temperature": temperature,
-            }
-            if knowledge_chunk.method != "character":
-                metadata.update(
-                    {
-                        "chunk_method": knowledge_chunk.method,
-                        "source_start": knowledge_chunk.source_start,
-                        "source_end": knowledge_chunk.source_end,
-                        "knowledge_facts": list(knowledge_chunk.knowledge_facts),
-                    }
-                )
-            dataset.append(
+        item_id = hashlib.sha256(
+            f"{path.resolve()}\0{chunk}\0{chunk_index}\0{pair_index}".encode(
+                "utf-8"
+            )
+        ).hexdigest()[:24]
+        metadata: dict[str, Any] = {
+            "strategy": strategy,
+            "model": model,
+            "temperature": temperature,
+        }
+        if knowledge_chunk.method != "character":
+            metadata.update(
                 {
-                    "schema_version": "1.0",
-                    "id": item_id,
-                    "source_file": str(path),
-                    "chunk_index": chunk_index,
-                    "source_text": chunk,
-                    **generated,
-                    "bias_type": "unsupported_assumption",
-                    "metadata": metadata,
+                    "chunk_method": knowledge_chunk.method,
+                    "source_start": knowledge_chunk.source_start,
+                    "source_end": knowledge_chunk.source_end,
+                    "knowledge_facts": list(knowledge_chunk.knowledge_facts),
                 }
             )
-            completed += 1
-            reporter.pair(
-                completed,
-                total_pairs,
-                "cache-hit" if from_cache else "generated",
-            )
+        dataset.append(
+            {
+                "schema_version": "1.0",
+                "id": item_id,
+                "source_file": str(path),
+                "chunk_index": chunk_index,
+                "source_text": chunk,
+                **generated,
+                "bias_type": "unsupported_assumption",
+                "metadata": metadata,
+            }
+        )
+        completed += 1
+        reporter.pair(
+            completed,
+            total_pairs,
+            "cache-hit" if from_cache else "generated",
+        )
 
     if output is not None:
         reporter.emit("WRITE", f"format={format} path={output} items={len(dataset)}")

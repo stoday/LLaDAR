@@ -1,8 +1,19 @@
 # LLaDAR
 
-LLaDAR generates contrastive test datasets and evaluates agent answers for unsupported assumptions. It turns .txt and .md knowledge sources into pairs of complete and underspecified questions, then compares an agent's JSONL answers against those cases.
+This repository is used to test LLaDAR and to provide examples of how to use it.
+
+LLaDAR is a tool for automatically testing LLM agents against a knowledge base. It reads knowledge-base text, generates question-and-answer test cases, and then evaluates an agent's answers to identify unsupported assumptions. This makes it possible to test whether an agent knows when the available information is insufficient instead of inventing an answer.
+
+LLaDAR generates contrastive test datasets from `.txt` and `.md` knowledge sources. Each dataset contains complete questions and answers as well as underspecified questions, where an important fact has been removed. An agent can then be tested against these cases and its JSONL answers can be evaluated.
 
 The package provides dataset generation and answer evaluation with JSON reports and improvement recommendations.
+
+## What this repository demonstrates
+
+- Generating question-and-answer test datasets from knowledge-base documents
+- Testing an agent with complete and underspecified questions
+- Evaluating agent answers for unsupported assumptions
+- Producing JSON reports and recommendations for improving agent behavior
 
 ## Installation
 
@@ -56,7 +67,61 @@ lladar create test-dataset \
 
 Pass `--chunk-size auto` for semantic segmentation. Use `--format json` for a JSON array. Existing output files are protected unless `--force` is supplied. Optional caching is enabled with `--cache`; cache files are stored under `.lladar/cache/` by default. Use `--refresh-cache` to regenerate cached entries. Progress is enabled by default; pass `--no-verbose` for quiet operation.
 
-The default mode is best-effort: invalid model outputs are retried three times and then skipped. Add `--strict` to fail the run when an item cannot be generated or validated.
+Generated natural-language fields follow the dominant language of the source
+knowledge. Questions, answers, missing-information descriptions, and
+unsupported-assumption examples are not intentionally translated into English.
+The `acceptable_behaviors` values remain fixed machine-readable tokens such as
+`ask_clarification` and `list_possibilities`.
+
+### Dataset generation options
+
+The default mode is best-effort: invalid model outputs are retried three times
+and then skipped. Add `--strict` to fail the run when an item cannot be
+generated or validated.
+
+- `--random-select N`: randomly select at most N question pairs. If N is larger than the available pair count, all pairs are selected. Selection happens before provider calls.
+- `--verbose` / `--no-verbose`: enable or disable timestamped progress on stderr. Verbose mode is enabled by default and reports source loading, chunking, retries, cache activity, pair progress, elapsed time, and ETA.
+- `--prompt NAME_OR_TEXT`: select the built-in strategy or provide inline generation instructions.
+- `--prompt-file PATH`: load generation instructions from a UTF-8 file. Cannot be combined with `--prompt`.
+- `--chunk-size N`: split knowledge files into fixed-size character chunks.
+- `--chunk-size auto`: use semantic segmentation before question generation.
+- `--num-pairs N`: generate N question pairs per chunk.
+- `--format jsonl` / `--format json`: choose one JSON object per line or one JSON array.
+- `--force`: allow overwriting an existing output dataset.
+- `--cache`: reuse semantic chunks and generated pairs from `.lladar/cache/`.
+- `--refresh-cache`: regenerate cached entries when `--cache` is enabled.
+- `--strict`: stop instead of skipping invalid generation or chunking results.
+
+## Run a project agent
+
+`run-agent` connects a generated dataset to an existing project agent without
+modifying the original project. It copies the project to a managed workspace
+under `.lladar/runs/`, uses an Akasha tool-calling controller to adapt the copy
+when the entrypoint has no question input seam, and runs each dataset item in
+an independent process:
+
+~~~bash
+lladar run-agent test-dataset.jsonl \
+  --project ./example_project \
+  --entrypoint main.py \
+  --output qa-results.jsonl
+~~~
+
+The copy excludes `.env`, `.git`, virtual environments, caches, cookies, and
+browser profiles. The runner reuses the original project's `.venv` Python
+interpreter when it exists; it does not copy the virtual environment. Provider
+settings from `--env-file` are injected into child processes instead of copied
+into the workspace. If the adapter cannot prove
+that `LLADAR_QUESTION` reaches the copied entrypoint, the run fails instead of
+repeating a hard-coded question. The generated `qa-results.jsonl` can be
+passed directly to `lladar eval`.
+
+The managed copy is intentionally retained for inspection and cleanup. Its
+path is printed in the verbose progress output.
+
+Run progress is enabled by default and is written to stderr, including the
+dataset count, adaptation stage, per-item status, elapsed time, ETA, and
+error type. Use `--no-verbose` only when quiet execution is required.
 
 ## Evaluate agent answers
 
@@ -142,7 +207,7 @@ Each JSONL line or JSON array item contains:
 - `invalid_assumptions`: unsupported single-answer assumptions
 - `acceptable_behaviors`: clarification, enumerating possibilities, or stating insufficient information
 - `bias_type`: currently `unsupported_assumption`
-- `metadata`: strategy, model, and temperature; auto chunks also include `chunk_method`, `source_start`, `source_end`, and `knowledge_facts`
+- `metadata`: strategy, model, and temperature; custom inline strategies use `custom-<prompt-text>`, while `--prompt-file` strategies use `custom-<prompt-file-path>`; auto chunks also include `chunk_method`, `source_start`, `source_end`, and `knowledge_facts`
 
 Source documents are placed inside an explicit untrusted-data boundary in the model prompt. Instructions found inside source documents must not be followed.
 

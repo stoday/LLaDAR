@@ -109,3 +109,81 @@ def test_user_can_override_model_budgets_through_cli(tmp_path: Path):
 
     assert exit_code == 0
     assert len(provider.semantic_prompts) >= 3
+
+
+def test_user_can_select_a_random_number_of_pairs_through_cli(tmp_path: Path):
+    knowledge = tmp_path / "knowledge.txt"
+    knowledge.write_text("aa\nbb\ncc\ndd\n", encoding="utf-8")
+    output = tmp_path / "dataset.jsonl"
+
+    exit_code = main(
+        [
+            "create",
+            "test-dataset",
+            "--knowledge",
+            str(knowledge),
+            "--chunk-size",
+            "2",
+            "--overlap",
+            "0",
+            "--random-select",
+            "2",
+            "--output",
+            str(output),
+        ],
+        provider=FakeProvider(),
+    )
+
+    assert exit_code == 0
+    assert len(output.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_run_agent_command_executes_project_entrypoint(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "main.py").write_text(
+        "import os\nprint(os.environ['LLADAR_QUESTION'])\n", encoding="utf-8"
+    )
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(
+        json.dumps({"id": "item-1", "underspecified_question": "question"}) + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "answers.jsonl"
+
+    class NoOpAdapter:
+        def adapt(self, workspace: Path, entrypoint: Path) -> None:
+            return None
+
+    exit_code = main(
+        [
+            "run-agent",
+            str(dataset),
+            "--project",
+            str(project),
+            "--entrypoint",
+            "main.py",
+            "--output",
+            str(output),
+        ],
+        adapter_controller=NoOpAdapter(),
+        runs_root=tmp_path / ".lladar" / "runs",
+    )
+
+    assert exit_code == 0
+    assert json.loads(output.read_text(encoding="utf-8")) == {
+        "id": "item-1",
+        "status": "ok",
+        "answer": "question",
+    }
+
+
+def test_run_agent_help_exposes_verbose_toggle(capsys):
+    try:
+        main(["run-agent", "--help"])
+    except SystemExit as error:
+        assert error.code == 0
+
+    help_text = capsys.readouterr().out
+    assert "--verbose" in help_text
+    assert "--no-verbose" in help_text
