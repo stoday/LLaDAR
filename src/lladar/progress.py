@@ -36,8 +36,15 @@ class ProgressReporter:
         )
 
     def configuration(self, values: dict[str, Any]) -> None:
-        rendered = " ".join(f"{key}={_display(value)}" for key, value in values.items())
-        self.emit("CONFIG", rendered)
+        if not self.enabled:
+            return
+        self.emit("CONFIG", "effective settings")
+        for key, value in values.items():
+            print(
+                f"  {key:<20} {_display(value)}",
+                file=self.stream,
+                flush=True,
+            )
 
     def emit(self, label: str, message: str) -> None:
         if not self.enabled:

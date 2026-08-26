@@ -46,6 +46,32 @@ def test_run_agent_writes_one_id_keyed_result_per_dataset_item(tmp_path):
     ]
 
 
+def test_run_agent_skips_dataset_items_marked_skipped(tmp_path):
+    dataset = tmp_path / "dataset.jsonl"
+    answers = tmp_path / "answers.jsonl"
+    write_jsonl(
+        dataset,
+        [
+            {"id": "item-ready", "status": "ready", "underspecified_question": "run me"},
+            {"id": "item-skipped", "status": "skipped", "reason": "not suitable"},
+        ],
+    )
+
+    seen = []
+
+    def answer(question: str) -> str:
+        seen.append(question)
+        return "answer"
+
+    completed = lladar.run_agent(dataset, answers, answer=answer)
+
+    assert completed == 1
+    assert seen == ["run me"]
+    assert read_jsonl(answers) == [
+        {"id": "item-ready", "status": "ok", "answer": "answer"},
+    ]
+
+
 def test_run_agent_records_item_errors_and_continues(tmp_path):
     dataset = tmp_path / "dataset.jsonl"
     answers = tmp_path / "answers.jsonl"

@@ -11,6 +11,10 @@ class ModelProfile:
 
 
 MODEL_PROFILES = {
+    "gemini:gemini-3.7-flash": ModelProfile(
+        max_input_tokens=1_048_576,
+        max_output_tokens=65_536,
+    ),
     "gemini:gemini-2.5-flash": ModelProfile(
         max_input_tokens=1_048_576,
         max_output_tokens=65_536,

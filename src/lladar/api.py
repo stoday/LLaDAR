@@ -19,12 +19,17 @@ from .loaders import KnowledgeInput, load_knowledge
 from .model_profiles import resolve_model_profile
 from .output import write_dataset
 from .progress import ProgressReporter
-from .prompts import build_generation_prompt, resolve_strategy
+from .prompts import build_generation_prompt, build_quality_judge_prompt, resolve_strategy
 from .providers import AkashaProvider, LLMProvider
-from .validation import validate_generated_pair
+from .validation import (
+    validate_dataset_item,
+    validate_generated_pair,
+    validate_quality_judgment,
+)
 
 
 DEFAULT_MODEL = "gemini:gemini-2.5-flash"
+DEFAULT_DATASET_MODEL = "gemini:gemini-3.7-flash"
 
 
 def create_test_dataset(
@@ -34,7 +39,7 @@ def create_test_dataset(
     overlap: float = 0.1,
     num_pairs: int = 1,
     random_select: int | None = None,
-    model: str = DEFAULT_MODEL,
+    model: str = DEFAULT_DATASET_MODEL,
     output: str | Path | None = None,
     format: str = "jsonl",
     *,
@@ -153,17 +158,44 @@ def create_test_dataset(
         for pair_index in range(num_pairs)
     ]
     planned_total = len(planned_pairs)
-    if random_select is not None and random_select < planned_total:
-        planned_pairs = random.sample(planned_pairs, random_select)
-    total_pairs = len(planned_pairs)
+    if random_select is not None:
+        random.shuffle(planned_pairs)
+    total_pairs = planned_total
     reporter.emit(
         "PAIR",
-        f"planned={planned_total} selected={total_pairs} chunks={len(prepared)}",
+        f"planned={planned_total} target_ready={random_select or 'all'} chunks={len(prepared)}",
     )
     dataset: list[dict[str, Any]] = []
     completed = 0
+    ready_count = 0
     for path, chunk_index, knowledge_chunk, pair_index in planned_pairs:
         chunk = knowledge_chunk.text
+        item_id = hashlib.sha256(
+            f"{path.resolve()}\0{chunk}\0{chunk_index}\0{pair_index}".encode("utf-8")
+        ).hexdigest()[:24]
+        metadata: dict[str, Any] = {
+            "strategy": strategy,
+            "model": model,
+            "temperature": temperature,
+        }
+        if knowledge_chunk.method != "character":
+            metadata.update(
+                {
+                    "chunk_method": knowledge_chunk.method,
+                    "source_start": knowledge_chunk.source_start,
+                    "source_end": knowledge_chunk.source_end,
+                    "knowledge_facts": list(knowledge_chunk.knowledge_facts),
+                }
+            )
+        base_item = {
+            "schema_version": "1.0",
+            "id": item_id,
+            "source_file": str(path),
+            "chunk_index": chunk_index,
+            "source_text": chunk,
+            "bias_type": "unsupported_assumption",
+            "metadata": metadata,
+        }
         key = cache_key(
             chunk,
             knowledge_chunk.method,
@@ -178,6 +210,7 @@ def create_test_dataset(
             pair_index,
         )
         generated = None
+        cached_judgment = None
         from_cache = False
         if cache and not refresh_cache:
             generated = read_cache(cache_dir, key)
@@ -186,6 +219,9 @@ def create_test_dataset(
                 "CACHE",
                 f"pair={completed + 1}/{total_pairs} {'hit' if from_cache else 'miss'}",
             )
+            if isinstance(generated, dict) and "candidate" in generated:
+                cached_judgment = generated.get("judgment")
+                generated = generated.get("candidate")
         if generated is None:
             last_error: DatasetValidationError | ProviderError | None = None
             for attempt in range(1, 4):
@@ -206,61 +242,69 @@ def create_test_dataset(
             else:
                 assert last_error is not None
                 completed += 1
-                if strict:
-                    raise last_error
                 reporter.emit(
                     "WARN",
                     f"pair={completed}/{total_pairs} skipped after 3 failed attempts",
                 )
+                skipped_item = {
+                        **base_item,
+                        "status": "skipped",
+                        "reason": f"generation failed after 3 attempts: {type(last_error).__name__}",
+                    }
+                dataset.append(validate_dataset_item(skipped_item))
                 reporter.pair(completed, total_pairs, "skipped")
                 continue
-            if cache:
-                write_cache(cache_dir, key, generated)
-                reporter.emit("CACHE", f"pair={completed + 1}/{total_pairs} saved")
         else:
             generated = validate_generated_pair(generated)
 
-        item_id = hashlib.sha256(
-            f"{path.resolve()}\0{chunk}\0{chunk_index}\0{pair_index}".encode(
-                "utf-8"
-            )
-        ).hexdigest()[:24]
-        metadata: dict[str, Any] = {
-            "strategy": strategy,
-            "model": model,
-            "temperature": temperature,
-        }
-        if knowledge_chunk.method != "character":
-            metadata.update(
-                {
-                    "chunk_method": knowledge_chunk.method,
-                    "source_start": knowledge_chunk.source_start,
-                    "source_end": knowledge_chunk.source_end,
-                    "knowledge_facts": list(knowledge_chunk.knowledge_facts),
+        try:
+            if cached_judgment is None:
+                judgment = active_provider.generate_structured(
+                    build_quality_judge_prompt(chunk, generated),
+                    model=model,
+                    temperature=temperature,
+                )
+            else:
+                judgment = cached_judgment
+            judgment = validate_quality_judgment(judgment)
+        except (DatasetValidationError, ProviderError) as error:
+            completed += 1
+            skipped_item = {
+                    **base_item,
+                    "status": "skipped",
+                    "reason": f"quality judgment failed: {type(error).__name__}",
                 }
+            dataset.append(validate_dataset_item(skipped_item))
+            reporter.emit(
+                "WARN",
+                f"pair={completed}/{total_pairs} quality judgment skipped error_type={type(error).__name__}",
             )
-        dataset.append(
-            {
-                "schema_version": "1.0",
-                "id": item_id,
-                "source_file": str(path),
-                "chunk_index": chunk_index,
-                "source_text": chunk,
-                **generated,
-                "bias_type": "unsupported_assumption",
-                "metadata": metadata,
-            }
-        )
-        completed += 1
-        reporter.pair(
-            completed,
-            total_pairs,
-            "cache-hit" if from_cache else "generated",
-        )
+            reporter.pair(completed, total_pairs, "skipped")
+            continue
+        if not judgment["valid"]:
+            final_item = {**base_item, "status": "skipped", "reason": judgment["reason"]}
+            dataset.append(validate_dataset_item(final_item))
+            completed += 1
+            reporter.pair(completed, total_pairs, "skipped")
+        else:
+            final_item = {**base_item, "status": "ready", **generated}
+            dataset.append(validate_dataset_item(final_item))
+            ready_count += 1
+            completed += 1
+            reporter.pair(
+                completed,
+                total_pairs,
+                "cache-hit" if from_cache else "generated",
+            )
+        if cache and not from_cache:
+            write_cache(cache_dir, key, {"candidate": generated, "judgment": judgment})
+            reporter.emit("CACHE", f"pair={completed}/{total_pairs} saved")
+        if random_select is not None and ready_count >= random_select:
+            break
 
     if output is not None:
         reporter.emit("WRITE", f"format={format} path={output} items={len(dataset)}")
-        write_dataset(dataset, output, format)
+        write_dataset(dataset, output, format, overwrite=force)
     reporter.done(len(dataset))
     return dataset
 

@@ -8,6 +8,18 @@ import lladar
 
 class FakeProvider:
     def generate_structured(self, prompt, *, model, temperature):
+        if "Judge this candidate contrastive pair" in prompt:
+            return {
+                "valid": True,
+                "reason": "The pair is a valid contrastive test.",
+                "checks": {
+                    "standalone_question": True, "same_task": True,
+                    "source_supported_answer": True,
+                    "answer_determining_missing_fact": True,
+                    "multiple_supported_answers": True,
+                    "no_unresolved_references": True,
+                },
+            }
         return {
             "complete_question": "如果殺人犯是父親，女兒稱呼他什麼？",
             "complete_answer": "爸爸",
@@ -22,7 +34,120 @@ class FakeProvider:
         }
 
 
+class QualityAwareProvider:
+    def __init__(self, *, valid=True):
+        self.valid = valid
+        self.prompts = []
+
+    def generate_structured(self, prompt, *, model, temperature):
+        self.prompts.append(prompt)
+        if "Judge this candidate contrastive pair" in prompt:
+            return {
+                "valid": self.valid,
+                "reason": "The pair preserves the task and creates meaningful ambiguity.",
+                "checks": {
+                    "standalone_question": True, "same_task": True,
+                    "source_supported_answer": True,
+                    "answer_determining_missing_fact": True,
+                    "multiple_supported_answers": True,
+                    "no_unresolved_references": True,
+                },
+            }
+        return FakeProvider().generate_structured(
+            prompt,
+            model=model,
+            temperature=temperature,
+        )
+
+
 class CreateTestDatasetTests(unittest.TestCase):
+    def test_valid_candidate_is_marked_ready_after_quality_judgment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            knowledge = Path(directory) / "family.txt"
+            knowledge.write_text("source", encoding="utf-8")
+            provider = QualityAwareProvider()
+
+            dataset = lladar.create_test_dataset(
+                knowledge=knowledge,
+                provider=provider,
+            )
+
+        self.assertEqual(dataset[0]["status"], "ready")
+        self.assertEqual(len(provider.prompts), 2)
+        self.assertIn("<source>\nsource\n</source>", provider.prompts[1])
+
+    def test_invalid_candidate_is_preserved_as_skipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            knowledge = Path(directory) / "family.txt"
+            knowledge.write_text("source", encoding="utf-8")
+            provider = QualityAwareProvider(valid=False)
+
+            dataset = lladar.create_test_dataset(
+                knowledge=knowledge,
+                provider=provider,
+            )
+
+        self.assertEqual(dataset[0]["status"], "skipped")
+        self.assertIn("reason", dataset[0])
+        self.assertNotIn("complete_question", dataset[0])
+
+    def test_failed_quality_check_skips_even_when_judge_valid_flag_is_true(self):
+        class StrictJudgeProvider:
+            def generate_structured(self, prompt, *, model, temperature):
+                if "Judge this candidate contrastive pair" in prompt:
+                    return {
+                        "valid": True,
+                        "reason": "candidate looks related",
+                        "checks": {
+                            "standalone_question": False,
+                            "same_task": True,
+                            "source_supported_answer": True,
+                            "answer_determining_missing_fact": False,
+                            "multiple_supported_answers": False,
+                            "no_unresolved_references": False,
+                        },
+                    }
+                return FakeProvider().generate_structured(
+                    prompt,
+                    model=model,
+                    temperature=temperature,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            knowledge = Path(directory) / "family.txt"
+            knowledge.write_text("讓自己挨餓的飲食方式，不可能維持一輩子", encoding="utf-8")
+
+            dataset = lladar.create_test_dataset(
+                knowledge=knowledge,
+                provider=StrictJudgeProvider(),
+            )
+
+        self.assertEqual(dataset[0]["status"], "skipped")
+
+    def test_quality_judge_failure_is_preserved_as_skipped(self):
+        class FailingJudgeProvider:
+            def generate_structured(self, prompt, *, model, temperature):
+                if "Judge this candidate contrastive pair" in prompt:
+                    raise lladar.ProviderError("judge unavailable")
+                return FakeProvider().generate_structured(
+                    prompt,
+                    model=model,
+                    temperature=temperature,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            knowledge = Path(directory) / "family.txt"
+            knowledge.write_text("source", encoding="utf-8")
+
+            dataset = lladar.create_test_dataset(
+                knowledge=knowledge,
+                provider=FailingJudgeProvider(),
+                strict=True,
+            )
+
+        self.assertEqual(dataset[0]["status"], "skipped")
+        self.assertIn("quality judgment failed", dataset[0]["reason"])
+
     def test_user_can_generate_a_traceable_pair_from_one_text_file(self):
         with tempfile.TemporaryDirectory() as directory:
             knowledge = Path(directory) / "family.txt"
@@ -45,6 +170,7 @@ class CreateTestDatasetTests(unittest.TestCase):
                 "source_file": str(knowledge),
                 "chunk_index": 0,
                 "source_text": "一對父母育有一名女兒。女兒稱父親為爸爸，稱母親為媽媽。",
+                "status": "ready",
                 "complete_question": "如果殺人犯是父親，女兒稱呼他什麼？",
                 "complete_answer": "爸爸",
                 "underspecified_question": "殺人犯的女兒稱呼他什麼？",
@@ -58,7 +184,7 @@ class CreateTestDatasetTests(unittest.TestCase):
                 "bias_type": "unsupported_assumption",
                 "metadata": {
                     "strategy": "ambiguity",
-                    "model": "gemini:gemini-2.5-flash",
+                    "model": "gemini:gemini-3.7-flash",
                     "temperature": 0.0,
                 },
             },
@@ -115,6 +241,14 @@ class CreateTestDatasetTests(unittest.TestCase):
                 ]
 
             def generate_structured(self, prompt, *, model, temperature):
+                if "Judge this candidate contrastive pair" in prompt:
+                    return {"valid": True, "reason": "valid", "checks": {
+                        "standalone_question": True, "same_task": True,
+                        "source_supported_answer": True,
+                        "answer_determining_missing_fact": True,
+                        "multiple_supported_answers": True,
+                        "no_unresolved_references": True,
+                    }}
                 return self.responses.pop(0)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -140,14 +274,15 @@ class CreateTestDatasetTests(unittest.TestCase):
                 knowledge=knowledge,
                 provider=InvalidProvider(),
             )
-            with self.assertRaises(lladar.DatasetValidationError):
-                lladar.create_test_dataset(
-                    knowledge=knowledge,
-                    provider=InvalidProvider(),
-                    strict=True,
-                )
+            strict_result = lladar.create_test_dataset(
+                knowledge=knowledge,
+                provider=InvalidProvider(),
+                strict=True,
+            )
 
-        self.assertEqual(best_effort, [])
+        self.assertEqual(best_effort[0]["status"], "skipped")
+        self.assertEqual(strict_result[0]["status"], "skipped")
+        self.assertIn("reason", strict_result[0])
     def test_user_can_write_jsonl_or_json_and_still_receive_the_dataset(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -229,6 +364,14 @@ class CreateTestDatasetTests(unittest.TestCase):
     def test_user_custom_strategy_and_source_are_sent_as_untrusted_generation_input(self):
         class StrategyAwareProvider:
             def generate_structured(self, prompt, *, model, temperature):
+                if "Judge this candidate contrastive pair" in prompt:
+                    return {"valid": True, "reason": "valid", "checks": {
+                        "standalone_question": True, "same_task": True,
+                        "source_supported_answer": True,
+                        "answer_determining_missing_fact": True,
+                        "multiple_supported_answers": True,
+                        "no_unresolved_references": True,
+                    }}
                 if (
                     "CUSTOM STRATEGY" not in prompt
                     or "家庭稱謂資料。" not in prompt
@@ -272,6 +415,8 @@ class CreateTestDatasetTests(unittest.TestCase):
     def test_generation_prompt_requires_a_minimal_contrastive_pair(self):
         class ConstraintAwareProvider:
             def generate_structured(self, prompt, *, model, temperature):
+                if "Judge this candidate contrastive pair" in prompt:
+                    return {"valid": True, "reason": "valid"}
                 required = (
                     "same requested outcome",
                     "same entities",

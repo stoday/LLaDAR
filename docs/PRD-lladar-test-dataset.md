@@ -14,7 +14,7 @@
 
 1. 讀取單一檔案、資料夾或路徑清單中的 `.txt`／`.md` 文件。
 2. 將文件依段落、句子與字元邊界切成 chunks。
-3. 透過 Akasha 呼叫 `gemini:gemini-2.5-flash`。
+3. 透過 Akasha 呼叫 `gemini:gemini-3.7-flash`。
 4. 由模型找出一個會影響答案、但容易被忽略的關鍵資訊。
 5. 為每個 chunk 預設生成一組對照問題：完整資訊問題與移除關鍵資訊後的 underspecified question。
 6. 產生完整答案、缺失資訊、錯誤假設與可接受行為。
@@ -49,10 +49,10 @@
 23. 作為使用者，我想看到 `bias_type=unsupported_assumption`，以便區分這類風險與未來其他 bias type。
 24. 作為使用者，我想保存來源檔案與 chunk index，以便定位資料集項目的原始位置。
 25. 作為使用者，我想輸出 JSONL，以便處理大型資料集。
-26. 作為使用者，我想輸出 JSON，以便與需要一般 JSON 陣列的工具整合。
+26. 作為 Python API 使用者，我想輸出 JSON，以便與需要一般 JSON 陣列的工具整合。
 27. 作為使用者，我想指定輸出檔案，以便控制資料集的保存位置。
 28. 作為使用者，我想避免意外覆寫既有資料集，以便保護已產生的模型結果。
-29. 作為使用者，我想使用 `--force` 明確覆寫資料集，以便在確認後重新生成。
+29. 作為 CLI 使用者，我想取得不重複的預設資料集檔名，並避免覆寫指定的既有檔案。
 30. 作為使用者，我想指定模型，以便使用預設模型以外的 Akasha 相容模型。
 31. 作為使用者，我想從環境變數或 `.env` 取得 API 設定，以便不將秘密放進原始碼或資料集。
 32. 作為使用者，我想在文件包含指令文字時仍將它視為不可信資料，以便避免知識內容注入生成流程。
@@ -76,7 +76,7 @@
 - 主要生成 seam 是 `create_test_dataset`；CLI 應是同一行為的薄介面。
 - 內部模組分為 API、CLI、資料模型、例外、loader、chunking、prompt、generation、validation、cache 與 provider 層。
 - 定義 `LLMProvider` 抽象介面，第一版實作 `AkashaProvider`。
-- Akasha provider 使用 `gemini:gemini-2.5-flash` 作為預設模型，支援 `model`／`--model` 覆寫。
+- test-dataset 使用 `gemini:gemini-3.7-flash` 作為預設模型，支援 `model`／`--model` 覆寫。
 - Akasha provider 負責讀取 `.env`、建立 agent、消費 stream event、取得最終文字並解析結構化 JSON。
 - 生成邏輯不直接依賴 Gemini SDK，也不把 Akasha 細節暴露給資料集生成核心。
 - 每個 chunk 一次模型呼叫生成一整組 pair，以降低欄位不一致與 API 成本。
@@ -99,8 +99,9 @@
 - 單次執行失敗率超過 5% 時顯示警告；strict 模式直接失敗。
 - 第一版循序處理 chunks，不提供 async 或並行生成；保留未來增加 `max_concurrency` 的設計空間。
 - Python API 在指定 output 時寫檔，但仍回傳 `list[dict]`；未指定 output 時只回傳資料。
-- CLI 預設輸出 `test-dataset.jsonl`；`--format json` 輸出一般 JSON 陣列。
-- 既有輸出檔案預設報錯，只有 `--force` 才能覆寫。
+- CLI 僅輸出 JSONL；未指定 `--output` 時，以本機時間建立
+  `test-dataset-YYYYMMDD-HHMMSS.jsonl`，同秒碰撞時附加遞增序號。
+- 指定 `--output` 時，既有檔案一律報錯，不提供 CLI `--force`。
 - cache 預設關閉；啟用後放在 `.lladar/cache/`，以 chunk、prompt、model 與相關參數雜湊為 key。
 - `--refresh-cache` 或對應 API 參數可強制重新生成。
 - 定義 `LladarError`、`KnowledgeLoadError`、`ChunkingError`、`ProviderError`、`GenerationError` 與 `DatasetValidationError`。
@@ -116,7 +117,7 @@
 - schema／validation 測試涵蓋完整欄位、缺少欄位、非法值、來源追溯、資訊移除與可接受行為。
 - generation 測試使用 fake provider 驗證成功流程、malformed JSON 重試、三次失敗、strict／best-effort 與 `num_pairs`。
 - cache 測試涵蓋命中、未命中、參數變更造成 cache miss 與 refresh。
-- CLI smoke test 驗證 JSONL、JSON、預設輸出、`--force`、進度摘要與非零錯誤碼。
+- CLI smoke test 驗證 JSONL、帶時間戳的預設輸出、既有指定輸出的保護、進度摘要與非零錯誤碼。
 - package test 驗證可建立 distribution，並可在乾淨環境安裝後匯入 `lladar` 與執行 CLI。
 - 真實 Akasha／Gemini 測試為 opt-in，不納入一般離線測試流程。
 - verbose 測試從公開 API／CLI seam 驗證預設啟用、stderr 分流、本地時間、TTY 顏色、配置與各階段事件、elapsed／ETA、`--no-verbose`，以及 provider 錯誤內容不會洩漏到進度。
@@ -146,6 +147,8 @@
 
 ## Auto Semantic Chunking Addendum
 
+- CLI `test-dataset` defaults `chunk_size` to `"auto"`; Python API callers keep
+  the explicit `chunk_size=2000` default for backwards compatibility.
 - `chunk_size` accepts a positive integer or the literal `"auto"`.
 - Auto mode is a separate model stage before contrastive-pair generation.
 - The library labels exact source units; the model returns contiguous unit IDs and concise facts, and the library extracts final passages from original offsets.
@@ -157,7 +160,7 @@
 - This first strategy selects one important fact per generated pair. A future strategy may generate multiple questions from one semantic passage.
 - Model input/output limits and the auto-window ratio are resolved from one model profile; provider and chunking code must not duplicate those constants.
 - Python users may override max_input_tokens, max_output_tokens, and auto_window_ratio. CLI users may override them with --max-input-tokens, --max-output-tokens, and --auto-window-ratio.
-- Gemini 2.5 Flash defaults to 1,048,576 input tokens, 65,536 output tokens, and ratio 0.8. Unknown models use conservative 16,384/8,192 token limits.
+- Gemini 3.7 Flash defaults to 1,048,576 input tokens, 65,536 output tokens, and ratio 0.8. Unknown models use conservative 16,384/8,192 token limits.
 ## 後續待辦：生成問題的語意品質
 
 狀態：**尚未實作，後續版本必須處理。** 現行 validate_generated_pair() 只驗證欄位與 schema；模型輸出即使格式正確，仍可能不是有效的 unsupported-assumption 對照題。

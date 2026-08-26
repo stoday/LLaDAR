@@ -200,7 +200,10 @@ def run_agent(
     if project is not None and entrypoint is None:
         raise ValueError("entrypoint is required when project is provided")
 
-    items = list(_read_jsonl(Path(dataset)))
+    items = [
+        item for item in _read_jsonl(Path(dataset))
+        if item.get("status") != "skipped"
+    ]
     reporter = ProgressReporter(verbose)
     reporter.configuration(
         {

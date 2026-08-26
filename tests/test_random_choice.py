@@ -16,9 +16,19 @@ PAIR = {
 class CountingProvider:
     def __init__(self):
         self.calls = 0
+        self.pair_calls = 0
 
     def generate_structured(self, prompt, *, model, temperature):
         self.calls += 1
+        if "Judge this candidate contrastive pair" in prompt:
+            return {"valid": True, "reason": "valid", "checks": {
+                "standalone_question": True, "same_task": True,
+                "source_supported_answer": True,
+                "answer_determining_missing_fact": True,
+                "multiple_supported_answers": True,
+                "no_unresolved_references": True,
+            }}
+        self.pair_calls += 1
         return PAIR
 
 
@@ -36,7 +46,7 @@ def test_random_select_limits_generation_to_n_pairs(tmp_path: Path):
     )
 
     assert len(dataset) == 2
-    assert provider.calls == 2
+    assert provider.pair_calls == 2
     assert len({item["id"] for item in dataset}) == 2
 
 
@@ -53,8 +63,39 @@ def test_random_select_larger_than_dataset_keeps_all_pairs(tmp_path: Path):
         provider=provider,
     )
 
-    assert len(dataset) == provider.calls
+    assert len(dataset) == provider.pair_calls
     assert len(dataset) > 0
+
+
+def test_random_select_counts_only_ready_pairs(tmp_path: Path):
+    knowledge = tmp_path / "knowledge.txt"
+    knowledge.write_text("aa\nbb\ncc\n", encoding="utf-8")
+
+    class SkipThenReadyProvider(CountingProvider):
+        def __init__(self):
+            super().__init__()
+            self.generation_attempts = 0
+
+        def generate_structured(self, prompt, *, model, temperature):
+            if "Judge this candidate contrastive pair" not in prompt:
+                self.generation_attempts += 1
+                if self.generation_attempts <= 3:
+                    return {"complete_question": "invalid"}
+            return super().generate_structured(prompt, model=model, temperature=temperature)
+
+    provider = SkipThenReadyProvider()
+
+    dataset = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2,
+        overlap=0,
+        random_select=1,
+        provider=provider,
+    )
+
+    assert sum(item["status"] == "ready" for item in dataset) == 1
+    assert any(item["status"] == "skipped" for item in dataset)
+    assert provider.generation_attempts == 4
 
 
 def test_random_select_must_be_positive(tmp_path: Path):

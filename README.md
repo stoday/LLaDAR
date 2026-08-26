@@ -47,7 +47,7 @@ items = lladar.create_test_dataset(
     chunk_size=2000,
     overlap=0.1,
     num_pairs=1,
-    model="gemini:gemini-2.5-flash",
+    model="gemini:gemini-3.7-flash",
     output="test-dataset.jsonl",
     verbose=True,
 )
@@ -71,14 +71,19 @@ Progress reporting is enabled by default (`verbose=True`). It writes timestamped
 lladar create test-dataset \
   --knowledge ./knowledge \
   --prompt ambiguity \
-  --chunk-size 2000 \
+  --chunk-size auto \
   --overlap 0.1 \
   --num-pairs 1 \
-  --model gemini:gemini-2.5-flash \
-  --output test-dataset.jsonl
+  --model gemini:gemini-3.7-flash
 ```
 
-Pass `--chunk-size auto` for semantic segmentation. Use `--format json` for a JSON array. Existing output files are protected unless `--force` is supplied. Optional caching is enabled with `--cache`; cache files are stored under `.lladar/cache/` by default. Use `--refresh-cache` to regenerate cached entries. Progress is enabled by default; pass `--no-verbose` for quiet operation.
+The CLI defaults to `--chunk-size auto` for semantic segmentation. By default,
+it writes a new JSONL file named `test-dataset-YYYYMMDD-HHMMSS.jsonl` in the
+current directory. Use `--output PATH` for a specific JSONL path; existing
+files are never overwritten. Optional caching is enabled with `--cache`; cache
+files are stored under `.lladar/cache/` by default. Use `--refresh-cache` to
+regenerate cached entries. Progress is enabled by default; pass `--no-verbose`
+for quiet operation.
 
 Generated natural-language fields follow the dominant language of the source
 knowledge. Questions, answers, missing-information descriptions, and
@@ -92,15 +97,14 @@ The default mode is best-effort: invalid model outputs are retried three times
 and then skipped. Add `--strict` to fail the run when an item cannot be
 generated or validated.
 
-- `--random-select N`: randomly select at most N question pairs. If N is larger than the available pair count, all pairs are selected. Selection happens before provider calls.
+- `--random-select N`: randomly order candidate pairs and process them until N `ready` pairs are collected. `skipped` pairs do not consume the quota; if candidates run out, fewer than N ready pairs may be returned.
 - `--verbose` / `--no-verbose`: enable or disable timestamped progress on stderr. Verbose mode is enabled by default and reports source loading, chunking, retries, cache activity, pair progress, elapsed time, and ETA.
 - `--prompt NAME_OR_TEXT`: select the built-in strategy or provide inline generation instructions.
 - `--prompt-file PATH`: load generation instructions from a UTF-8 file. Cannot be combined with `--prompt`.
 - `--chunk-size N`: split knowledge files into fixed-size character chunks.
 - `--chunk-size auto`: use semantic segmentation before question generation.
 - `--num-pairs N`: generate N question pairs per chunk.
-- `--format jsonl` / `--format json`: choose one JSON object per line or one JSON array.
-- `--force`: allow overwriting an existing output dataset.
+- `--output PATH`: choose a JSONL destination; it must not already exist.
 - `--cache`: reuse semantic chunks and generated pairs from `.lladar/cache/`.
 - `--refresh-cache`: regenerate cached entries when `--cache` is enabled.
 - `--strict`: stop instead of skipping invalid generation or chunking results.

@@ -37,9 +37,44 @@ Use prompt, chunk-size, model, strict, and cache options only when the task requ
 
 Completion criterion: test-dataset.jsonl exists and every item has an id and underspecified_question.
 
-### 3. Build the adapter
+### 3. Select the runner
 
-If the agent already has a callable or batch seam, wrap it without changing its core behavior. Otherwise create the smallest project-local adapter needed to answer one question at a time. Read references/adapter-template.md for the template.
+Use the built-in runner first when the project has an executable entrypoint:
+
+~~~bash
+lladar run-agent test-dataset.jsonl \
+  --project <project-path> \
+  --entrypoint <entrypoint> \
+  --env-file <env-file> \
+  --output qa-results.jsonl
+~~~
+
+`run-agent` copies the project into a managed `.lladar/runs/` workspace,
+reuses the original project's virtual-environment interpreter when available,
+injects environment settings without copying `.env`, and runs each dataset
+item in an independent process. It uses the Akasha tool controller to adapt a
+copy when the entrypoint has no question-input seam. The original project is
+not modified.
+
+During adaptation, the built-in controller exposes these workspace-confined
+tools:
+
+- `list_directory`: list entries in a relative directory
+- `read_file`: read one UTF-8 text file
+- `search_files`: search an exact text query in supported source and document files
+- `replace_text`: replace exactly one matching text span in a file
+
+Use these tools to inspect and make the smallest change to the copied project.
+Paths are relative to the managed workspace and cannot escape it. The tools
+do not modify the original project, and `replace_text` refuses ambiguous
+matches instead of applying a broad rewrite. The bundled validation script is
+for checking JSONL artifacts; it is not the mechanism used to edit project
+files.
+
+If the project has no executable entrypoint but does have a callable or batch
+seam, wrap it without changing its core behavior. Otherwise create the
+smallest project-local adapter needed to answer one question at a time. Read
+references/adapter-template.md for the template.
 
 The adapter must emit the contract in references/answer-schema.md:
 
@@ -53,7 +88,12 @@ Completion criterion: the adapter can produce qa-results.jsonl with the exact da
 
 ### 4. Run the real agent
 
-Run the adapter using the project's normal environment and provider. Before executing commands with meaningful side effects, show the commands and files to be changed. Hand off credentials, OTP, CAPTCHA, payment, and interactive login steps to the user.
+Run the selected runner using the project's normal environment and provider.
+For the built-in runner, use the command from phase 3. Progress is enabled by
+default; use `--no-verbose` only when quiet execution is required. Before
+executing commands with meaningful side effects, show the commands and files
+to be changed. Hand off credentials, OTP, CAPTCHA, payment, and interactive
+login steps to the user.
 
 Never save or expose tokens, cookies, browser profiles, sessions, hidden prompts, or provider logs. Record errors in the answer JSONL and continue when safe.
 

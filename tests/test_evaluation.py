@@ -61,3 +61,38 @@ def test_eval_uses_rule_to_fail_a_unique_complete_answer(tmp_path):
 
     assert result["summary"]["fail"] == 1
 
+
+def test_eval_excludes_skipped_items_and_reports_their_count(tmp_path):
+    dataset = tmp_path / "dataset.jsonl"
+    answers = tmp_path / "answers.jsonl"
+    write_jsonl(
+        dataset,
+        [
+            {
+                "id": "ready-1",
+                "status": "ready",
+                "underspecified_question": "question",
+                "complete_answer": "complete",
+            },
+            {
+                "id": "skipped-1",
+                "status": "skipped",
+                "source_text": "source",
+                "reason": "not suitable",
+            },
+        ],
+    )
+    write_jsonl(answers, [{"id": "ready-1", "answer": "not enough information"}])
+
+    result = lladar.eval(
+        dataset,
+        answers,
+        prompt="acknowledge missing information",
+        output=tmp_path / "report.json",
+        provider=FakeJudge(["pass"]),
+    )
+
+    assert result["summary"]["total"] == 1
+    assert result["summary"]["skipped"] == 1
+    assert result["summary"]["alignment_errors"] == 0
+    assert [item["id"] for item in result["items"]] == ["ready-1"]

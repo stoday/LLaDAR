@@ -1,11 +1,26 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
-from lladar.cli import main
+from lladar.cli import _reserve_default_dataset_output, main
 
 
 class FakeProvider:
     def generate_structured(self, prompt, *, model, temperature):
+        if "Judge this candidate contrastive pair" in prompt:
+            return {"valid": True, "reason": "valid", "checks": {
+                "standalone_question": True, "same_task": True,
+                "source_supported_answer": True,
+                "answer_determining_missing_fact": True,
+                "multiple_supported_answers": True,
+                "no_unresolved_references": True,
+            }}
+        if "semantic knowledge segmenter" in prompt:
+            return {
+                "segments": [
+                    {"unit_ids": ["u0"], "knowledge_facts": ["A source fact."]}
+                ]
+            }
         return {
             "complete_question": "完整問題",
             "complete_answer": "完整答案",
@@ -34,7 +49,52 @@ def test_user_can_generate_jsonl_through_the_cli(tmp_path: Path):
     )
 
     assert exit_code == 0
-    assert json.loads(output.read_text(encoding="utf-8"))["source_text"] == "家庭稱謂資料。"
+    item = json.loads(output.read_text(encoding="utf-8"))
+    assert item["source_text"] == "家庭稱謂資料。"
+    assert item["metadata"]["chunk_method"] == "semantic_auto"
+
+def test_default_dataset_output_uses_a_local_timestamp_and_never_overwrites(
+    tmp_path: Path, monkeypatch
+):
+    first = _reserve_default_dataset_output(
+        directory=tmp_path,
+        timestamp=datetime(2026, 8, 26, 15, 30, 45),
+    )
+    second = _reserve_default_dataset_output(
+        directory=tmp_path,
+        timestamp=datetime(2026, 8, 26, 15, 30, 45),
+    )
+
+    assert first.name == "test-dataset-20260826-153045.jsonl"
+    assert second.name == "test-dataset-20260826-153045-1.jsonl"
+
+    knowledge = tmp_path / "knowledge.txt"
+    knowledge.write_text("source", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    exit_code = main(
+        ["create", "test-dataset", "--knowledge", str(knowledge)],
+        provider=FakeProvider(),
+    )
+
+    assert exit_code == 0
+    assert len(list(tmp_path.glob("test-dataset-*.jsonl"))) == 3
+
+
+def test_explicit_dataset_output_refuses_to_overwrite(tmp_path: Path, capsys):
+    knowledge = tmp_path / "knowledge.txt"
+    knowledge.write_text("source", encoding="utf-8")
+    output = tmp_path / "dataset.jsonl"
+    output.write_text("original", encoding="utf-8")
+
+    exit_code = main(
+        ["create", "test-dataset", "--knowledge", str(knowledge), "--output", str(output)],
+        provider=FakeProvider(),
+    )
+
+    assert exit_code == 2
+    assert output.read_text(encoding="utf-8") == "original"
+    assert "output already exists" in capsys.readouterr().err
+
 
 def test_user_can_understand_every_test_dataset_option_from_help(capsys):
     try:
@@ -47,6 +107,8 @@ def test_user_can_understand_every_test_dataset_option_from_help(capsys):
     help_text = " ".join(capsys.readouterr().out.split())
 
     assert exit_code == 0
+    assert "--format" not in help_text
+    assert "--force" not in help_text
     for explanation in (
         "Files or directories containing knowledge documents",
         "Built-in strategy name or custom generation instructions",
@@ -56,13 +118,12 @@ def test_user_can_understand_every_test_dataset_option_from_help(capsys):
         "Akasha model identifier used for semantic chunking",
         "Override the model profile's input-token budget",
         "Override the model profile's output-token budget",
-        "Fraction of max output tokens used as the approximate auto-window",        "Output format: JSONL writes one object per line",
+        "Fraction of max output tokens used as the approximate auto-window",
         "Environment file used by Akasha for provider credentials",
-        "Allow overwriting an existing output file",
+        "Destination JSONL file. Existing files are never overwritten",
         "Directory for semantic and pair cache files",        "Semantic chunking with the language model",
         "Ignored when --chunk-size auto is used",
         "Number of question pairs generated per chunk",
-        "Protects an existing output file unless --force is used",
         "Fail the run when chunking or generation remains invalid after retries",
         "Reuse semantic chunks and generated pairs",
         "Regenerate entries even when cache files exist",

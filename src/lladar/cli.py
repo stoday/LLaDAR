@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
-from .api import DEFAULT_MODEL, create_test_dataset
+from .api import DEFAULT_DATASET_MODEL, DEFAULT_MODEL, create_test_dataset
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
 from .providers import LLMProvider
@@ -50,6 +51,36 @@ def _window_ratio(value: str) -> float:
         raise argparse.ArgumentTypeError("value must satisfy 0 < value <= 1")
     return parsed
 
+
+def _reserve_default_dataset_output(
+    *,
+    directory: Path | None = None,
+    timestamp: datetime | None = None,
+) -> Path:
+    root = directory or Path.cwd()
+    stem = f"test-dataset-{(timestamp or datetime.now()).strftime('%Y%m%d-%H%M%S')}"
+    suffix = 0
+    while True:
+        name = f"{stem}{'' if suffix == 0 else f'-{suffix}'}.jsonl"
+        path = root / name
+        try:
+            with path.open("x", encoding="utf-8"):
+                pass
+        except FileExistsError:
+            suffix += 1
+            continue
+        return path
+
+
+def _discard_empty_reservation(path: Path | None) -> None:
+    if path is None:
+        return
+    try:
+        if path.exists() and path.stat().st_size == 0:
+            path.unlink()
+    except OSError:
+        pass
+
 class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
     def __init__(self, prog: str) -> None:
         super().__init__(prog, max_help_position=32, width=100)
@@ -83,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""Examples:
   lladar create test-dataset --knowledge ./knowledge
   lladar create test-dataset --knowledge guide.md --chunk-size auto --strict
-  lladar create test-dataset --knowledge ./knowledge --format json --output dataset.json
+  lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
   lladar create test-dataset --knowledge guide.md --chunk-size auto --max-output-tokens 32768""",
         formatter_class=_HelpFormatter,
     )
@@ -117,11 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument(
         "--chunk-size",
         type=_parse_chunk_size,
-        default=2000,
+        default="auto",
         metavar="N|auto",
         help=(
             "Positive character count for fixed chunks, or 'auto' for Semantic "
-            "chunking with the language model. Default: 2000."
+            "chunking with the language model. Default: auto."
         ),
     )
     dataset.add_argument(
@@ -146,17 +177,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=_positive_int,
         metavar="N",
         help=(
-            "Randomly select at most N generated question pairs. If N exceeds "
-            "the available pairs, all pairs are selected."
+            "Randomly process candidate pairs until N ready pairs are collected. "
+            "Skipped pairs do not consume the quota."
         ),
     )
     dataset.add_argument(
         "--model",
-        default=DEFAULT_MODEL,
+        default=DEFAULT_DATASET_MODEL,
         metavar="MODEL",
         help=(
             "Akasha model identifier used for semantic chunking and question generation. "
-            f"Default: {DEFAULT_MODEL}."
+            f"Default: {DEFAULT_DATASET_MODEL}."
         ),
     )
     dataset.add_argument(
@@ -165,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=(
             "Override the model profile's input-token budget for the built-in Akasha "
-            "provider. Default: selected model profile (Gemini 2.5 Flash: 1,048,576)."
+            "provider. Default: selected model profile."
         ),
     )
     dataset.add_argument(
@@ -174,7 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=(
             "Override the model profile's output-token budget. Auto chunking also uses "
-            "this value to size semantic windows. Default: selected model profile (Gemini 2.5 Flash: 65,536)."
+            "this value to size semantic windows. Default: selected model profile."
         ),
     )
     dataset.add_argument(
@@ -197,20 +228,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset.add_argument(
         "--output",
-        default="test-dataset.jsonl",
         metavar="PATH",
         help=(
-            "Destination dataset file. Protects an existing output file unless --force "
-            "is used. Default: test-dataset.jsonl."
-        ),
-    )
-    dataset.add_argument(
-        "--format",
-        choices=("jsonl", "json"),
-        default="jsonl",
-        help=(
-            "Output format: JSONL writes one object per line; JSON writes one array. "
-            "Default: jsonl."
+            "Destination JSONL file. Existing files are never overwritten. If omitted, "
+            "creates test-dataset-YYYYMMDD-HHMMSS.jsonl in the current directory."
         ),
     )
     dataset.add_argument(
@@ -226,11 +247,6 @@ def build_parser() -> argparse.ArgumentParser:
             "Fail the run when chunking or generation remains invalid after retries, "
             "instead of skipping or falling back."
         ),
-    )
-    dataset.add_argument(
-        "--force",
-        action="store_true",
-        help="Allow overwriting an existing output file.",
     )
     dataset.add_argument(
         "--cache",
@@ -323,6 +339,8 @@ def main(
     runs_root: str | Path | None = None,
 ) -> int:
     args = build_parser().parse_args(argv)
+    reserved_default_output: Path | None = None
+    dataset_output: Path | None = None
     try:
         if args.command == "skill":
             if args.skill_command in ("install", "update"):
@@ -370,6 +388,11 @@ def main(
             )
             print(f"Answered {completed} item(s) at {args.output}")
             return 0
+        if args.output is None:
+            reserved_default_output = _reserve_default_dataset_output()
+            dataset_output = reserved_default_output
+        else:
+            dataset_output = Path(args.output)
         dataset = create_test_dataset(
             knowledge=[Path(value) for value in args.knowledge],
             prompt=args.prompt,
@@ -379,30 +402,32 @@ def main(
             num_pairs=args.num_pairs,
             random_select=args.random_select,
             model=args.model,
-            output=args.output,
-            format=args.format,
+            output=dataset_output,
             provider=provider,
             env_file=args.env_file,
             max_input_tokens=args.max_input_tokens,
             max_output_tokens=args.max_output_tokens,
             auto_window_ratio=args.auto_window_ratio,
             strict=args.strict,
-            force=args.force,
+            force=reserved_default_output is not None,
             cache=args.cache,
             cache_dir=args.cache_dir,
             refresh_cache=args.refresh_cache,
             verbose=args.verbose,
         )
     except SkillError as error:
+        _discard_empty_reservation(reserved_default_output)
         print(f"lladar: {error}", file=sys.stderr)
         return 2
     except ProviderError:
+        _discard_empty_reservation(reserved_default_output)
         print("lladar: provider generation failed", file=sys.stderr)
         return 2
     except (LladarError, FileExistsError, OSError, ValueError) as error:
+        _discard_empty_reservation(reserved_default_output)
         print(f"lladar: {error}", file=sys.stderr)
         return 2
-    print(f"Generated {len(dataset)} dataset item(s) at {args.output}")
+    print(f"Generated {len(dataset)} dataset item(s) at {dataset_output}")
     return 0
 
 

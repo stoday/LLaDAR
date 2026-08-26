@@ -115,6 +115,12 @@ def evaluate(
 ) -> dict[str, Any]:
     """Evaluate answers by dataset id and write a JSON report and item JSONL."""
     dataset_by_id, dataset_errors = _index(_read_jsonl(Path(dataset)), "dataset")
+    skipped = sum(item.get("status") == "skipped" for item in dataset_by_id.values())
+    dataset_by_id = {
+        record_id: item
+        for record_id, item in dataset_by_id.items()
+        if item.get("status") != "skipped"
+    }
     answers_by_id, answer_errors = _index(_read_jsonl(Path(answers)), "answers")
     alignment_errors = dataset_errors + answer_errors
     alignment_errors += [
@@ -167,7 +173,7 @@ def evaluate(
     report = {
         "schema_version": "1.0",
         "evaluation": {"model": model, "rubric": prompt, "dataset": str(dataset), "answers": str(answers)},
-        "summary": {"total": total, **counts, "pass_rate": counts["pass"] / total if total else 0.0,
+        "summary": {"total": total, "skipped": skipped, **counts, "pass_rate": counts["pass"] / total if total else 0.0,
                     "alignment_errors": len(alignment_errors)},
         "by_label": counts,
         "recommendations": _recommendations(counts),

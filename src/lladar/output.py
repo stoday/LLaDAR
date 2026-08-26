@@ -9,6 +9,8 @@ def write_dataset(
     dataset: list[dict[str, Any]],
     output: str | Path,
     format: str,
+    *,
+    overwrite: bool = False,
 ) -> None:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -20,4 +22,5 @@ def write_dataset(
         content = json.dumps(dataset, ensure_ascii=False, indent=2) + "\n"
     else:
         raise ValueError("format must be 'jsonl' or 'json'")
-    path.write_text(content, encoding="utf-8")
+    with path.open("w" if overwrite else "x", encoding="utf-8") as handle:
+        handle.write(content)

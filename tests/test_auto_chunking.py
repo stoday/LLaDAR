@@ -8,7 +8,7 @@ import pytest
 
 import lladar
 from lladar.cli import main
-from lladar.chunking import semantic_window_char_limit
+from lladar.chunking import SourceUnit, build_semantic_chunking_prompt, semantic_window_char_limit
 
 
 PAIR = {
@@ -28,6 +28,14 @@ class AutoProvider:
 
     def generate_structured(self, prompt, *, model, temperature):
         self.prompts.append(prompt)
+        if "Judge this candidate contrastive pair" in prompt:
+            return {"valid": True, "reason": "valid", "checks": {
+                "standalone_question": True, "same_task": True,
+                "source_supported_answer": True,
+                "answer_determining_missing_fact": True,
+                "multiple_supported_answers": True,
+                "no_unresolved_references": True,
+            }}
         if "semantic knowledge segmenter" in prompt:
             if self.invalid_segments:
                 return {
@@ -41,12 +49,10 @@ class AutoProvider:
             return {
                 "segments": [
                     {
-                        "unit_ids": ["u0"],
-                        "knowledge_facts": ["Plan A has a 10-user limit."],
-                    },
-                    {
-                        "unit_ids": ["u1"],
-                        "knowledge_facts": ["Plan B has a 20-user limit."],
+                        "unit_ids": ["u0", "u1"],
+                        "knowledge_facts": [
+                            "Plan A has a 10-user limit and Plan B has a 20-user limit; the plan selects the limit."
+                        ],
                     },
                 ]
             }
@@ -57,28 +63,59 @@ def test_auto_chunking_generates_from_exact_semantic_segments(tmp_path: Path):
     knowledge = tmp_path / "plans.txt"
     source = "Plan A has a limit of 10 users. Plan B has a limit of 20 users."
     knowledge.write_text(source, encoding="utf-8")
+    provider = AutoProvider()
 
     dataset = lladar.create_test_dataset(
         knowledge=knowledge,
         chunk_size="auto",
         overlap=0.9,
-        provider=AutoProvider(),
+        provider=provider,
         strict=True,
     )
 
-    assert [item["source_text"] for item in dataset] == [
-        "Plan A has a limit of 10 users.",
-        "Plan B has a limit of 20 users.",
-    ]
+    assert [item["source_text"] for item in dataset] == [source]
+    segmentation_prompt = next(
+        prompt for prompt in provider.prompts if "semantic knowledge segmenter" in prompt
+    )
+    assert "usable\ndecision set" in segmentation_prompt
+    assert "endpoints of one numeric range" in segmentation_prompt
     assert dataset[0]["metadata"] == {
         "strategy": "ambiguity",
-        "model": "gemini:gemini-2.5-flash",
+        "model": "gemini:gemini-3.7-flash",
         "temperature": 0.0,
         "chunk_method": "semantic_auto",
         "source_start": 0,
-        "source_end": 31,
-        "knowledge_facts": ["Plan A has a 10-user limit."],
+        "source_end": len(source),
+        "knowledge_facts": [
+            "Plan A has a 10-user limit and Plan B has a 20-user limit; the plan selects the limit."
+        ],
     }
+
+
+def test_semantic_prompt_keeps_category_mappings_in_one_scope():
+    prompt = build_semantic_chunking_prompt(
+        [
+            SourceUnit("u0", 0, 22, "Breakfast: 400-500 calories."),
+            SourceUnit("u1", 23, 42, "Lunch: 500-700 calories."),
+        ]
+    )
+
+    assert "category-to-value mapping" in prompt
+    assert "same scope and answer type" in prompt
+    assert "main-meal budgets and a\nseparate snack rule" in prompt
+
+
+def test_semantic_prompt_includes_scenario_to_recommendation_sets():
+    prompt = build_semantic_chunking_prompt(
+        [
+            SourceUnit("u0", 0, 23, "When dining out, choose visible ingredients."),
+            SourceUnit("u1", 24, 56, "When eating at home, choose prepared safe foods."),
+        ]
+    )
+
+    assert "scenario-to-recommendation mapping" in prompt
+    assert "dining out versus eating at home" in prompt.replace("\n", " ")
+    assert "every non-overlapping eligible decision set" in prompt
 
 
 def test_auto_chunking_is_strict_or_falls_back_to_fixed_chunks(tmp_path: Path):
@@ -125,7 +162,7 @@ def test_cli_accepts_auto_chunk_size(tmp_path: Path):
     )
 
     assert exit_code == 0
-    assert len(output.read_text(encoding="utf-8").splitlines()) == 2
+    assert len(output.read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_semantic_segmentation_cache_is_independent_from_pair_cache(tmp_path: Path):
@@ -147,6 +184,14 @@ def test_semantic_segmentation_cache_is_independent_from_pair_cache(tmp_path: Pa
 
     class PairOnlyProvider:
         def generate_structured(self, prompt, *, model, temperature):
+            if "Judge this candidate contrastive pair" in prompt:
+                return {"valid": True, "reason": "valid", "checks": {
+                    "standalone_question": True, "same_task": True,
+                    "source_supported_answer": True,
+                    "answer_determining_missing_fact": True,
+                    "multiple_supported_answers": True,
+                    "no_unresolved_references": True,
+                }}
             assert "semantic knowledge segmenter" not in prompt
             return PAIR
 
@@ -160,12 +205,12 @@ def test_semantic_segmentation_cache_is_independent_from_pair_cache(tmp_path: Pa
         strict=True,
     )
 
-    assert len(dataset) == 4
+    assert len(dataset) == 2
     assert list((cache_dir / "semantic_segments").glob("*.json"))
 
 
 def test_auto_window_uses_eighty_percent_of_model_output_limit():
-    assert semantic_window_char_limit("gemini:gemini-2.5-flash") == 52_428
+    assert semantic_window_char_limit("gemini:gemini-3.7-flash") == 52_428
 
 
 def test_auto_chunking_deduplicates_segments_from_overlapping_safe_windows(
@@ -181,6 +226,14 @@ def test_auto_chunking_deduplicates_segments_from_overlapping_safe_windows(
 
     class OverlapProvider:
         def generate_structured(self, prompt, *, model, temperature):
+            if "Judge this candidate contrastive pair" in prompt:
+                return {"valid": True, "reason": "valid", "checks": {
+                    "standalone_question": True, "same_task": True,
+                    "source_supported_answer": True,
+                    "answer_determining_missing_fact": True,
+                    "multiple_supported_answers": True,
+                    "no_unresolved_references": True,
+                }}
             if "semantic knowledge segmenter" in prompt:
                 match = re.search(
                     r'<unit id="([^"]+)">' + re.escape(fact) + r"</unit>",
