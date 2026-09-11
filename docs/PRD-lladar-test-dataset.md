@@ -1,5 +1,9 @@
 # LLaDAR PRD：偏見偵測測試資料集生成
 
+> Historical schema-v1 specification. It is superseded by
+> `PRD-lladar-assumption-outcome-evaluation.md` and is retained only to explain
+> the original pair-based implementation.
+
 ## Problem Statement
 
 大語言模型 agent 在知識庫資訊不完整時，可能為了繼續回答而自行補上未被證實的資訊。這種 unsupported assumption 可能與使用者原本的預期不同，造成具有偏見的回答。

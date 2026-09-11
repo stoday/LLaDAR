@@ -1,18 +1,28 @@
-# Answer adapter contract
+# Schema-v2 observed-answer contract
 
-The adapter must produce UTF-8 JSONL with one object per dataset item:
+The answer artifact is UTF-8 JSONL with one record per attempted original or
+variant session.
+
+Successful call:
 
 ```json
-{"id":"dataset-item-id","answer":"the agent's actual answer"}
+{"schema_version":2,"id":"group-1-omission","group_id":"group-1","kind":"information_omission","question":"Which plan applies?","status":"ok","answer":"The Agent's exact response"}
+```
+
+Failed call:
+
+```json
+{"schema_version":2,"id":"group-1-omission","group_id":"group-1","kind":"information_omission","question":"Which plan applies?","status":"execution_error","error":"TimeoutError: timed out"}
 ```
 
 Rules:
 
-- Copy `id` exactly from the source dataset; do not use line numbers as IDs.
-- Write one answer record per attempted item.
-- Preserve the agent's answer text without adding a model-generated summary.
-- Do not write credentials, cookies, session state, hidden prompts, or raw provider logs.
-- If an item fails, write `status: "error"` and an `error` field instead of inventing an answer.
-
-The evaluator also accepts the richer records produced by the repository's
-`qa_agent.py`; it reads the same top-level `id` and `answer` fields.
+- The original uses its group ID and `kind: "original"`.
+- A variant uses its variant ID and kind.
+- Copy `id`, `group_id`, `kind`, and `question` exactly from the dataset.
+- Emit one record per attempted ready case; skipped groups emit none.
+- Preserve answer text without judging, summarizing, or repairing it.
+- An empty successful response remains `status: "ok"` with `answer: ""`; the
+  evaluator classifies it as `completed_no_answer`.
+- Keep credentials, cookies, session state, hidden prompts, and raw provider
+  logs out of both `answer` and `error`.

@@ -7,11 +7,156 @@ from datetime import datetime
 from pathlib import Path
 
 from .api import DEFAULT_DATASET_MODEL, DEFAULT_MODEL, create_test_dataset
-from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
+from .configuration import load_test_dataset_config, validate_test_dataset_input_paths
+from .evaluation import DEFAULT_EVALUATION_MODEL, DEFAULT_EVALUATION_PROMPT, evaluate
 from .exceptions import LladarError, ProviderError
 from .providers import LLMProvider
+from .progress import ProgressReporter
 from .runner import AkashaAdapterController, AdapterController, run_agent
 from .skill import SkillError, install_skill, list_skills, uninstall_skill
+
+
+_CONFIG_TEMPLATE = """schema_version = 2
+
+[test_dataset]
+# Replace this example with one or more .txt/.md files or directories.
+knowledge = ["./knowledge"]
+count = 0
+
+# Optional domain and question-style guidance. Set at most one.
+# prompt = "Prefer concise questions for restaurant recommendations."
+# prompt_file = "./dataset-prompt.md"
+
+# Optional selection and generation settings.
+# chunk_size = "auto"
+# overlap = 0.1
+# seed = 1234
+# policies = ["builtin:general-social-context"]
+# model = "gemini:gemini-3.7-flash"
+
+# Optional model-profile overrides.
+# max_input_tokens = 1048576
+# max_output_tokens = 65536
+# auto_window_ratio = 0.8
+
+# Optional paths and runtime behavior.
+# output = "./test-dataset.jsonl"
+# env_file = ".env"
+# verbose = true
+# trace = false
+# trace_console = false
+# trace_root = ".lladar/runs"
+# strict = false
+# cache = false
+# cache_dir = ".lladar/cache"
+# refresh_cache = false
+"""
+
+_DATASET_OPTION_FLAGS = {
+    "knowledge": ("--knowledge",),
+    "prompt": ("--prompt",),
+    "prompt_file": ("--prompt-file",),
+    "chunk_size": ("--chunk-size",),
+    "overlap": ("--overlap",),
+    "count": ("--count",),
+    "seed": ("--seed",),
+    "policies": ("--policy",),
+    "model": ("--model",),
+    "max_input_tokens": ("--max-input-tokens",),
+    "max_output_tokens": ("--max-output-tokens",),
+    "auto_window_ratio": ("--auto-window-ratio",),
+    "verbose": ("--verbose", "--no-verbose"),
+    "trace": ("--trace", "--no-trace"),
+    "trace_console": ("--trace-console", "--no-trace-console"),
+    "trace_root": ("--trace-root",),
+    "output": ("--output",),
+    "env_file": ("--env-file",),
+    "strict": ("--strict", "--no-strict"),
+    "cache": ("--cache", "--no-cache"),
+    "cache_dir": ("--cache-dir",),
+    "refresh_cache": ("--refresh-cache", "--no-refresh-cache"),
+}
+
+
+def _option_is_explicit(argv: Sequence[str], flags: tuple[str, ...]) -> bool:
+    return any(
+        token == flag or token.startswith(f"{flag}=")
+        for token in argv
+        for flag in flags
+    )
+
+
+def _merge_dataset_config(
+    args: argparse.Namespace,
+    settings: dict[str, object],
+    argv: Sequence[str],
+) -> None:
+    prompt_is_explicit = _option_is_explicit(
+        argv, _DATASET_OPTION_FLAGS["prompt"] + _DATASET_OPTION_FLAGS["prompt_file"]
+    )
+    for key, value in settings.items():
+        if key in ("prompt", "prompt_file") and prompt_is_explicit:
+            continue
+        flags = _DATASET_OPTION_FLAGS.get(key)
+        if flags is not None and not _option_is_explicit(argv, flags):
+            setattr(args, key, value)
+
+
+def _comparison_value(key: str, value: object) -> object:
+    if key == "knowledge":
+        return tuple(Path(item).resolve() for item in value)  # type: ignore[arg-type]
+    if key in ("prompt_file", "output", "env_file", "cache_dir", "trace_root"):
+        return Path(value).resolve()  # type: ignore[arg-type]
+    if key == "policies":
+        return tuple(
+            item if str(item).startswith("builtin:") else Path(item).resolve()
+            for item in value  # type: ignore[union-attr]
+        )
+    return value
+
+
+def _overridden_config_keys(
+    args: argparse.Namespace,
+    settings: dict[str, object],
+    argv: Sequence[str],
+) -> list[str]:
+    overridden: list[str] = []
+    prompt_flags = _DATASET_OPTION_FLAGS["prompt"] + _DATASET_OPTION_FLAGS["prompt_file"]
+    if _option_is_explicit(argv, prompt_flags) and (
+        "prompt" in settings or "prompt_file" in settings
+    ):
+        cli_key = "prompt_file" if _option_is_explicit(
+            argv, _DATASET_OPTION_FLAGS["prompt_file"]
+        ) else "prompt"
+        config_key = "prompt_file" if "prompt_file" in settings else "prompt"
+        if cli_key != config_key or _comparison_value(
+            cli_key, getattr(args, cli_key)
+        ) != _comparison_value(config_key, settings[config_key]):
+            overridden.append("prompt selector")
+
+    for key, config_value in settings.items():
+        if key in ("prompt", "prompt_file"):
+            continue
+        flags = _DATASET_OPTION_FLAGS.get(key)
+        if flags is None or not _option_is_explicit(argv, flags):
+            continue
+        if _comparison_value(key, getattr(args, key)) != _comparison_value(
+            key, config_value
+        ):
+            overridden.append(key)
+    return overridden
+
+
+def _warn_about_overrides(config_path: str | Path, keys: Sequence[str]) -> None:
+    if not keys:
+        return
+    reporter = ProgressReporter(enabled=True)
+    reporter.emit(
+        "WARN",
+        f"command-line options override {Path(config_path).name} settings:",
+    )
+    for key in keys:
+        print(f"       {key}", file=sys.stderr, flush=True)
 
 
 def _parse_chunk_size(value: str) -> int | str:
@@ -52,6 +197,16 @@ def _window_ratio(value: str) -> float:
     return parsed
 
 
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from error
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return parsed
+
+
 def _reserve_default_dataset_output(
     *,
     directory: Path | None = None,
@@ -89,7 +244,7 @@ class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lladar",
-        description="Generate datasets for detecting unsupported assumptions in LLM agents.",
+        description="Generate controlled datasets for inspecting implicit assumptions in LLM agents.",
         formatter_class=_HelpFormatter,
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -104,15 +259,36 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="ARTIFACT",
     )
+    config = create_commands.add_parser(
+        "config",
+        help="Generate an editable test-dataset configuration template.",
+        description="Generate an editable test-dataset configuration template.",
+        formatter_class=_HelpFormatter,
+    )
+    config.add_argument(
+        "--output",
+        default="config.toml",
+        metavar="PATH",
+        help=(
+            "Template destination. Existing files are not overwritten. "
+            "Default: config.toml."
+        ),
+    )
+    config.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing configuration file.",
+    )
     dataset = create_commands.add_parser(
         "test-dataset",
-        help="Generate a contrastive unsupported-assumption test dataset.",
+        help="Generate controlled source-grounded question groups.",
         description=(
-            "Generate complete and underspecified question pairs from .txt and .md "
-            "knowledge sources."
+            "Generate schema-v2 original questions, information omissions, and "
+            "policy-driven peer-cue variants from .txt and .md knowledge sources."
         ),
         epilog="""Examples:
   lladar create test-dataset --knowledge ./knowledge
+  lladar create test-dataset --config config.toml
   lladar create test-dataset --knowledge guide.md --chunk-size auto --strict
   lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
   lladar create test-dataset --knowledge guide.md --chunk-size auto --max-output-tokens 32768""",
@@ -121,27 +297,27 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument(
         "--knowledge",
         nargs="+",
-        required=True,
         metavar="PATH",
         help=(
             "Files or directories containing knowledge documents. Directories are "
-            "searched recursively for .txt and .md files; multiple paths are allowed."
+            "searched recursively for .txt and .md files; multiple paths are allowed. "
+            "Required from either --knowledge or --config."
         ),
     )
-    strategy = dataset.add_mutually_exclusive_group()
-    strategy.add_argument(
+    guidance = dataset.add_mutually_exclusive_group()
+    guidance.add_argument(
         "--prompt",
-        metavar="STRATEGY_OR_TEXT",
+        metavar="GUIDANCE",
         help=(
-            "Built-in strategy name or custom generation instructions. "
-            "Defaults to the built-in 'ambiguity' strategy."
+            "Optional inline domain context or question-style guidance. Core schema "
+            "and validation rules cannot be overridden."
         ),
     )
-    strategy.add_argument(
+    guidance.add_argument(
         "--prompt-file",
         metavar="PATH",
         help=(
-            "UTF-8 file containing custom generation instructions. "
+            "UTF-8 file containing domain context or question-style guidance. "
             "Cannot be combined with --prompt."
         ),
     )
@@ -166,19 +342,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dataset.add_argument(
-        "--num-pairs",
-        type=int,
-        default=1,
-        metavar="N",
-        help="Number of question pairs generated per chunk. Default: 1.",
+        "--config",
+        metavar="PATH",
+        help=(
+            "TOML file containing test-dataset settings. Command-line options "
+            "override config values."
+        ),
     )
     dataset.add_argument(
-        "--random-select",
-        type=_positive_int,
+        "--count",
+        type=_non_negative_int,
+        default=0,
         metavar="N",
         help=(
-            "Randomly process candidate pairs until N ready pairs are collected. "
-            "Skipped pairs do not consume the quota."
+            "Maximum number of ready question groups. Use 0 to process every "
+            "candidate chunk without a limit. Skipped and duplicate candidates "
+            "do not consume a positive quota. Default: 0."
+        ),
+    )
+    dataset.add_argument(
+        "--seed",
+        type=int,
+        metavar="N",
+        help="Optional seed for reproducible candidate ordering.",
+    )
+    dataset.add_argument(
+        "--policy",
+        action="append",
+        dest="policies",
+        metavar="POLICY",
+        help=(
+            "Exact generation-policy selection. Repeat for multiple policies. Use "
+            "builtin:general-social-context or a local TOML path."
         ),
     )
     dataset.add_argument(
@@ -235,6 +430,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     dataset.add_argument(
+        "--trace",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Save complete model prompts, raw responses, parsed JSON, and validation "
+            "results below --trace-root. Contains sensitive content. Default: disabled."
+        ),
+    )
+    dataset.add_argument(
+        "--trace-console",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Also print complete traced prompts and raw responses to stderr. Requires --trace."
+        ),
+    )
+    dataset.add_argument(
+        "--trace-root",
+        default=".lladar/runs",
+        metavar="PATH",
+        help="Parent directory for collision-free model trace runs. Default: .lladar/runs.",
+    )
+    dataset.add_argument(
         "--env-file",
         default=".env",
         metavar="PATH",
@@ -242,17 +460,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     dataset.add_argument(
         "--strict",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
-            "Fail the run when chunking or generation remains invalid after retries, "
-            "instead of skipping or falling back."
+            "Fail when semantic chunking remains invalid after retries instead of "
+            "falling back to fixed chunks."
         ),
     )
     dataset.add_argument(
         "--cache",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
-            "Reuse semantic chunks and generated pairs from the cache, and save new "
+            "Reuse semantic chunks and generated groups from the cache, and save new "
             "successful results."
         ),
     )
@@ -260,11 +480,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--cache-dir",
         default=".lladar/cache",
         metavar="PATH",
-        help="Directory for semantic and pair cache files. Default: .lladar/cache.",
+        help="Directory for semantic-segment and generated-group cache files. Default: .lladar/cache.",
     )
     dataset.add_argument(
         "--refresh-cache",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
             "Regenerate entries even when cache files exist; refreshed results are saved "
             "when --cache is enabled."
@@ -272,17 +493,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluation = commands.add_parser(
         "eval",
-        help="Evaluate agent answers and write a report.",
-        description="Compare answer JSONL records with a LLaDAR test dataset by id.",
+        help="Evaluate schema-v2 agent answers with the LLaDAR BFS protocol.",
+        description="Join schema-v2 observed answers by stable case ID and write a differential report.",
         formatter_class=_HelpFormatter,
     )
-    evaluation.add_argument("dataset", metavar="DATASET", help="Original test dataset JSONL.")
-    evaluation.add_argument("answers", metavar="ANSWERS", help="Agent answer JSONL.")
-    evaluation.add_argument("--prompt", required=True, help="Evaluation rubric sent to the judge.")
+    evaluation.add_argument("dataset", metavar="DATASET", help="Schema-v2 test dataset JSONL.")
+    evaluation.add_argument("answers", metavar="ANSWERS", help="Schema-v2 observed-answer JSONL.")
+    evaluation.add_argument(
+        "--prompt",
+        default=DEFAULT_EVALUATION_PROMPT,
+        help="Optional additional judge guidance; core protocol rules cannot be overridden.",
+    )
     evaluation.add_argument("--output", default="evaluation-report.json", metavar="PATH")
     evaluation.add_argument("--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL")
     evaluation.add_argument("--env-file", default=".env", metavar="PATH")
     evaluation.add_argument("--strict", action="store_true", help="Fail on alignment or judge errors.")
+    evaluation.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow overwriting existing report artifacts.",
+    )
     evaluation.add_argument(
         "--include-raw-answers",
         action=argparse.BooleanOptionalAction,
@@ -291,16 +521,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner = commands.add_parser(
         "run-agent",
-        help="Run a project agent against a LLaDAR test dataset.",
+        help="Run a project agent against a schema-v2 LLaDAR test dataset.",
         description=(
-            "Copy a project to a managed .lladar/runs workspace, adapt the copy with Akasha, "
-            "and produce id-keyed agent answers."
+            "Copy a project to a managed .lladar/runs workspace, adapt the copy with Akasha "
+            "only when its entrypoint lacks LLADAR_QUESTION, and produce id-keyed answers."
         ),
         formatter_class=_HelpFormatter,
     )
-    runner.add_argument("dataset", metavar="DATASET", help="LLaDAR test dataset JSONL.")
+    runner.add_argument("dataset", metavar="DATASET", help="Schema-v2 LLaDAR test dataset JSONL.")
     runner.add_argument("--project", required=True, metavar="PATH", help="Project directory to copy.")
-    runner.add_argument("--entrypoint", required=True, metavar="PATH", help="Python entrypoint inside the project.")
+    runner.add_argument(
+        "--entrypoint",
+        required=True,
+        metavar="PATH",
+        help="Project-relative Python entrypoint or a path inside the project.",
+    )
     runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH")
     runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL")
     runner.add_argument("--env-file", default=".env", metavar="PATH")
@@ -338,10 +573,22 @@ def main(
     adapter_controller: AdapterController | None = None,
     runs_root: str | Path | None = None,
 ) -> int:
-    args = build_parser().parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    args = build_parser().parse_args(raw_argv)
     reserved_default_output: Path | None = None
     dataset_output: Path | None = None
     try:
+        if args.command == "create" and args.create_command == "config":
+            config_path = Path(args.output)
+            try:
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                mode = "w" if args.force else "x"
+                with config_path.open(mode, encoding="utf-8") as destination:
+                    destination.write(_CONFIG_TEMPLATE)
+            except FileExistsError as error:
+                raise LladarError(f"config already exists: {config_path}") from error
+            print(f"Created config template at {config_path}")
+            return 0
         if args.command == "skill":
             if args.skill_command in ("install", "update"):
                 destinations = install_skill(args.target, force=args.force)
@@ -370,8 +617,12 @@ def main(
                 provider=provider,
                 strict=args.strict,
                 include_raw_answers=args.include_raw_answers,
+                force=args.force,
             )
-            print(f"Evaluated {report['summary']['total']} item(s) at {args.output}")
+            print(
+                f"Evaluated {report['summary']['scheduled_comparisons']} comparison(s) "
+                f"at {args.output}"
+            )
             return 0
         if args.command == "run-agent":
             completed = run_agent(
@@ -386,8 +637,25 @@ def main(
                 verbose=args.verbose,
                 runs_root=runs_root,
             )
-            print(f"Answered {completed} item(s) at {args.output}")
+            print(f"Answered {completed} session(s) at {args.output}")
             return 0
+        config_settings: dict[str, object] = {}
+        if args.config is not None:
+            config_settings = load_test_dataset_config(args.config)
+            _merge_dataset_config(args, config_settings, raw_argv)
+            _warn_about_overrides(
+                args.config,
+                _overridden_config_keys(args, config_settings, raw_argv),
+            )
+            ProgressReporter(enabled=args.verbose).configuration(
+                {"config": Path(args.config).resolve()}
+            )
+        if args.trace_console and not args.trace:
+            raise LladarError("--trace-console requires --trace")
+        if args.knowledge is None:
+            raise LladarError("test-dataset requires knowledge from --knowledge or --config")
+        if args.config is not None:
+            validate_test_dataset_input_paths(args.knowledge, args.prompt_file)
         if args.output is None:
             reserved_default_output = _reserve_default_dataset_output()
             dataset_output = reserved_default_output
@@ -399,8 +667,9 @@ def main(
             prompt_file=args.prompt_file,
             chunk_size=args.chunk_size,
             overlap=args.overlap,
-            num_pairs=args.num_pairs,
-            random_select=args.random_select,
+            count=args.count,
+            seed=args.seed,
+            policies=args.policies,
             model=args.model,
             output=dataset_output,
             provider=provider,
@@ -414,6 +683,9 @@ def main(
             cache_dir=args.cache_dir,
             refresh_cache=args.refresh_cache,
             verbose=args.verbose,
+            trace=args.trace,
+            trace_console=args.trace_console,
+            trace_root=args.trace_root,
         )
     except SkillError as error:
         _discard_empty_reservation(reserved_default_output)

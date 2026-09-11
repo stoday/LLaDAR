@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 from typing import Any
 
 from ..exceptions import ProviderError
 from ..model_profiles import resolve_model_profile
+from .base import parse_json_object
 
 
 class AkashaProvider:
@@ -29,6 +29,17 @@ class AkashaProvider:
         model: str,
         temperature: float,
     ) -> dict[str, Any]:
+        return parse_json_object(
+            self.generate_text(prompt, model=model, temperature=temperature)
+        )
+
+    def generate_text(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        temperature: float,
+    ) -> str:
         factory = self._agent_factory
         if factory is None:
             import akasha
@@ -52,28 +63,10 @@ class AkashaProvider:
         )
         try:
             response = agent(prompt)
-            return self._parse_json(response)
+            if not isinstance(response, str):
+                raise ProviderError("Akasha response must be text")
+            return response
         except ProviderError:
             raise
         except Exception as error:
             raise ProviderError("Akasha generation failed") from error
-
-    @staticmethod
-    def _parse_json(response: Any) -> dict[str, Any]:
-        if not isinstance(response, str):
-            raise ProviderError("Akasha response must be text")
-        text = response.strip()
-        if text.startswith("```"):
-            lines = text.splitlines()
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines).strip()
-        try:
-            value = json.loads(text)
-        except json.JSONDecodeError as error:
-            raise ProviderError("Akasha response was not valid JSON") from error
-        if not isinstance(value, dict):
-            raise ProviderError("Akasha response JSON must be an object")
-        return value

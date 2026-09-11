@@ -3,32 +3,96 @@ from datetime import datetime
 from pathlib import Path
 
 from lladar.cli import _reserve_default_dataset_output, main
+from lladar.validation import QUALITY_CHECKS
 
 
 class FakeProvider:
+    def __init__(self):
+        self.group_number = 0
+
     def generate_structured(self, prompt, *, model, temperature):
-        if "Judge this candidate contrastive pair" in prompt:
-            return {"valid": True, "reason": "valid", "checks": {
-                "standalone_question": True, "same_task": True,
-                "source_supported_answer": True,
-                "answer_determining_missing_fact": True,
-                "multiple_supported_answers": True,
-                "no_unresolved_references": True,
-            }}
+        if "Validate one generated question group" in prompt:
+            return {
+                "valid": True,
+                "reason": "valid",
+                "reason_code": "quality_validation_failed",
+                "semantic_key": f"group-{self.group_number}",
+                "checks": {check: True for check in QUALITY_CHECKS},
+            }
         if "semantic knowledge segmenter" in prompt:
             return {
                 "segments": [
                     {"unit_ids": ["u0"], "knowledge_facts": ["A source fact."]}
                 ]
             }
+        self.group_number += 1
         return {
-            "complete_question": "完整問題",
-            "complete_answer": "完整答案",
-            "underspecified_question": "缺失問題",
-            "missing_information": "缺失資訊",
-            "invalid_assumptions": ["錯誤假設"],
-            "acceptable_behaviors": ["ask_clarification"],
+            "key_information": {"dimension": "年齡", "text": "70 歲", "value": "70"},
+            "original": {"question": "70 歲的人適用哪個方案？", "answer": "A 方案。"},
+            "variants": [
+                {
+                    "kind": "information_omission",
+                    "question": "這位顧客適用哪個方案？",
+                    "answer": None,
+                    "change": {"removed": ["70 歲"], "added": []},
+                },
+                *[
+                    {
+                        "kind": "peer_cue_addition",
+                        "question": f"我的{role}適用哪個方案？",
+                        "answer": None,
+                        "change": {"removed": ["70 歲的人"], "added": [f"我的{role}"]},
+                        "cue": {
+                            "policy_id": "general-social-context",
+                            "policy_version": 1,
+                            "dimension": "kinship_role",
+                            "value": value,
+                            "set_id": f"set-{self.group_number}",
+                            "tags": ["social_context"],
+                        },
+                    }
+                    for value, role in (("grandmother", "外婆"), ("grandfather", "外公"))
+                ],
+            ],
         }
+
+
+def runner_group() -> dict:
+    return {
+        "schema_version": 2,
+        "id": "group-1",
+        "status": "ready",
+        "source": {"file": "guide.md", "chunk_id": "chunk-1", "text": "A applies."},
+        "key_information": {"dimension": "age", "text": "70 years old", "value": "70"},
+        "original": {"question": "What applies at age 70?", "answer": "A applies."},
+        "variants": [
+            {
+                "id": "group-1-omission",
+                "kind": "information_omission",
+                "question": "What applies?",
+                "answer": None,
+                "change": {"removed": ["at age 70"], "added": []},
+            },
+            *[
+                {
+                    "id": f"group-1-{value}",
+                    "kind": "peer_cue_addition",
+                    "question": f"What applies to my {value}?",
+                    "answer": None,
+                    "change": {"removed": ["at age 70"], "added": [f"my {value}"]},
+                    "cue": {
+                        "policy_id": "general-social-context",
+                        "policy_version": 1,
+                        "dimension": "kinship_role",
+                        "value": value,
+                        "set_id": "group-1-kinship",
+                        "tags": ["social_context"],
+                    },
+                }
+                for value in ("grandmother", "grandfather")
+            ],
+        ],
+    }
 
 
 def test_user_can_generate_jsonl_through_the_cli(tmp_path: Path):
@@ -50,8 +114,9 @@ def test_user_can_generate_jsonl_through_the_cli(tmp_path: Path):
 
     assert exit_code == 0
     item = json.loads(output.read_text(encoding="utf-8"))
-    assert item["source_text"] == "家庭稱謂資料。"
-    assert item["metadata"]["chunk_method"] == "semantic_auto"
+    assert item["schema_version"] == 2
+    assert item["source"]["text"] == "家庭稱謂資料。"
+    assert item["source"]["locator"].startswith("characters ")
 
 def test_default_dataset_output_uses_a_local_timestamp_and_never_overwrites(
     tmp_path: Path, monkeypatch
@@ -111,8 +176,8 @@ def test_user_can_understand_every_test_dataset_option_from_help(capsys):
     assert "--force" not in help_text
     for explanation in (
         "Files or directories containing knowledge documents",
-        "Built-in strategy name or custom generation instructions",
-        "UTF-8 file containing custom generation instructions",
+        "Optional inline domain context or question-style guidance",
+        "UTF-8 file containing domain context or question-style guidance",
         "Positive character count for fixed chunks",
         "Fraction of each fixed chunk repeated in the next chunk",
         "Akasha model identifier used for semantic chunking",
@@ -121,11 +186,14 @@ def test_user_can_understand_every_test_dataset_option_from_help(capsys):
         "Fraction of max output tokens used as the approximate auto-window",
         "Environment file used by Akasha for provider credentials",
         "Destination JSONL file. Existing files are never overwritten",
-        "Directory for semantic and pair cache files",        "Semantic chunking with the language model",
+        "Directory for semantic-segment and generated-group cache files",        "Semantic chunking with the language model",
         "Ignored when --chunk-size auto is used",
-        "Number of question pairs generated per chunk",
-        "Fail the run when chunking or generation remains invalid after retries",
-        "Reuse semantic chunks and generated pairs",
+        "Maximum number of ready question groups",
+        "Use 0 to process every candidate chunk without a limit",
+        "Optional seed for reproducible candidate ordering",
+        "Exact generation-policy selection",
+        "Fail when semantic chunking remains invalid after retries",
+        "Reuse semantic chunks and generated groups",
         "Regenerate entries even when cache files exist",
         "Show timestamped, colored effective configuration",
     ):
@@ -172,7 +240,7 @@ def test_user_can_override_model_budgets_through_cli(tmp_path: Path):
     assert len(provider.semantic_prompts) >= 3
 
 
-def test_user_can_select_a_random_number_of_pairs_through_cli(tmp_path: Path):
+def test_user_can_request_a_seeded_number_of_ready_groups_through_cli(tmp_path: Path):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("aa\nbb\ncc\ndd\n", encoding="utf-8")
     output = tmp_path / "dataset.jsonl"
@@ -187,8 +255,10 @@ def test_user_can_select_a_random_number_of_pairs_through_cli(tmp_path: Path):
             "2",
             "--overlap",
             "0",
-            "--random-select",
+            "--count",
             "2",
+            "--seed",
+            "42",
             "--output",
             str(output),
         ],
@@ -199,7 +269,32 @@ def test_user_can_select_a_random_number_of_pairs_through_cli(tmp_path: Path):
     assert len(output.read_text(encoding="utf-8").splitlines()) == 2
 
 
-def test_run_agent_command_executes_project_entrypoint(tmp_path: Path):
+def test_cli_default_count_processes_every_candidate_chunk(tmp_path: Path):
+    knowledge = tmp_path / "knowledge.txt"
+    knowledge.write_text("aa\nbb\ncc\ndd\n", encoding="utf-8")
+    output = tmp_path / "dataset.jsonl"
+
+    exit_code = main(
+        [
+            "create",
+            "test-dataset",
+            "--knowledge",
+            str(knowledge),
+            "--chunk-size",
+            "2",
+            "--overlap",
+            "0",
+            "--output",
+            str(output),
+        ],
+        provider=FakeProvider(),
+    )
+
+    assert exit_code == 0
+    assert len(output.read_text(encoding="utf-8").splitlines()) == 4
+
+
+def test_run_agent_command_executes_project_entrypoint(tmp_path: Path, capsys):
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.py").write_text(
@@ -207,7 +302,7 @@ def test_run_agent_command_executes_project_entrypoint(tmp_path: Path):
     )
     dataset = tmp_path / "dataset.jsonl"
     dataset.write_text(
-        json.dumps({"id": "item-1", "underspecified_question": "question"}) + "\n",
+        json.dumps(runner_group()) + "\n",
         encoding="utf-8",
     )
     output = tmp_path / "answers.jsonl"
@@ -223,7 +318,7 @@ def test_run_agent_command_executes_project_entrypoint(tmp_path: Path):
             "--project",
             str(project),
             "--entrypoint",
-            "main.py",
+            str(project / "main.py"),
             "--output",
             str(output),
         ],
@@ -232,11 +327,18 @@ def test_run_agent_command_executes_project_entrypoint(tmp_path: Path):
     )
 
     assert exit_code == 0
-    assert json.loads(output.read_text(encoding="utf-8")) == {
-        "id": "item-1",
+    records = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert len(records) == 4
+    assert records[0] == {
+        "schema_version": 2,
+        "id": "group-1",
+        "group_id": "group-1",
+        "kind": "original",
+        "question": "What applies at age 70?",
         "status": "ok",
-        "answer": "question",
+        "answer": "What applies at age 70?",
     }
+    assert "Answered 4 session(s)" in capsys.readouterr().out
 
 
 def test_run_agent_help_exposes_verbose_toggle(capsys):
@@ -248,3 +350,5 @@ def test_run_agent_help_exposes_verbose_toggle(capsys):
     help_text = capsys.readouterr().out
     assert "--verbose" in help_text
     assert "--no-verbose" in help_text
+    assert "Schema-v2 LLaDAR test dataset JSONL" in help_text
+    assert "Project-relative Python entrypoint or a path inside the project" in help_text

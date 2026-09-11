@@ -1,5 +1,8 @@
 # LLaDAR contrastive question quality filter
 
+> Historical schema-v1 specification. The current schema-v2 generation and
+> quality contract is defined in `PRD-lladar-assumption-outcome-evaluation.md`.
+
 ## Status
 
 Implemented in the working tree; pending review. This document records the

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.4.1"
-description = "Generate contrastive datasets for detecting unsupported assumptions in LLM agents"
+version = "0.5.0"
+description = "Generate and evaluate controlled question groups for LLM agents"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<3.13"
@@ -31,6 +31,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 lladar = ["skill_assets/**/*"]
+
+[tool.setuptools.exclude-package-data]
+lladar = ["skill_assets/**/__pycache__/*", "skill_assets/**/*.pyc"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

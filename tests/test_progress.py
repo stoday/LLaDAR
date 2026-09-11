@@ -4,37 +4,66 @@ import io
 import re
 from pathlib import Path
 
+import pytest
+
 import lladar
 from lladar.cli import main
+from lladar.validation import QUALITY_CHECKS
 
 
-PAIR = {
-    "complete_question": "If the limit is 10, what is the limit?",
-    "complete_answer": "10",
-    "underspecified_question": "What is the limit?",
-    "missing_information": "Which limit applies.",
-    "invalid_assumptions": ["The limit is 10."],
-    "acceptable_behaviors": ["ask_clarification"],
-}
+def _candidate():
+    return {
+        "key_information": {"dimension": "limit", "text": "10-user", "value": "10"},
+        "original": {"question": "What is the 10-user plan limit?", "answer": "10."},
+        "variants": [
+            {
+                "kind": "information_omission",
+                "question": "What is the plan limit?",
+                "answer": None,
+                "change": {"removed": ["10-user"], "added": []},
+            },
+            *[
+                {
+                    "kind": "peer_cue_addition",
+                    "question": f"What is the plan limit for my {role}?",
+                    "answer": None,
+                    "change": {"removed": ["10-user"], "added": [f"my {role}"]},
+                    "cue": {
+                        "policy_id": "general-social-context",
+                        "policy_version": 1,
+                        "dimension": "kinship_role",
+                        "value": role,
+                        "set_id": "family-1",
+                        "tags": ["social_context"],
+                    },
+                }
+                for role in ("grandmother", "grandfather")
+            ],
+        ],
+    }
+
+
+def _judgment():
+    return {
+        "valid": True,
+        "reason": "valid",
+        "reason_code": "quality_validation_failed",
+        "semantic_key": "plan limit|10|limit",
+        "checks": {check: True for check in QUALITY_CHECKS},
+    }
 
 
 class FakeProvider:
     def generate_structured(self, prompt, *, model, temperature):
-        if "Judge this candidate contrastive pair" in prompt:
-            return {"valid": True, "reason": "valid", "checks": {
-                "standalone_question": True, "same_task": True,
-                "source_supported_answer": True,
-                "answer_determining_missing_fact": True,
-                "multiple_supported_answers": True,
-                "no_unresolved_references": True,
-            }}
+        if "Validate one generated question group" in prompt:
+            return _judgment()
         if "semantic knowledge segmenter" in prompt:
             return {
                 "segments": [
                     {"unit_ids": ["u0"], "knowledge_facts": ["A source fact."]}
                 ]
             }
-        return PAIR
+        return _candidate()
 
 
 class TtyBuffer(io.StringIO):
@@ -42,10 +71,7 @@ class TtyBuffer(io.StringIO):
         return True
 
 
-def test_api_shows_timestamped_configuration_progress_and_eta_by_default(
-    tmp_path: Path,
-    capsys,
-):
+def test_api_shows_timestamped_configuration_progress_and_eta_by_default(tmp_path: Path, capsys):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("Plan A has a limit of 10 users.", encoding="utf-8")
 
@@ -57,19 +83,18 @@ def test_api_shows_timestamped_configuration_progress_and_eta_by_default(
         "[CONFIG]",
         "effective settings",
         "knowledge",
-        "strategy             ambiguity",
+        "prompt_source        none",
+        "policies             general-social-context@1",
         "chunk_size           2000",
         "overlap              0.1",
-        "num_pairs            1",
+        "count                0",
         "model                gemini:gemini-3.7-flash",
-        "max_input_tokens     1048576",
-        "max_output_tokens    65536",
-        "auto_window_ratio    0.8",
         "provider             FakeProvider",
         "[SOURCE]",
         "[CHUNK]",
-        "[PAIR]",
-        "1/1",
+        "[GROUP]",
+        "target_ready=all",
+        "[GROUP]",
         "elapsed=",
         "ETA=",
         "[DONE]",
@@ -82,21 +107,13 @@ def test_cli_colors_verbose_labels_on_a_tty(tmp_path: Path, monkeypatch):
     knowledge.write_text("Plan A has a limit of 10 users.", encoding="utf-8")
     output = tmp_path / "dataset.jsonl"
     stderr = TtyBuffer()
+    monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setattr("sys.stderr", stderr)
 
-    exit_code = main(
-        [
-            "create",
-            "test-dataset",
-            "--knowledge",
-            str(knowledge),
-            "--output",
-            str(output),
-        ],
+    assert main(
+        ["create", "test-dataset", "--knowledge", str(knowledge), "--output", str(output)],
         provider=FakeProvider(),
-    )
-
-    assert exit_code == 0
+    ) == 0
     assert "\x1b[" in stderr.getvalue()
     assert "[CONFIG]" in stderr.getvalue()
 
@@ -106,21 +123,15 @@ def test_cli_can_disable_verbose_progress(tmp_path: Path, capsys):
     knowledge.write_text("Plan A has a limit of 10 users.", encoding="utf-8")
     output = tmp_path / "dataset.jsonl"
 
-    exit_code = main(
+    assert main(
         [
-            "create",
-            "test-dataset",
-            "--knowledge",
-            str(knowledge),
-            "--output",
-            str(output),
-            "--no-verbose",
+            "create", "test-dataset", "--knowledge", str(knowledge),
+            "--output", str(output), "--no-verbose",
         ],
         provider=FakeProvider(),
-    )
-
-    assert exit_code == 0
+    ) == 0
     assert capsys.readouterr().err == ""
+
 
 def test_api_reports_retry_cache_and_write_events(tmp_path: Path, capsys):
     knowledge = tmp_path / "knowledge.txt"
@@ -128,23 +139,15 @@ def test_api_reports_retry_cache_and_write_events(tmp_path: Path, capsys):
     output = tmp_path / "dataset.jsonl"
     cache_dir = tmp_path / "cache"
 
-    class RecoveringProvider:
+    class RecoveringProvider(FakeProvider):
         def __init__(self):
             self.failed = False
 
         def generate_structured(self, prompt, *, model, temperature):
-            if "Judge this candidate contrastive pair" in prompt:
-                return {"valid": True, "reason": "valid", "checks": {
-                    "standalone_question": True, "same_task": True,
-                    "source_supported_answer": True,
-                    "answer_determining_missing_fact": True,
-                    "multiple_supported_answers": True,
-                    "no_unresolved_references": True,
-                }}
-            if not self.failed:
+            if "Generate one source-grounded question group" in prompt and not self.failed:
                 self.failed = True
-                raise lladar.ProviderError("temporary malformed response")
-            return PAIR
+                return {"key_information": {}}
+            return super().generate_structured(prompt, model=model, temperature=temperature)
 
     lladar.create_test_dataset(
         knowledge=knowledge,
@@ -157,7 +160,7 @@ def test_api_reports_retry_cache_and_write_events(tmp_path: Path, capsys):
 
     class UnavailableProvider:
         def generate_structured(self, prompt, *, model, temperature):
-            raise AssertionError("pair cache should satisfy this run")
+            raise AssertionError("group cache should satisfy this run")
 
     lladar.create_test_dataset(
         knowledge=knowledge,
@@ -196,7 +199,8 @@ def test_api_reports_each_semantic_window(tmp_path: Path, capsys):
     assert "[WINDOW]" in progress
     assert "1/" in progress
 
-def test_verbose_progress_does_not_echo_provider_secrets(tmp_path: Path, capsys):
+
+def test_operational_provider_errors_do_not_leak_secrets(tmp_path: Path, capsys):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("A fact.", encoding="utf-8")
 
@@ -204,16 +208,14 @@ def test_verbose_progress_does_not_echo_provider_secrets(tmp_path: Path, capsys)
         def generate_structured(self, prompt, *, model, temperature):
             raise lladar.ProviderError("request failed with API key TOP-SECRET-VALUE")
 
-    lladar.create_test_dataset(
-        knowledge=knowledge,
-        provider=SecretErrorProvider(),
-    )
-
+    with pytest.raises(lladar.ProviderError):
+        lladar.create_test_dataset(knowledge=knowledge, provider=SecretErrorProvider())
     progress = capsys.readouterr().err
-    assert "[RETRY]" in progress
     assert "TOP-SECRET-VALUE" not in progress
+    assert "[RETRY]" not in progress
 
-def test_cli_does_not_echo_provider_secrets_on_strict_failure(tmp_path: Path, capsys):
+
+def test_cli_reports_generic_provider_failure_without_secret(tmp_path: Path, capsys):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("A fact.", encoding="utf-8")
     output = tmp_path / "dataset.jsonl"
@@ -224,20 +226,13 @@ def test_cli_does_not_echo_provider_secrets_on_strict_failure(tmp_path: Path, ca
 
     exit_code = main(
         [
-            "create",
-            "test-dataset",
-            "--knowledge",
-            str(knowledge),
-            "--chunk-size",
-            "2000",
-            "--output",
-            str(output),
-            "--strict",
+            "create", "test-dataset", "--knowledge", str(knowledge),
+            "--chunk-size", "2000", "--output", str(output),
         ],
         provider=SecretErrorProvider(),
     )
 
     stderr = capsys.readouterr().err
-    assert exit_code == 0
-    assert "provider generation failed" not in stderr
+    assert exit_code == 2
+    assert "provider generation failed" in stderr
     assert "CLI-SECRET-VALUE" not in stderr

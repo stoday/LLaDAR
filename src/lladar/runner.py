@@ -11,7 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .exceptions import DatasetValidationError
 from .progress import ProgressReporter
+from .validation import validate_dataset_item
 
 
 Answerer = Callable[[str], str]
@@ -138,6 +140,24 @@ def resolve_project_python(project: str | Path) -> Path:
     return Path(sys.executable)
 
 
+def resolve_project_entrypoint(project: str | Path, entrypoint: str | Path) -> Path:
+    """Return an entrypoint path relative to the original project root."""
+    root = Path(project).resolve()
+    supplied = Path(entrypoint)
+    working_directory_candidate = supplied.resolve()
+    if supplied.is_absolute() or working_directory_candidate.is_relative_to(root):
+        absolute = working_directory_candidate
+    else:
+        absolute = (root / supplied).resolve()
+    try:
+        relative = absolute.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"entrypoint is outside project: {entrypoint}") from error
+    if not absolute.is_file():
+        raise FileNotFoundError(f"entrypoint not found: {entrypoint}")
+    return relative
+
+
 @contextmanager
 def copy_project(project: str | Path, *, runs_root: str | Path | None = None):
     """Yield a managed project copy with secrets and local state excluded."""
@@ -178,6 +198,45 @@ def _read_jsonl(path: Path) -> Iterable[dict[str, Any]]:
             yield value
 
 
+def _dataset_cases(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in items:
+        group_id = item["id"]
+        if group_id in seen_ids:
+            raise DatasetValidationError(f"duplicate case id: {group_id}")
+        seen_ids.add(group_id)
+        if item.get("status") == "skipped":
+            continue
+        original = item.get("original")
+        if isinstance(original, dict):
+            cases.append(
+                {
+                    "id": group_id,
+                    "group_id": group_id,
+                    "kind": "original",
+                    "question": original.get("question"),
+                }
+            )
+        variants = item.get("variants")
+        if isinstance(variants, list):
+            for variant in variants:
+                if isinstance(variant, dict):
+                    variant_id = variant.get("id")
+                    if variant_id in seen_ids:
+                        raise DatasetValidationError(f"duplicate case id: {variant_id}")
+                    seen_ids.add(variant_id)
+                    cases.append(
+                        {
+                            "id": variant_id,
+                            "group_id": group_id,
+                            "kind": variant.get("kind"),
+                            "question": variant.get("question"),
+                        }
+                    )
+    return cases
+
+
 def run_agent(
     dataset: str | Path,
     output: str | Path,
@@ -200,17 +259,25 @@ def run_agent(
     if project is not None and entrypoint is None:
         raise ValueError("entrypoint is required when project is provided")
 
+    relative_entrypoint = (
+        resolve_project_entrypoint(project, entrypoint)  # type: ignore[arg-type]
+        if project is not None
+        else None
+    )
+
     items = [
-        item for item in _read_jsonl(Path(dataset))
-        if item.get("status") != "skipped"
+        validate_dataset_item(item, check_policy_references=False)
+        for item in _read_jsonl(Path(dataset))
     ]
+    cases = _dataset_cases(items)
     reporter = ProgressReporter(verbose)
     reporter.configuration(
         {
             "dataset": dataset,
             "project": project,
             "entrypoint": entrypoint,
-            "items": len(items),
+            "groups": sum(item.get("status") == "ready" for item in items),
+            "sessions": len(cases),
             "output": output,
             "verbose": verbose,
         }
@@ -226,28 +293,35 @@ def run_agent(
     with workspace_context as workspace:
         adapted_entrypoint = None
         if project is not None:
-            adapted_entrypoint = workspace / Path(entrypoint)  # type: ignore[arg-type]
+            adapted_entrypoint = workspace / relative_entrypoint  # type: ignore[operator]
             if not adapted_entrypoint.is_file():
                 raise FileNotFoundError(f"entrypoint not found: {entrypoint}")
             reporter.emit("SOURCE", f"workspace={workspace}")
-            reporter.emit("CHUNK", f"entrypoint={entrypoint}")
-            try:
-                (adapter or _require_adapter()).adapt(workspace, adapted_entrypoint)
-            except Exception as error:
-                reporter.emit(
-                    "WARN",
-                    f"stage=adapt error_type={type(error).__name__}",
-                )
-                raise
+            reporter.emit("CHUNK", f"entrypoint={relative_entrypoint}")
+            if "LLADAR_QUESTION" not in adapted_entrypoint.read_text(encoding="utf-8"):
+                try:
+                    (adapter or _require_adapter()).adapt(workspace, adapted_entrypoint)
+                except Exception as error:
+                    reporter.emit(
+                        "WARN",
+                        f"stage=adapt error_type={type(error).__name__}",
+                    )
+                    raise
         with output_path.open("w", encoding="utf-8", newline="\n") as target:
-            total = len(items)
-            for index, item in enumerate(items, start=1):
-                result: dict[str, Any] = {"id": item.get("id")}
-                question = item.get("underspecified_question")
+            total = len(cases)
+            for index, case in enumerate(cases, start=1):
+                result: dict[str, Any] = {
+                    "schema_version": 2,
+                    "id": case.get("id"),
+                    "group_id": case.get("group_id"),
+                    "kind": case.get("kind"),
+                    "question": case.get("question"),
+                }
+                question = case.get("question")
                 if not isinstance(question, str) or not question.strip():
                     result.update(
-                        status="error",
-                        error="Missing non-empty question field: underspecified_question",
+                        status="execution_error",
+                        error="Missing non-empty question",
                     )
                 else:
                     try:
@@ -267,15 +341,18 @@ def run_agent(
                         )
                         completed += 1
                     except Exception as error:  # Keep later dataset items runnable.
-                        result.update(status="error", error=f"{type(error).__name__}: {error}")
+                        result.update(
+                            status="execution_error",
+                            error=f"{type(error).__name__}: {error}",
+                        )
                         reporter.emit(
                             "WARN",
-                            f"item={item.get('id')} stage=answer error_type={type(error).__name__}",
+                            f"item={case.get('id')} stage=answer error_type={type(error).__name__}",
                         )
                 target.write(json.dumps(result, ensure_ascii=False) + "\n")
                 target.flush()
-                reporter.pair(index, total, result["status"])
-    reporter.done(completed)
+                reporter.session(index, total, result["status"])
+    reporter.done(completed, metric="completed_sessions")
     return completed
 
 

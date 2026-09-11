@@ -12,9 +12,11 @@ _COLORS = {
     "SOURCE": "\x1b[36m",
     "WINDOW": "\x1b[36m",
     "CHUNK": "\x1b[35m",
+    "GROUP": "\x1b[32m",
     "CACHE": "\x1b[33m",
     "RETRY": "\x1b[33m",
     "PAIR": "\x1b[32m",
+    "SESSION": "\x1b[32m",
     "WRITE": "\x1b[36m",
     "WARN": "\x1b[33m",
     "DONE": "\x1b[32m",
@@ -56,18 +58,28 @@ class ProgressReporter:
         print(f"{timestamp} {marker} {message}", file=self.stream, flush=True)
 
     def pair(self, completed: int, total: int, message: str) -> None:
+        """Report legacy pair/runner progress."""
+        self._progress("PAIR", completed, total, message)
+
+    def session(self, completed: int, total: int, message: str) -> None:
+        self._progress("SESSION", completed, total, message)
+
+    def group(self, completed: int, total: int, message: str) -> None:
+        self._progress("GROUP", completed, total, message)
+
+    def _progress(self, label: str, completed: int, total: int, message: str) -> None:
         elapsed = time.perf_counter() - self.started_at
         remaining = max(total - completed, 0)
         eta = elapsed / completed * remaining if completed else None
         eta_text = "estimating" if eta is None else _duration(eta)
         self.emit(
-            "PAIR",
+            label,
             f"{completed}/{total} {message} elapsed={_duration(elapsed)} ETA={eta_text}",
         )
 
-    def done(self, item_count: int) -> None:
+    def done(self, item_count: int, *, metric: str = "generated") -> None:
         elapsed = time.perf_counter() - self.started_at
-        self.emit("DONE", f"generated={item_count} elapsed={_duration(elapsed)}")
+        self.emit("DONE", f"{metric}={item_count} elapsed={_duration(elapsed)}")
 
 
 def _display(value: Any) -> str:

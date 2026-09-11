@@ -9,15 +9,46 @@ import pytest
 import lladar
 from lladar.cli import main
 from lladar.chunking import SourceUnit, build_semantic_chunking_prompt, semantic_window_char_limit
+from lladar.validation import QUALITY_CHECKS
 
 
-PAIR = {
-    "complete_question": "If the limit is 10, what is the limit?",
-    "complete_answer": "10",
-    "underspecified_question": "What is the limit?",
-    "missing_information": "Which limit applies.",
-    "invalid_assumptions": ["The limit is 10."],
-    "acceptable_behaviors": ["ask_clarification"],
+GROUP = {
+    "key_information": {"dimension": "limit", "text": "10-user", "value": "10"},
+    "original": {"question": "What is the 10-user plan limit?", "answer": "10."},
+    "variants": [
+        {
+            "kind": "information_omission",
+            "question": "What is the plan limit?",
+            "answer": None,
+            "change": {"removed": ["10-user"], "added": []},
+        },
+        *[
+            {
+                "kind": "peer_cue_addition",
+                "question": f"What is the plan limit for my {role}?",
+                "answer": None,
+                "change": {"removed": ["10-user"], "added": [f"my {role}"]},
+                "cue": {
+                    "policy_id": "general-social-context",
+                    "policy_version": 1,
+                    "dimension": "kinship_role",
+                    "value": role,
+                    "set_id": "family-1",
+                    "tags": ["social_context"],
+                },
+            }
+            for role in ("grandmother", "grandfather")
+        ],
+    ],
+}
+
+
+JUDGMENT = {
+    "valid": True,
+    "reason": "valid",
+    "reason_code": "quality_validation_failed",
+    "semantic_key": "plan limit|10|limit",
+    "checks": {check: True for check in QUALITY_CHECKS},
 }
 
 
@@ -28,14 +59,8 @@ class AutoProvider:
 
     def generate_structured(self, prompt, *, model, temperature):
         self.prompts.append(prompt)
-        if "Judge this candidate contrastive pair" in prompt:
-            return {"valid": True, "reason": "valid", "checks": {
-                "standalone_question": True, "same_task": True,
-                "source_supported_answer": True,
-                "answer_determining_missing_fact": True,
-                "multiple_supported_answers": True,
-                "no_unresolved_references": True,
-            }}
+        if "Validate one generated question group" in prompt:
+            return JUDGMENT
         if "semantic knowledge segmenter" in prompt:
             if self.invalid_segments:
                 return {
@@ -56,7 +81,7 @@ class AutoProvider:
                     },
                 ]
             }
-        return PAIR
+        return GROUP
 
 
 def test_auto_chunking_generates_from_exact_semantic_segments(tmp_path: Path):
@@ -73,26 +98,16 @@ def test_auto_chunking_generates_from_exact_semantic_segments(tmp_path: Path):
         strict=True,
     )
 
-    assert [item["source_text"] for item in dataset] == [source]
+    assert [item["source"]["text"] for item in dataset] == [source]
     segmentation_prompt = next(
         prompt for prompt in provider.prompts if "semantic knowledge segmenter" in prompt
     )
-    assert "usable\ndecision set" in segmentation_prompt
-    assert "endpoints of one numeric range" in segmentation_prompt
-    assert dataset[0]["metadata"] == {
-        "strategy": "ambiguity",
-        "model": "gemini:gemini-3.7-flash",
-        "temperature": 0.0,
-        "chunk_method": "semantic_auto",
-        "source_start": 0,
-        "source_end": len(source),
-        "knowledge_facts": [
-            "Plan A has a 10-user limit and Plan B has a 20-user limit; the plan selects the limit."
-        ],
-    }
+    assert "answerable knowledge unit" in segmentation_prompt
+    assert "not limited to decisions or recommendations" in segmentation_prompt
+    assert dataset[0]["source"]["locator"] == f"characters 0-{len(source)}"
 
 
-def test_semantic_prompt_keeps_category_mappings_in_one_scope():
+def test_semantic_prompt_keeps_related_facts_in_one_answerable_unit():
     prompt = build_semantic_chunking_prompt(
         [
             SourceUnit("u0", 0, 22, "Breakfast: 400-500 calories."),
@@ -100,12 +115,12 @@ def test_semantic_prompt_keeps_category_mappings_in_one_scope():
         ]
     )
 
-    assert "category-to-value mapping" in prompt
-    assert "same scope and answer type" in prompt
-    assert "main-meal budgets and a\nseparate snack rule" in prompt
+    assert "key information" in prompt
+    assert "smallest contiguous source span" in prompt.replace("\n", " ")
+    assert "source-grounded answer" in prompt
 
 
-def test_semantic_prompt_includes_scenario_to_recommendation_sets():
+def test_semantic_prompt_requests_every_non_overlapping_eligible_unit():
     prompt = build_semantic_chunking_prompt(
         [
             SourceUnit("u0", 0, 23, "When dining out, choose visible ingredients."),
@@ -113,9 +128,8 @@ def test_semantic_prompt_includes_scenario_to_recommendation_sets():
         ]
     )
 
-    assert "scenario-to-recommendation mapping" in prompt
-    assert "dining out versus eating at home" in prompt.replace("\n", " ")
-    assert "every non-overlapping eligible decision set" in prompt
+    assert "every non-overlapping eligible unit" in prompt
+    assert "not limited to decisions or recommendations" in prompt
 
 
 def test_auto_chunking_is_strict_or_falls_back_to_fixed_chunks(tmp_path: Path):
@@ -135,7 +149,7 @@ def test_auto_chunking_is_strict_or_falls_back_to_fixed_chunks(tmp_path: Path):
         chunk_size="auto",
         provider=AutoProvider(invalid_segments=True),
     )
-    assert dataset[0]["metadata"]["chunk_method"] == "character_fallback"
+    assert dataset[0]["source"]["locator"].startswith("characters ")
 
 
 def test_cli_accepts_auto_chunk_size(tmp_path: Path):
@@ -175,7 +189,6 @@ def test_semantic_segmentation_cache_is_independent_from_pair_cache(tmp_path: Pa
     lladar.create_test_dataset(
         knowledge=knowledge,
         chunk_size="auto",
-        num_pairs=1,
         cache=True,
         cache_dir=cache_dir,
         provider=AutoProvider(),
@@ -184,28 +197,22 @@ def test_semantic_segmentation_cache_is_independent_from_pair_cache(tmp_path: Pa
 
     class PairOnlyProvider:
         def generate_structured(self, prompt, *, model, temperature):
-            if "Judge this candidate contrastive pair" in prompt:
-                return {"valid": True, "reason": "valid", "checks": {
-                    "standalone_question": True, "same_task": True,
-                    "source_supported_answer": True,
-                    "answer_determining_missing_fact": True,
-                    "multiple_supported_answers": True,
-                    "no_unresolved_references": True,
-                }}
+            if "Validate one generated question group" in prompt:
+                return JUDGMENT
             assert "semantic knowledge segmenter" not in prompt
-            return PAIR
+            return GROUP
 
     dataset = lladar.create_test_dataset(
         knowledge=knowledge,
         chunk_size="auto",
-        num_pairs=2,
+        prompt="Use a different question style.",
         cache=True,
         cache_dir=cache_dir,
         provider=PairOnlyProvider(),
         strict=True,
     )
 
-    assert len(dataset) == 2
+    assert len(dataset) == 1
     assert list((cache_dir / "semantic_segments").glob("*.json"))
 
 
@@ -226,14 +233,8 @@ def test_auto_chunking_deduplicates_segments_from_overlapping_safe_windows(
 
     class OverlapProvider:
         def generate_structured(self, prompt, *, model, temperature):
-            if "Judge this candidate contrastive pair" in prompt:
-                return {"valid": True, "reason": "valid", "checks": {
-                    "standalone_question": True, "same_task": True,
-                    "source_supported_answer": True,
-                    "answer_determining_missing_fact": True,
-                    "multiple_supported_answers": True,
-                    "no_unresolved_references": True,
-                }}
+            if "Validate one generated question group" in prompt:
+                return JUDGMENT
             if "semantic knowledge segmenter" in prompt:
                 match = re.search(
                     r'<unit id="([^"]+)">' + re.escape(fact) + r"</unit>",
@@ -251,7 +252,7 @@ def test_auto_chunking_deduplicates_segments_from_overlapping_safe_windows(
                         else []
                     )
                 }
-            return PAIR
+            return GROUP
 
     dataset = lladar.create_test_dataset(
         knowledge=knowledge,
@@ -262,8 +263,9 @@ def test_auto_chunking_deduplicates_segments_from_overlapping_safe_windows(
     )
 
     assert len(dataset) == 1
-    assert dataset[0]["metadata"]["source_start"] == fact_start
-    assert dataset[0]["metadata"]["source_end"] == fact_start + len(fact)
+    assert dataset[0]["source"]["locator"] == (
+        f"characters {fact_start}-{fact_start + len(fact)}"
+    )
 
 def test_user_can_override_auto_window_token_budget(tmp_path: Path):
     knowledge = tmp_path / "long.txt"

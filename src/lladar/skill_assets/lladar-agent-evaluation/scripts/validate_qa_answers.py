@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Preflight-check LLaDAR dataset and answer JSONL files by id."""
+"""Deterministically preflight schema-v2 LLaDAR dataset and answer JSONL."""
 
 from __future__ import annotations
 
@@ -21,18 +21,52 @@ def read_records(path: Path) -> list[dict]:
     return records
 
 
-def index(records: list[dict], label: str) -> tuple[dict[str, dict], list[str]]:
-    result: dict[str, dict] = {}
+def expected_cases(records: list[dict]) -> tuple[dict[str, dict], list[str]]:
+    expected: dict[str, dict] = {}
+    errors: list[str] = []
+    for number, group in enumerate(records, 1):
+        if group.get("schema_version") != 2:
+            errors.append(f"dataset:{number}: regenerate with schema version 2")
+            continue
+        group_id = group.get("id")
+        if not isinstance(group_id, str) or not group_id:
+            errors.append(f"dataset:{number}: missing id")
+            continue
+        if group.get("status") == "skipped":
+            continue
+        original = group.get("original")
+        variants = group.get("variants")
+        if group.get("status") != "ready" or not isinstance(original, dict) or not isinstance(variants, list):
+            errors.append(f"dataset:{number}: invalid ready group")
+            continue
+        cases = [(group_id, "original", original.get("question"))]
+        cases.extend((item.get("id"), item.get("kind"), item.get("question")) for item in variants if isinstance(item, dict))
+        for case_id, kind, question in cases:
+            if not isinstance(case_id, str) or not case_id:
+                errors.append(f"dataset:{number}: missing case id")
+            elif case_id in expected:
+                errors.append(f"dataset:{number}: duplicate case id {case_id}")
+            else:
+                expected[case_id] = {
+                    "group_id": group_id,
+                    "kind": kind,
+                    "question": question,
+                }
+    return expected, errors
+
+
+def answer_index(records: list[dict]) -> tuple[dict[str, dict], list[str]]:
+    indexed: dict[str, dict] = {}
     errors: list[str] = []
     for number, record in enumerate(records, 1):
         record_id = record.get("id")
         if not isinstance(record_id, str) or not record_id:
-            errors.append(f"{label}:{number}: missing id")
-        elif record_id in result:
-            errors.append(f"{label}:{number}: duplicate id {record_id}")
+            errors.append(f"answers:{number}: missing id")
+        elif record_id in indexed:
+            errors.append(f"answers:{number}: duplicate id {record_id}")
         else:
-            result[record_id] = record
-    return result, errors
+            indexed[record_id] = record
+    return indexed, errors
 
 
 def main() -> int:
@@ -41,21 +75,34 @@ def main() -> int:
     parser.add_argument("answers", type=Path)
     args = parser.parse_args()
 
-    dataset, errors = index(read_records(args.dataset), "dataset")
-    answers, answer_errors = index(read_records(args.answers), "answers")
+    expected, errors = expected_cases(read_records(args.dataset))
+    answers, answer_errors = answer_index(read_records(args.answers))
     errors.extend(answer_errors)
-    errors.extend(f"missing answer: {record_id}" for record_id in sorted(set(dataset) - set(answers)))
-    errors.extend(f"answer without dataset item: {record_id}" for record_id in sorted(set(answers) - set(dataset)))
-    errors.extend(
-        f"answers:{record_id}: missing non-empty answer"
-        for record_id, record in answers.items()
-        if not isinstance(record.get("answer"), str) or not record["answer"].strip()
-    )
+    errors.extend(f"missing answer: {case_id}" for case_id in sorted(set(expected) - set(answers)))
+    errors.extend(f"answer without dataset case: {case_id}" for case_id in sorted(set(answers) - set(expected)))
+    for case_id in sorted(set(expected) & set(answers)):
+        case = expected[case_id]
+        record = answers[case_id]
+        if record.get("schema_version") != 2:
+            errors.append(f"answers:{case_id}: invalid schema_version")
+        for field in ("group_id", "kind", "question"):
+            if record.get(field) != case[field]:
+                errors.append(f"answers:{case_id}: mismatched {field}")
+        status = record.get("status")
+        if status == "ok":
+            if not isinstance(record.get("answer"), str):
+                errors.append(f"answers:{case_id}: answer must be a string")
+        elif status == "execution_error":
+            if not isinstance(record.get("error"), str) or not record["error"].strip():
+                errors.append(f"answers:{case_id}: error must be a non-empty string")
+        else:
+            errors.append(f"answers:{case_id}: invalid status")
+
     if errors:
         for error in errors:
             print(error)
         return 1
-    print(f"OK: {len(dataset)} dataset item(s) and {len(answers)} answer(s) matched by id")
+    print(f"OK: {len(expected)} schema-v2 case(s) matched by id")
     return 0
 
 

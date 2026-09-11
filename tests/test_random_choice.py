@@ -1,38 +1,61 @@
 from pathlib import Path
 
+import pytest
+
 import lladar
+from lladar.validation import QUALITY_CHECKS
 
 
-PAIR = {
-    "complete_question": "完整問題",
-    "complete_answer": "完整答案",
-    "underspecified_question": "缺失問題",
-    "missing_information": "缺失資訊",
-    "invalid_assumptions": ["錯誤假設"],
-    "acceptable_behaviors": ["ask_clarification"],
-}
+def _group(number: int):
+    return {
+        "key_information": {"dimension": "limit", "text": f"limit {number}"},
+        "original": {"question": f"What is limit {number}?", "answer": str(number)},
+        "variants": [
+            {
+                "kind": "information_omission",
+                "question": "What is the limit?",
+                "answer": None,
+                "change": {"removed": [f"limit {number}"], "added": []},
+            },
+            *[
+                {
+                    "kind": "peer_cue_addition",
+                    "question": f"What is the limit for my {role}?",
+                    "answer": None,
+                    "change": {"removed": [f"limit {number}"], "added": [f"my {role}"]},
+                    "cue": {
+                        "policy_id": "general-social-context",
+                        "policy_version": 1,
+                        "dimension": "kinship_role",
+                        "value": role,
+                        "set_id": f"set-{number}",
+                        "tags": ["social_context"],
+                    },
+                }
+                for role in ("grandmother", "grandfather")
+            ],
+        ],
+    }
 
 
 class CountingProvider:
     def __init__(self):
-        self.calls = 0
-        self.pair_calls = 0
+        self.group_calls = 0
 
     def generate_structured(self, prompt, *, model, temperature):
-        self.calls += 1
-        if "Judge this candidate contrastive pair" in prompt:
-            return {"valid": True, "reason": "valid", "checks": {
-                "standalone_question": True, "same_task": True,
-                "source_supported_answer": True,
-                "answer_determining_missing_fact": True,
-                "multiple_supported_answers": True,
-                "no_unresolved_references": True,
-            }}
-        self.pair_calls += 1
-        return PAIR
+        if "Validate one generated question group" in prompt:
+            return {
+                "valid": True,
+                "reason": "valid",
+                "reason_code": "quality_validation_failed",
+                "semantic_key": f"group-{self.group_calls}",
+                "checks": {check: True for check in QUALITY_CHECKS},
+            }
+        self.group_calls += 1
+        return _group(self.group_calls)
 
 
-def test_random_select_limits_generation_to_n_pairs(tmp_path: Path):
+def test_count_limits_generation_to_ready_groups(tmp_path: Path):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("aa\nbb\ncc\ndd\nee\n", encoding="utf-8")
     provider = CountingProvider()
@@ -41,16 +64,17 @@ def test_random_select_limits_generation_to_n_pairs(tmp_path: Path):
         knowledge=knowledge,
         chunk_size=2,
         overlap=0,
-        random_select=2,
+        count=2,
+        seed=11,
         provider=provider,
     )
 
     assert len(dataset) == 2
-    assert provider.pair_calls == 2
+    assert provider.group_calls == 2
     assert len({item["id"] for item in dataset}) == 2
 
 
-def test_random_select_larger_than_dataset_keeps_all_pairs(tmp_path: Path):
+def test_count_larger_than_candidates_keeps_every_available_group(tmp_path: Path):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("aa\nbb\n", encoding="utf-8")
     provider = CountingProvider()
@@ -59,56 +83,45 @@ def test_random_select_larger_than_dataset_keeps_all_pairs(tmp_path: Path):
         knowledge=knowledge,
         chunk_size=2,
         overlap=0,
-        random_select=999,
+        count=999,
+        seed=2,
         provider=provider,
     )
 
-    assert len(dataset) == provider.pair_calls
+    assert len(dataset) == provider.group_calls
     assert len(dataset) > 0
 
 
-def test_random_select_counts_only_ready_pairs(tmp_path: Path):
+def test_default_count_zero_processes_every_candidate_chunk(tmp_path: Path):
     knowledge = tmp_path / "knowledge.txt"
-    knowledge.write_text("aa\nbb\ncc\n", encoding="utf-8")
-
-    class SkipThenReadyProvider(CountingProvider):
-        def __init__(self):
-            super().__init__()
-            self.generation_attempts = 0
-
-        def generate_structured(self, prompt, *, model, temperature):
-            if "Judge this candidate contrastive pair" not in prompt:
-                self.generation_attempts += 1
-                if self.generation_attempts <= 3:
-                    return {"complete_question": "invalid"}
-            return super().generate_structured(prompt, model=model, temperature=temperature)
-
-    provider = SkipThenReadyProvider()
+    knowledge.write_text("aa\nbb\ncc\ndd\nee\n", encoding="utf-8")
+    provider = CountingProvider()
 
     dataset = lladar.create_test_dataset(
         knowledge=knowledge,
         chunk_size=2,
         overlap=0,
-        random_select=1,
+        seed=11,
         provider=provider,
     )
 
-    assert sum(item["status"] == "ready" for item in dataset) == 1
-    assert any(item["status"] == "skipped" for item in dataset)
-    assert provider.generation_attempts == 4
+    assert len(dataset) > 1
+    assert len(dataset) == provider.group_calls
 
 
-def test_random_select_must_be_positive(tmp_path: Path):
+def test_count_and_seed_must_have_valid_types(tmp_path: Path):
     knowledge = tmp_path / "knowledge.txt"
     knowledge.write_text("source", encoding="utf-8")
 
-    try:
+    with pytest.raises(ValueError, match="count"):
         lladar.create_test_dataset(
             knowledge=knowledge,
-            random_select=0,
+            count=-1,
             provider=CountingProvider(),
         )
-    except ValueError as error:
-        assert "random_select" in str(error)
-    else:
-        raise AssertionError("random_select=0 should be rejected")
+    with pytest.raises(ValueError, match="seed"):
+        lladar.create_test_dataset(
+            knowledge=knowledge,
+            seed=1.5,
+            provider=CountingProvider(),
+        )

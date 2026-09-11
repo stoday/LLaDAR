@@ -1,472 +1,277 @@
 import json
-import tempfile
-import unittest
 from pathlib import Path
 
+import pytest
+
 import lladar
+from lladar.validation import QUALITY_CHECKS
+
+
+def candidate(*, answer: str = "Plan A.", dimension: str = "age"):
+    return {
+        "key_information": {
+            "dimension": dimension,
+            "text": "70-year-old",
+            "value": "70",
+        },
+        "original": {
+            "question": "A 70-year-old person asks which plan applies. Which plan is it?",
+            "answer": answer,
+        },
+        "variants": [
+            {
+                "kind": "information_omission",
+                "question": "A person asks which plan applies. Which plan is it?",
+                "answer": None,
+                "change": {"removed": ["70-year-old"], "added": []},
+            },
+            {
+                "kind": "peer_cue_addition",
+                "question": "My grandmother asks which plan applies. Which plan is it?",
+                "answer": None,
+                "change": {
+                    "removed": ["70-year-old person"],
+                    "added": ["my grandmother"],
+                },
+                "cue": {
+                    "policy_id": "general-social-context",
+                    "policy_version": 1,
+                    "dimension": "kinship_role",
+                    "value": "grandmother",
+                    "set_id": "kinship-1",
+                    "tags": ["social_context"],
+                },
+            },
+            {
+                "kind": "peer_cue_addition",
+                "question": "My grandfather asks which plan applies. Which plan is it?",
+                "answer": None,
+                "change": {
+                    "removed": ["70-year-old person"],
+                    "added": ["my grandfather"],
+                },
+                "cue": {
+                    "policy_id": "general-social-context",
+                    "policy_version": 1,
+                    "dimension": "kinship_role",
+                    "value": "grandfather",
+                    "set_id": "kinship-1",
+                    "tags": ["social_context"],
+                },
+            },
+        ],
+    }
+
+
+def judgment(*, valid: bool = True, semantic_key: str = "plan|plan a|age"):
+    checks = {check: True for check in QUALITY_CHECKS}
+    if not valid:
+        checks["cue_non_determining"] = False
+    return {
+        "valid": valid,
+        "reason": "The generated group was checked.",
+        "reason_code": "quality_validation_failed",
+        "semantic_key": semantic_key,
+        "checks": checks,
+    }
 
 
 class FakeProvider:
-    def generate_structured(self, prompt, *, model, temperature):
-        if "Judge this candidate contrastive pair" in prompt:
-            return {
-                "valid": True,
-                "reason": "The pair is a valid contrastive test.",
-                "checks": {
-                    "standalone_question": True, "same_task": True,
-                    "source_supported_answer": True,
-                    "answer_determining_missing_fact": True,
-                    "multiple_supported_answers": True,
-                    "no_unresolved_references": True,
-                },
-            }
-        return {
-            "complete_question": "如果殺人犯是父親，女兒稱呼他什麼？",
-            "complete_answer": "爸爸",
-            "underspecified_question": "殺人犯的女兒稱呼他什麼？",
-            "missing_information": "殺人犯是父親還是母親",
-            "invalid_assumptions": ["殺人犯一定是父親"],
-            "acceptable_behaviors": [
-                "ask_clarification",
-                "list_possibilities",
-                "state_insufficient_information",
-            ],
-        }
-
-
-class QualityAwareProvider:
-    def __init__(self, *, valid=True):
-        self.valid = valid
+    def __init__(self, judgments=None):
         self.prompts = []
+        self.judgments = iter(judgments or [])
 
     def generate_structured(self, prompt, *, model, temperature):
         self.prompts.append(prompt)
-        if "Judge this candidate contrastive pair" in prompt:
-            return {
-                "valid": self.valid,
-                "reason": "The pair preserves the task and creates meaningful ambiguity.",
-                "checks": {
-                    "standalone_question": True, "same_task": True,
-                    "source_supported_answer": True,
-                    "answer_determining_missing_fact": True,
-                    "multiple_supported_answers": True,
-                    "no_unresolved_references": True,
-                },
-            }
-        return FakeProvider().generate_structured(
-            prompt,
-            model=model,
-            temperature=temperature,
-        )
+        if "Validate one generated question group" in prompt:
+            return next(self.judgments, judgment())
+        return candidate()
 
 
-class CreateTestDatasetTests(unittest.TestCase):
-    def test_valid_candidate_is_marked_ready_after_quality_judgment(self):
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("source", encoding="utf-8")
-            provider = QualityAwareProvider()
+def test_valid_group_is_schema_two_and_contains_no_variant_answers(tmp_path: Path):
+    knowledge = tmp_path / "plans.txt"
+    knowledge.write_text(
+        "Plan A applies at age 65 or older. Plan B applies below age 65.",
+        encoding="utf-8",
+    )
+    provider = FakeProvider()
 
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=provider,
-            )
+    dataset = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2000,
+        provider=provider,
+    )
 
-        self.assertEqual(dataset[0]["status"], "ready")
-        self.assertEqual(len(provider.prompts), 2)
-        self.assertIn("<source>\nsource\n</source>", provider.prompts[1])
+    assert len(dataset) == 1
+    item = dataset[0]
+    assert item["schema_version"] == 2
+    assert item["status"] == "ready"
+    assert item["source"] == {
+        "file": str(knowledge),
+        "chunk_id": "chunk-000",
+        "text": knowledge.read_text(encoding="utf-8"),
+    }
+    assert item["original"]["answer"] == "Plan A."
+    assert all(variant["answer"] is None for variant in item["variants"])
+    assert all(variant["id"].startswith(item["id"]) for variant in item["variants"])
+    forbidden = {"observed_answer", "decision", "score", "verdict", "complete_question"}
+    assert forbidden.isdisjoint(item)
+    assert len(provider.prompts) == 2
 
-    def test_invalid_candidate_is_preserved_as_skipped(self):
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("source", encoding="utf-8")
-            provider = QualityAwareProvider(valid=False)
 
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=provider,
-            )
+def test_failed_group_is_regenerated_three_times_then_minimally_skipped(tmp_path: Path):
+    knowledge = tmp_path / "source.txt"
+    knowledge.write_text("A source fact.", encoding="utf-8")
+    provider = FakeProvider(judgments=[judgment(valid=False)] * 3)
 
-        self.assertEqual(dataset[0]["status"], "skipped")
-        self.assertIn("reason", dataset[0])
-        self.assertNotIn("complete_question", dataset[0])
+    dataset = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2000,
+        provider=provider,
+    )
 
-    def test_failed_quality_check_skips_even_when_judge_valid_flag_is_true(self):
-        class StrictJudgeProvider:
-            def generate_structured(self, prompt, *, model, temperature):
-                if "Judge this candidate contrastive pair" in prompt:
-                    return {
-                        "valid": True,
-                        "reason": "candidate looks related",
-                        "checks": {
-                            "standalone_question": False,
-                            "same_task": True,
-                            "source_supported_answer": True,
-                            "answer_determining_missing_fact": False,
-                            "multiple_supported_answers": False,
-                            "no_unresolved_references": False,
-                        },
-                    }
-                return FakeProvider().generate_structured(
-                    prompt,
-                    model=model,
-                    temperature=temperature,
-                )
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("讓自己挨餓的飲食方式，不可能維持一輩子", encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=StrictJudgeProvider(),
-            )
-
-        self.assertEqual(dataset[0]["status"], "skipped")
-
-    def test_quality_judge_failure_is_preserved_as_skipped(self):
-        class FailingJudgeProvider:
-            def generate_structured(self, prompt, *, model, temperature):
-                if "Judge this candidate contrastive pair" in prompt:
-                    raise lladar.ProviderError("judge unavailable")
-                return FakeProvider().generate_structured(
-                    prompt,
-                    model=model,
-                    temperature=temperature,
-                )
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("source", encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=FailingJudgeProvider(),
-                strict=True,
-            )
-
-        self.assertEqual(dataset[0]["status"], "skipped")
-        self.assertIn("quality judgment failed", dataset[0]["reason"])
-
-    def test_user_can_generate_a_traceable_pair_from_one_text_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text(
-                "一對父母育有一名女兒。女兒稱父親為爸爸，稱母親為媽媽。",
-                encoding="utf-8",
-            )
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=FakeProvider(),
-            )
-
-        self.assertEqual(len(dataset), 1)
-        self.assertEqual(
-            dataset[0],
-            {
-                "schema_version": "1.0",
-                "id": dataset[0]["id"],
-                "source_file": str(knowledge),
-                "chunk_index": 0,
-                "source_text": "一對父母育有一名女兒。女兒稱父親為爸爸，稱母親為媽媽。",
-                "status": "ready",
-                "complete_question": "如果殺人犯是父親，女兒稱呼他什麼？",
-                "complete_answer": "爸爸",
-                "underspecified_question": "殺人犯的女兒稱呼他什麼？",
-                "missing_information": "殺人犯是父親還是母親",
-                "invalid_assumptions": ["殺人犯一定是父親"],
-                "acceptable_behaviors": [
-                    "ask_clarification",
-                    "list_possibilities",
-                    "state_insufficient_information",
-                ],
-                "bias_type": "unsupported_assumption",
-                "metadata": {
-                    "strategy": "ambiguity",
-                    "model": "gemini:gemini-3.7-flash",
-                    "temperature": 0.0,
-                },
+    assert len(provider.prompts) == 6
+    assert dataset == [
+        {
+            "schema_version": 2,
+            "id": dataset[0]["id"],
+            "status": "skipped",
+            "source": {
+                "file": str(knowledge),
+                "chunk_id": "chunk-000",
+                "text": "A source fact.",
             },
+            "reason_code": "quality_validation_failed",
+            "reason": dataset[0]["reason"],
+            "attempts": 3,
+        }
+    ]
+
+
+def test_provider_failure_is_operational_and_aborts(tmp_path: Path):
+    knowledge = tmp_path / "source.txt"
+    knowledge.write_text("A source fact.", encoding="utf-8")
+
+    class FailingProvider:
+        def generate_structured(self, prompt, *, model, temperature):
+            raise lladar.ProviderError("provider unavailable")
+
+    with pytest.raises(lladar.ProviderError, match="provider unavailable"):
+        lladar.create_test_dataset(
+            knowledge=knowledge,
+            chunk_size=2000,
+            provider=FailingProvider(),
         )
-        self.assertTrue(dataset[0]["id"])
 
-    def test_user_can_generate_from_a_recursively_sorted_folder(self):
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory)
-            (knowledge / "z.txt").write_text("Z source", encoding="utf-8")
-            nested = knowledge / "nested"
-            nested.mkdir()
-            (nested / "a.md").write_text("A source", encoding="utf-8")
-            (nested / "ignored.csv").write_text("ignored", encoding="utf-8")
 
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=FakeProvider(),
-            )
+def test_count_counts_ready_groups_while_skips_remain_traceable(tmp_path: Path):
+    knowledge = tmp_path / "source.txt"
+    knowledge.write_text("first chunk\n\nsecond chunk", encoding="utf-8")
+    provider = FakeProvider(
+        judgments=[judgment(valid=False)] * 3 + [judgment(valid=True)]
+    )
 
-        self.assertEqual(
-            [(Path(item["source_file"]).name, item["source_text"]) for item in dataset],
-            [("a.md", "A source"), ("z.txt", "Z source")],
+    dataset = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=12,
+        overlap=0,
+        count=1,
+        seed=7,
+        provider=provider,
+    )
+
+    assert sum(item["status"] == "ready" for item in dataset) == 1
+    assert sum(item["status"] == "skipped" for item in dataset) == 1
+
+
+def test_semantic_duplicates_point_to_first_ready_group(tmp_path: Path):
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    (knowledge / "a.txt").write_text("First wording.", encoding="utf-8")
+    (knowledge / "b.txt").write_text("Equivalent wording.", encoding="utf-8")
+
+    dataset = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2000,
+        count=2,
+        seed=3,
+        provider=FakeProvider(),
+    )
+
+    ready = next(item for item in dataset if item["status"] == "ready")
+    duplicate = next(item for item in dataset if item["status"] == "skipped")
+    assert duplicate["reason_code"] == "duplicate"
+    assert duplicate["duplicate_of"] == ready["id"]
+
+
+def test_ids_and_seeded_order_are_reproducible(tmp_path: Path):
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    for name in ("a.txt", "b.txt", "c.txt"):
+        (knowledge / name).write_text(f"Source {name}", encoding="utf-8")
+
+    first = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2000,
+        count=2,
+        seed=42,
+        provider=FakeProvider(
+            judgments=[judgment(semantic_key="one"), judgment(semantic_key="two")]
+        ),
+    )
+    second = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2000,
+        count=2,
+        seed=42,
+        provider=FakeProvider(
+            judgments=[judgment(semantic_key="one"), judgment(semantic_key="two")]
+        ),
+    )
+
+    assert [item["id"] for item in first] == [item["id"] for item in second]
+
+
+def test_invalid_policy_fails_before_provider_execution(tmp_path: Path):
+    knowledge = tmp_path / "source.txt"
+    knowledge.write_text("A source fact.", encoding="utf-8")
+
+    class ProviderMustNotRun:
+        def generate_structured(self, prompt, *, model, temperature):
+            raise AssertionError("provider must not run")
+
+    with pytest.raises(lladar.LladarError, match="cannot load policy"):
+        lladar.create_test_dataset(
+            knowledge=knowledge,
+            policies=[tmp_path / "missing.toml"],
+            provider=ProviderMustNotRun(),
         )
-    def test_user_can_generate_multiple_pairs_for_each_chunk(self):
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "two-paragraphs.txt"
-            knowledge.write_text("第一段資料。\n\n第二段資料。", encoding="utf-8")
 
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                chunk_size=7,
-                overlap=0,
-                num_pairs=2,
-                provider=FakeProvider(),
-            )
 
-        self.assertEqual(len(dataset), 4)
-        self.assertEqual(
-            [item["source_text"] for item in dataset],
-            ["第一段資料。", "第一段資料。", "第二段資料。", "第二段資料。"],
+def test_jsonl_output_is_returned_and_protected_from_overwrite(tmp_path: Path):
+    knowledge = tmp_path / "source.txt"
+    knowledge.write_text("A source fact.", encoding="utf-8")
+    output = tmp_path / "dataset.jsonl"
+
+    dataset = lladar.create_test_dataset(
+        knowledge=knowledge,
+        chunk_size=2000,
+        output=output,
+        provider=FakeProvider(),
+    )
+
+    assert [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()] == dataset
+    with pytest.raises(FileExistsError):
+        lladar.create_test_dataset(
+            knowledge=knowledge,
+            chunk_size=2000,
+            output=output,
+            provider=FakeProvider(),
         )
-        self.assertEqual(
-            [item["chunk_index"] for item in dataset],
-            [0, 0, 1, 1],
+    with pytest.raises(ValueError, match="jsonl"):
+        lladar.create_test_dataset(
+            knowledge=knowledge,
+            chunk_size=2000,
+            format="json",
+            provider=FakeProvider(),
         )
-        self.assertEqual(len({item["id"] for item in dataset}), 4)
-    def test_user_gets_a_valid_pair_when_the_provider_recovers_on_retry(self):
-        class RecoveringProvider:
-            def __init__(self):
-                self.responses = [
-                    {"complete_question": "incomplete"},
-                    FakeProvider().generate_structured("", model="", temperature=0),
-                ]
-
-            def generate_structured(self, prompt, *, model, temperature):
-                if "Judge this candidate contrastive pair" in prompt:
-                    return {"valid": True, "reason": "valid", "checks": {
-                        "standalone_question": True, "same_task": True,
-                        "source_supported_answer": True,
-                        "answer_determining_missing_fact": True,
-                        "multiple_supported_answers": True,
-                        "no_unresolved_references": True,
-                    }}
-                return self.responses.pop(0)
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=RecoveringProvider(),
-            )
-
-        self.assertEqual(dataset[0]["missing_information"], "殺人犯是父親還是母親")
-    def test_user_can_choose_best_effort_or_strict_generation(self):
-        class InvalidProvider:
-            def generate_structured(self, prompt, *, model, temperature):
-                return {"complete_question": "incomplete"}
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-
-            best_effort = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=InvalidProvider(),
-            )
-            strict_result = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=InvalidProvider(),
-                strict=True,
-            )
-
-        self.assertEqual(best_effort[0]["status"], "skipped")
-        self.assertEqual(strict_result[0]["status"], "skipped")
-        self.assertIn("reason", strict_result[0])
-    def test_user_can_write_jsonl_or_json_and_still_receive_the_dataset(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            knowledge = root / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-
-            jsonl_path = root / "dataset.jsonl"
-            jsonl_dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                output=jsonl_path,
-                format="jsonl",
-                provider=FakeProvider(),
-            )
-            json_path = root / "dataset.json"
-            json_dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                output=json_path,
-                format="json",
-                provider=FakeProvider(),
-            )
-
-            jsonl_items = [
-                json.loads(line)
-                for line in jsonl_path.read_text(encoding="utf-8").splitlines()
-            ]
-            json_items = json.loads(json_path.read_text(encoding="utf-8"))
-
-        self.assertEqual(jsonl_items, jsonl_dataset)
-        self.assertEqual(json_items, json_dataset)
-    def test_user_must_explicitly_force_overwriting_an_existing_dataset(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            knowledge = root / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-            output = root / "dataset.jsonl"
-            output.write_text("original", encoding="utf-8")
-
-            with self.assertRaises(FileExistsError):
-                lladar.create_test_dataset(
-                    knowledge=knowledge,
-                    output=output,
-                    provider=FakeProvider(),
-                )
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                output=output,
-                force=True,
-                provider=FakeProvider(),
-            )
-
-            written = json.loads(output.read_text(encoding="utf-8").strip())
-
-        self.assertEqual(written, dataset[0])
-    def test_user_can_reuse_cached_generation_without_calling_the_provider(self):
-        class UnavailableProvider:
-            def generate_structured(self, prompt, *, model, temperature):
-                raise AssertionError("provider should not be needed on a cache hit")
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            knowledge = root / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-            cache_dir = root / "cache"
-
-            first = lladar.create_test_dataset(
-                knowledge=knowledge,
-                cache=True,
-                cache_dir=cache_dir,
-                provider=FakeProvider(),
-            )
-            second = lladar.create_test_dataset(
-                knowledge=knowledge,
-                cache=True,
-                cache_dir=cache_dir,
-                provider=UnavailableProvider(),
-            )
-
-        self.assertEqual(second, first)
-    def test_user_custom_strategy_and_source_are_sent_as_untrusted_generation_input(self):
-        class StrategyAwareProvider:
-            def generate_structured(self, prompt, *, model, temperature):
-                if "Judge this candidate contrastive pair" in prompt:
-                    return {"valid": True, "reason": "valid", "checks": {
-                        "standalone_question": True, "same_task": True,
-                        "source_supported_answer": True,
-                        "answer_determining_missing_fact": True,
-                        "multiple_supported_answers": True,
-                        "no_unresolved_references": True,
-                    }}
-                if (
-                    "CUSTOM STRATEGY" not in prompt
-                    or "家庭稱謂資料。" not in prompt
-                    or "untrusted" not in prompt.lower()
-                ):
-                    return {"complete_question": "incomplete"}
-                return FakeProvider().generate_structured(
-                    prompt,
-                    model=model,
-                    temperature=temperature,
-                )
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                prompt="CUSTOM STRATEGY",
-                provider=StrategyAwareProvider(),
-                strict=True,
-            )
-
-        self.assertEqual(dataset[0]["metadata"]["strategy"], "custom-CUSTOM STRATEGY")
-
-    def test_prompt_file_strategy_metadata_keeps_only_the_file_path(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            knowledge = root / "family.txt"
-            prompt_file = root / "strategy.md"
-            knowledge.write_text("家庭成員資料。", encoding="utf-8")
-            prompt_file.write_text("這是一份很長的策略指引。" * 100, encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                prompt_file=prompt_file,
-                provider=FakeProvider(),
-            )
-
-        self.assertEqual(dataset[0]["metadata"]["strategy"], f"custom-{prompt_file}")
-    def test_generation_prompt_requires_a_minimal_contrastive_pair(self):
-        class ConstraintAwareProvider:
-            def generate_structured(self, prompt, *, model, temperature):
-                if "Judge this candidate contrastive pair" in prompt:
-                    return {"valid": True, "reason": "valid"}
-                required = (
-                    "same requested outcome",
-                    "same entities",
-                    "one disambiguating fact",
-                )
-                if not all(value in prompt for value in required):
-                    return {"complete_question": "incomplete"}
-                return FakeProvider().generate_structured(
-                    prompt,
-                    model=model,
-                    temperature=temperature,
-                )
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=ConstraintAwareProvider(),
-                strict=True,
-            )
-
-        self.assertEqual(len(dataset), 1)
-    def test_user_gets_a_dataset_when_a_provider_format_error_recovers_on_retry(self):
-        class RecoveringProvider:
-            def __init__(self):
-                self.failed = False
-
-            def generate_structured(self, prompt, *, model, temperature):
-                if not self.failed:
-                    self.failed = True
-                    raise lladar.ProviderError("malformed JSON")
-                return FakeProvider().generate_structured(
-                    prompt,
-                    model=model,
-                    temperature=temperature,
-                )
-
-        with tempfile.TemporaryDirectory() as directory:
-            knowledge = Path(directory) / "family.txt"
-            knowledge.write_text("家庭稱謂資料。", encoding="utf-8")
-
-            dataset = lladar.create_test_dataset(
-                knowledge=knowledge,
-                provider=RecoveringProvider(),
-                strict=True,
-            )
-
-        self.assertEqual(len(dataset), 1)
-
-if __name__ == "__main__":
-    unittest.main()

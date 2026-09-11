@@ -11,6 +11,10 @@ def test_skill_install_list_and_uninstall_for_project_targets(tmp_path, monkeypa
         skill = tmp_path / directory / "skills" / "lladar-agent-evaluation"
         assert (skill / "SKILL.md").is_file()
         assert (skill / ".lladar-skill-install.json").is_file()
+        assert "schema-v2" in (skill / "SKILL.md").read_text(encoding="utf-8")
+        assert "schema_version\":2" in (skill / "references" / "answer-schema.md").read_text(
+            encoding="utf-8"
+        )
 
     assert main(["skill", "list"]) == 0
     assert "codex:" in capsys.readouterr().out
