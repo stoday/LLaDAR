@@ -13,6 +13,7 @@ from .exceptions import LladarError, ProviderError
 from .providers import LLMProvider
 from .progress import ProgressReporter
 from .runner import AkashaAdapterController, AdapterController, run_agent
+from .interfaces import NeedsConfirmation
 from .skill import SkillError, install_skill, list_skills, uninstall_skill
 
 
@@ -523,29 +524,49 @@ def build_parser() -> argparse.ArgumentParser:
         "run-agent",
         help="Run a project agent against a schema-v2 LLaDAR test dataset.",
         description=(
-            "Copy a project to a managed .lladar/runs workspace, adapt the copy with Akasha "
-            "only when its entrypoint lacks LLADAR_QUESTION, and produce id-keyed answers."
+            "Discover project input/output with a coding agent, verify a generated adapter, "
+            "and produce id-keyed answers. Only DATASET is required when run from "
+            "the target project directory. Supply --entrypoint for the legacy explicit mode."
         ),
         formatter_class=_HelpFormatter,
     )
     runner.add_argument("dataset", metavar="DATASET", help="Schema-v2 LLaDAR test dataset JSONL.")
-    runner.add_argument("--project", required=True, metavar="PATH", help="Project directory to copy.")
+    runner.add_argument("--project", default=".", metavar="PATH", help="Project directory to copy. Default: current directory (.).")
     runner.add_argument(
         "--entrypoint",
-        required=True,
         metavar="PATH",
-        help="Project-relative Python entrypoint or a path inside the project.",
+        help="Optional explicit Python entrypoint. Default: automatic adapter discovery.",
     )
-    runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH")
-    runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL")
-    runner.add_argument("--env-file", default=".env", metavar="PATH")
-    runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file.")
+    runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH", help="Answer JSONL path. Default: qa-results.jsonl.")
+    runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL", help=f"Adapter discovery model. Default: {DEFAULT_MODEL}.")
+    runner.add_argument("--env-file", default=".env", metavar="PATH", help="Credential file. Default: .env.")
+    runner.add_argument("--target-python", metavar="PATH", help="Separate target interpreter. Default: project .venv; never LLaDAR's environment.")
+    runner.add_argument("--timeout", type=float, default=120, help="Seconds allowed per adapter/target execution. Default: 120.")
+    runner.add_argument("--max-tool-calls", type=int, default=100, help="Automatic discovery tool-call budget. Default: 100.")
+    runner.add_argument("--intent", default="", help="Public feature to test, in ordinary language. Default: no additional intent.")
+    runner.add_argument("--graphify", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use an optional Graphify code graph first, with source fallback on failure. Default: enabled.")
+    runner.add_argument("--graphify-python", metavar="PATH", help="Independent Graphify interpreter. Default: existing uv tool installation.")
+    runner.add_argument("--service-url", metavar="URL", help="Explicit existing test service URL; never start/stop that service. Default: none.")
+    runner.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=None,
+                        help="Ask about ambiguous interfaces. Default: detect an interactive terminal.")
+    runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file. Default: disabled.")
     runner.add_argument(
         "--verbose",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Show timestamped run progress and errors on stderr. Default: enabled.",
     )
+    resume = commands.add_parser("resume-agent", help="Resume a run waiting for public-interface confirmation.")
+    resume.add_argument("run", metavar="RUN", help="Saved .lladar/runs/<run> directory.")
+    decision = resume.add_mutually_exclusive_group()
+    decision.add_argument("--candidate", metavar="ID", help="Select an evidenced public interface from the saved proposal.")
+    decision.add_argument("--clarification", metavar="TEXT", help="Add intent and redo read-only discovery.")
+    resume.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=None)
+    resume.add_argument("--env-file", default=None, metavar="PATH", help="Optional credential file override; otherwise reuse saved path.")
+    resume.add_argument("--service-url", metavar="URL", help="Supply an existing test service and rediscover its contract.")
+    resume.add_argument("--force", action="store_true", help="Explicitly allow replacing an existing answer file.")
+    resume.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
     skill = commands.add_parser(
         "skill",
         help="Install and manage the LLaDAR agent-evaluation skill.",
@@ -573,6 +594,10 @@ def main(
     adapter_controller: AdapterController | None = None,
     runs_root: str | Path | None = None,
 ) -> int:
+    # Use the same Unicode encoding for interactive prompts and redirected logs.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = build_parser().parse_args(raw_argv)
     reserved_default_output: Path | None = None
@@ -624,6 +649,26 @@ def main(
                 f"at {args.output}"
             )
             return 0
+        if args.command == "resume-agent":
+            from .run_context import load_context
+
+            if args.service_url and args.candidate:
+                raise ValueError('--service-url changes the contract; use clarification instead of --candidate')
+            saved = load_context(args.run)
+            completed = run_agent(
+                saved["dataset"], saved["output"], project=saved["project"],
+                model=saved["model"], target_python=saved["target_python"],
+                env_file=args.env_file if args.env_file is not None else saved["env_file"],
+                timeout=saved["timeout"], max_tool_calls=saved["max_tool_calls"],
+                intent=saved["intent"], interactive=args.interactive,
+                graphify=saved.get("graphify", True), graphify_python=saved.get("graphify_python"),
+                service_url=args.service_url or saved.get('service_url'),
+                resume_run=args.run, candidate_id=args.candidate,
+                clarification=args.clarification or ('Use the explicitly supplied existing test service.' if args.service_url else None),
+                force=args.force, verbose=args.verbose,
+            )
+            print(f"Answered {completed} session(s) at {saved['output']}")
+            return 0
         if args.command == "run-agent":
             completed = run_agent(
                 args.dataset,
@@ -636,6 +681,14 @@ def main(
                 force=args.force,
                 verbose=args.verbose,
                 runs_root=runs_root,
+                model=args.model,
+                target_python=args.target_python,
+                timeout=args.timeout,
+                max_tool_calls=args.max_tool_calls,
+                interactive=args.interactive,
+                intent=args.intent,
+                graphify=args.graphify, graphify_python=args.graphify_python,
+                service_url=args.service_url,
             )
             print(f"Answered {completed} session(s) at {args.output}")
             return 0
@@ -687,6 +740,9 @@ def main(
             trace_console=args.trace_console,
             trace_root=args.trace_root,
         )
+    except NeedsConfirmation as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except SkillError as error:
         _discard_empty_reservation(reserved_default_output)
         print(f"lladar: {error}", file=sys.stderr)
@@ -695,7 +751,7 @@ def main(
         _discard_empty_reservation(reserved_default_output)
         print("lladar: provider generation failed", file=sys.stderr)
         return 2
-    except (LladarError, FileExistsError, OSError, ValueError) as error:
+    except (LladarError, FileExistsError, OSError, ValueError, RuntimeError) as error:
         _discard_empty_reservation(reserved_default_output)
         print(f"lladar: {error}", file=sys.stderr)
         return 2

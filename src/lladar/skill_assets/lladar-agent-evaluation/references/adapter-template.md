@@ -1,6 +1,6 @@
 # Custom batch-adapter template
 
-Use this only when `lladar run-agent` cannot execute the project's established
+Use this only when automatic discovery with `lladar run-agent --project` cannot execute the project's established
 Agent seam. Replace `build_agent` and `answer` with the project's real lifecycle;
 keep dataset expansion and output metadata unchanged.
 

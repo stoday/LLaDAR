@@ -269,7 +269,7 @@ def test_copy_project_creates_managed_workspace_without_secrets_or_state(tmp_pat
     assert workspace.parent.parent == tmp_path / ".lladar" / "runs"
 
 
-def test_run_agent_project_mode_executes_each_question_in_a_copy(tmp_path):
+def test_run_agent_project_mode_executes_each_question_in_a_copy(tmp_path, isolated_target_python):
     project = tmp_path / "project"
     project.mkdir()
     entrypoint = project / "main.py"
@@ -287,6 +287,7 @@ def test_run_agent_project_mode_executes_each_question_in_a_copy(tmp_path):
         dataset,
         answers,
         project=project,
+        target_python=isolated_target_python,
         entrypoint="main.py",
         adapter=NoOpAdapter(),
         runs_root=tmp_path / ".lladar" / "runs",
@@ -302,7 +303,7 @@ def test_run_agent_project_mode_executes_each_question_in_a_copy(tmp_path):
     assert entrypoint.read_text(encoding="utf-8") == original
 
 
-def test_run_agent_normalizes_an_entrypoint_path_inside_the_original_project(tmp_path):
+def test_run_agent_normalizes_an_entrypoint_path_inside_the_original_project(tmp_path, isolated_target_python):
     project = tmp_path / "project"
     project.mkdir()
     original_entrypoint = project / "main.py"
@@ -323,6 +324,7 @@ def test_run_agent_normalizes_an_entrypoint_path_inside_the_original_project(tmp
         dataset,
         answers,
         project=project,
+        target_python=isolated_target_python,
         entrypoint=original_entrypoint,
         adapter=CopyCheckingAdapter(),
         runs_root=tmp_path / ".lladar" / "runs",
@@ -332,7 +334,7 @@ def test_run_agent_normalizes_an_entrypoint_path_inside_the_original_project(tmp
 
 
 def test_run_agent_accepts_a_cwd_relative_project_prefixed_entrypoint(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, isolated_target_python
 ):
     project = tmp_path / "example_project"
     project.mkdir()
@@ -352,6 +354,7 @@ def test_run_agent_accepts_a_cwd_relative_project_prefixed_entrypoint(
         "dataset.jsonl",
         "answers.jsonl",
         project="example_project",
+        target_python=isolated_target_python,
         entrypoint="example_project/main.py",
         adapter=MustNotAdapt(),
         runs_root=tmp_path / ".lladar" / "runs",
@@ -361,7 +364,7 @@ def test_run_agent_accepts_a_cwd_relative_project_prefixed_entrypoint(
     assert len(read_jsonl(answers)) == 4
 
 
-def test_run_agent_injects_env_file_without_copying_it(tmp_path):
+def test_run_agent_injects_env_file_without_copying_it(tmp_path, isolated_target_python):
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.py").write_text(
@@ -381,6 +384,7 @@ def test_run_agent_injects_env_file_without_copying_it(tmp_path):
         dataset,
         answers,
         project=project,
+        target_python=isolated_target_python,
         entrypoint="main.py",
         adapter=NoOpAdapter(),
         env_file=env_file,
@@ -390,7 +394,7 @@ def test_run_agent_injects_env_file_without_copying_it(tmp_path):
     assert {record["answer"] for record in read_jsonl(answers)} == {"from-env-file"}
 
 
-def test_run_agent_does_not_leave_answer_artifact_when_adaptation_fails(tmp_path):
+def test_run_agent_does_not_leave_answer_artifact_when_adaptation_fails(tmp_path, isolated_target_python):
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.py").write_text("print('never')\n", encoding="utf-8")
@@ -407,6 +411,7 @@ def test_run_agent_does_not_leave_answer_artifact_when_adaptation_fails(tmp_path
             dataset,
             answers,
             project=project,
+            target_python=isolated_target_python,
             entrypoint="main.py",
             adapter=FailingAdapter(),
             runs_root=tmp_path / ".lladar" / "runs",
@@ -459,7 +464,7 @@ def test_run_agent_can_disable_progress(tmp_path, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_run_agent_forces_utf8_for_unicode_agent_output(tmp_path):
+def test_run_agent_forces_utf8_for_unicode_agent_output(tmp_path, isolated_target_python):
     project = tmp_path / "project"
     project.mkdir()
     (project / "main.py").write_text("print('≈')\n", encoding="utf-8")
@@ -475,6 +480,7 @@ def test_run_agent_forces_utf8_for_unicode_agent_output(tmp_path):
         dataset,
         answers,
         project=project,
+        target_python=isolated_target_python,
         entrypoint="main.py",
         adapter=NoOpAdapter(),
         verbose=False,

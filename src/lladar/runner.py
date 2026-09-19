@@ -137,7 +137,7 @@ def resolve_project_python(project: str | Path) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    return Path(sys.executable)
+    raise ValueError("No target .venv found. Create the project's own environment and install its dependencies, or supply --target-python PATH. LLaDAR's environment is not used as a fallback.")
 
 
 def resolve_project_entrypoint(project: str | Path, entrypoint: str | Path) -> Path:
@@ -178,10 +178,21 @@ def copy_project(project: str | Path, *, runs_root: str | Path | None = None):
         "__pycache__",
         ".pytest_cache",
         ".lladar",
+        ".vibe-testing",
+        "node_modules",
         "*.pyc",
     )
+    def ignore_workspace_paths(directory, names):
+        # Do not dereference links/junctions into secrets or another checkout.
+        ignored = set(ignored_names(directory, names))
+        for name in names:
+            candidate = Path(directory) / name
+            if candidate.is_symlink() or not candidate.resolve().is_relative_to(source):
+                ignored.add(name)
+        return ignored
+
     try:
-        shutil.copytree(source, workspace, ignore=ignored_names)
+        shutil.copytree(source, workspace, ignore=ignore_workspace_paths)
         yield workspace
     finally:
         pass
@@ -249,19 +260,43 @@ def run_agent(
     force: bool = False,
     verbose: bool = True,
     runs_root: str | Path | None = None,
+    model: str = "gemini:gemini-2.5-flash",
+    target_python: str | Path | None = None,
+    timeout: float = 120,
+    max_tool_calls: int = 100,
+    interactive: bool | None = None,
+    intent: str = "",
+    graphify: bool = True,
+    graphify_python: str | Path | None = None,
+    service_url: str | None = None,
+    resume_run: str | Path | None = None,
+    candidate_id: str | None = None,
+    clarification: str | None = None,
 ) -> int:
     """Run an answer callback or project entrypoint and write id-keyed JSONL."""
     output_path = Path(output)
+    saved = None
+    if resume_run is not None:
+        from .run_context import load_context, resume_workspace
+
+        saved = load_context(resume_run)
+        if entrypoint is not None or answer is not None:
+            raise ValueError("Resume requires automatic project mode")
+        for key, value in (("dataset", dataset), ("project", project), ("output", output)):
+            if value is None or Path(value).resolve() != Path(saved[key]).resolve():
+                raise ValueError(f"Resume {key} differs from saved run")
+    elif candidate_id is not None or clarification is not None:
+        raise ValueError("Candidate selection and clarification require a paused run")
     if output_path.exists() and not force:
         raise FileExistsError(f"output already exists: {output_path}")
     if (answer is None) == (project is None):
         raise ValueError("provide exactly one of answer or project")
-    if project is not None and entrypoint is None:
-        raise ValueError("entrypoint is required when project is provided")
+    if timeout <= 0 or max_tool_calls <= 0:
+        raise ValueError("timeout and max_tool_calls must be positive")
 
     relative_entrypoint = (
         resolve_project_entrypoint(project, entrypoint)  # type: ignore[arg-type]
-        if project is not None
+        if project is not None and entrypoint is not None
         else None
     )
 
@@ -284,15 +319,61 @@ def run_agent(
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     completed = 0
-    project_python = resolve_project_python(project) if project is not None else Path(sys.executable)
+    project_python = Path(sys.executable)
+    if project is not None and cases:
+        from .target_environment import validate_target_python
+
+        project_python = (Path(target_python).absolute() if target_python is not None
+                          else resolve_project_python(project))
+        runtime = validate_target_python(project_python)
+        reporter.emit("SOURCE", f"controller_python={sys.executable}")
+        reporter.emit("SOURCE", f"target_python={project_python} target_prefix={runtime['prefix']}")
     workspace_context = (
+        resume_workspace(resume_run) if saved is not None else
         copy_project(project, runs_root=runs_root)
         if project is not None
         else _empty_context()
     )
     with workspace_context as workspace:
         adapted_entrypoint = None
-        if project is not None:
+        automatic = None
+        if project is not None and entrypoint is None and cases:
+            from .auto_adapter import AutoAdapter
+            from .interfaces import NeedsConfirmation
+
+            reporter.emit("SOURCE", f"workspace={workspace}")
+            reporter.emit("ADAPT", "Discovering project input/output and verifying an adapter")
+            automatic = AutoAdapter(
+                workspace, python=project_python, env_file=env_file, model=model,
+                timeout=timeout, max_tool_calls=max_tool_calls, verbose=verbose,
+                resume=saved is not None,
+                graphify=graphify, graphify_python=graphify_python,
+                service_url=service_url,
+            )
+            automatic.report["target_environment"] = runtime
+            if saved is not None:
+                from .interfaces import write_json
+                saved['service_url'] = automatic.service_url
+                saved['env_file'] = str(Path(env_file).resolve()) if env_file else None
+                write_json(workspace.parent / 'run-context.json', saved)
+            if saved is None:
+                from .run_context import save_context
+
+                save_context(workspace, dataset=dataset, project=project, output=output,
+                             python=project_python, env_file=env_file, model=model,
+                             timeout=timeout, max_tool_calls=max_tool_calls, intent=intent,
+                             graphify=graphify, graphify_python=graphify_python, service_url=service_url)
+            probes = list(dict.fromkeys(case["question"] for case in cases))[:2]
+            try:
+                automatic.prepare(probes, interactive=interactive, candidate_id=candidate_id,
+                                  clarification=clarification, intent=intent)
+            except NeedsConfirmation:
+                raise
+            except Exception:
+                reporter.emit("WARN", f"adapter preparation failed; evidence={automatic.evidence}")
+                raise
+            reporter.emit("ADAPT", f"verified adapter evidence={automatic.evidence}")
+        elif project is not None and entrypoint is not None and cases:
             adapted_entrypoint = workspace / relative_entrypoint  # type: ignore[operator]
             if not adapted_entrypoint.is_file():
                 raise FileNotFoundError(f"entrypoint not found: {entrypoint}")
@@ -327,6 +408,8 @@ def run_agent(
                     try:
                         if answer is not None:
                             response = answer(question)
+                        elif automatic is not None:
+                            response = automatic.answer(question, case["id"])
                         else:
                             response = _run_entrypoint(
                                 adapted_entrypoint,
@@ -334,6 +417,7 @@ def run_agent(
                                 question,
                                 python_executable=project_python,
                                 env_file=env_file,
+                                timeout=timeout,
                             )
                         result.update(
                             status="ok",
@@ -372,18 +456,13 @@ def _run_entrypoint(
     *,
     python_executable: Path,
     env_file: str | Path | None,
+    timeout: float = 120,
 ) -> str:
     if entrypoint is None:
         raise ValueError("entrypoint is required for project mode")
-    environment = os.environ.copy()
-    environment["PYTHONIOENCODING"] = "utf-8"
-    environment["PYTHONUTF8"] = "1"
-    if env_file is not None:
-        from dotenv import dotenv_values
+    from .target_environment import target_environment
 
-        for key, value in dotenv_values(env_file).items():
-            if value is not None:
-                environment.setdefault(key, value)
+    environment = target_environment(python_executable, env_file)
     environment["LLADAR_QUESTION"] = question
     completed = subprocess.run(
         [str(python_executable), str(entrypoint)],
@@ -392,7 +471,7 @@ def _run_entrypoint(
         capture_output=True,
         text=True,
         encoding="utf-8",
-        timeout=120,
+        timeout=timeout,
         check=False,
     )
     if completed.returncode != 0:

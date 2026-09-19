@@ -304,17 +304,136 @@ The schema-v2 dataset flows directly into the runner and evaluator:
 ```powershell
 lladar run-agent .\test-dataset.jsonl `
   --project .\example_project `
-  --entrypoint .\example_project\main.py `
   --output .\qa-results.jsonl
 
 lladar eval .\test-dataset.jsonl .\qa-results.jsonl `
   --output .\reports\evaluation.json
 ```
 
+From the target project directory, the shorter form uses the current directory as the project and writes `qa-results.jsonl` by default:
+
+```powershell
+lladar run-agent .\test-dataset.jsonl
+```
+
+Run `lladar run-agent --help` to see the defaults for the other options.
+
 Each ready group's original and every variant run as isolated sessions. The
 answer JSONL keeps stable case IDs and exact questions; skipped groups are not
-run. `run-agent` accepts either a project-relative entrypoint such as `main.py`
-or a path inside the project such as `.\example_project\main.py`.
+run. Without `--entrypoint`, a coding agent reads the project and generates a
+standalone adapter for its actual input and output mechanism. It tries at most two
+distinct questions, then the runner independently replays the final adapter before
+running the dataset. Reference answers and evaluation labels are not supplied to
+the coding agent. Each execution uses a fresh project copy and Python process.
+The adapter can extract answers from messages, asynchronous calls, files or a
+request-correlated database row; it must not rewrite the target's answer.
+
+Discovery and target execution can both incur model API costs. The target keeps
+its own model/provider. `--model` selects the discovery model; `--env-file` supplies
+credentials without copying `.env` into the workspace. LLaDAR's coding agent and
+the target agent must use **separate Python environments**, including in explicit
+entrypoint mode. The target's `.venv` is selected automatically;
+`--target-python PATH` selects another existing environment. Missing target
+environments fail before discovery instead of falling back to LLaDAR's Python.
+The runner checks the target's actual `sys.prefix`, rejects a shared environment
+or a venv with system packages enabled, and removes inherited `PYTHONPATH`,
+`PYTHONHOME`, user-site imports and controller activation settings. It prepends
+the target interpreter directory to PATH. Install each project's dependencies in
+its own environment; the adapter only exchanges JSON across subprocesses and
+does not require LLaDAR to be installed in the target environment.
+`--timeout 120` limits
+each execution and `--max-tool-calls 100` bounds exploration tools. Dependencies
+must already be installed. Progress goes to stderr (`--no-verbose` disables it).
+Automatic interface discovery and adapter generation use Akasha with
+`thinking=True` and `stream=True`. With `--verbose` (the default), tool calls,
+arguments, results, and available model-provided thinking summaries appear as
+the stream is consumed. Summaries depend on the provider and are not complete
+internal reasoning. Only answer chunks are assembled into the proposal JSON;
+traces stay on stderr. `--no-verbose` hides these traces while streaming continues.
+
+
+The run directory under `.lladar/runs/` preserves `adapter/adapter.py`, its hash,
+`adapter/run.json`, `adapter/audit.json`, and `adapter/observations.jsonl`, including
+failed preparation evidence. Verification means the adapter replayed successfully,
+not that its answers are correct. Project copies isolate local state but are not
+an OS security sandbox; run only trusted projects. Adapters must use local test
+storage and clean up services they start. Reports can contain target answer text
+and runtime error details; keep the run directory private.
+
+For the existing explicit mode, supply `--entrypoint main.py` or a path inside the
+project such as `--entrypoint .\example_project\main.py`. This mode retains the
+`LLADAR_QUESTION`/stdout contract and copy adaptation behavior. See
+[automatic adapter design](docs/PRD-lladar-auto-adapter.md).
+For real API results, observed limitations, and a repeatable paid acceptance run,
+see [automatic adapter verification](docs/auto-adapter-verification-20260919.md)
+and [public-interface confirmation verification](docs/interface-confirmation-verification-20260919.md).
+
+Automatic discovery now first inspects the project **without running it** and
+proposes the complete user-facing interface, with source-line evidence and its
+initialization, knowledge, tools, workflow and final output path. It must preserve
+that outer flow instead of calling a convenient inner model method. Use
+`--intent "customer chat"` to identify the public feature in ordinary language.
+
+**Code graph (enabled by default):** install `graphifyy` in a separate tool
+environment with `uv tool install graphifyy` (tested with 0.9.61), or provide
+`--graphify-python PATH` to an existing environment. LLaDAR never installs packages
+during a test. Use `--no-graphify` to disable it. Missing tools, extraction failures,
+timeouts or an oversized corpus fall back to source inspection with a visible reason.
+Each run builds a fresh, directed AST graph from its filtered source snapshot; no
+semantic model calls or target imports occur during graph construction. The graph
+records version, file hashes, parser inputs and files without extracted nodes.
+Queries return bounded neighborhoods; inferred edges and cross-service links still
+require source confirmation. The integration parses common code extensions;
+unsupported files and frontend behavior must be inspected separately.
+
+**REST services:** the adapter calls the existing public API. It starts a separate
+localhost instance on a temporary port using the project's actual startup command,
+waits for readiness, submits the real request, and extracts the final response.
+The supplied stdlib service helper retains logs and stops its own process tree on
+success, failure or adapter timeout. It does not add a test route or substitute a
+direct call to an internal agent. Python adapters can launch installed runtimes such
+as Node; target dependencies must already exist. Each request has its own instance.
+
+HTTP proposals include startup argv, readiness, request/auth/session requirements,
+answer extraction, included steps and omitted layers. Missing setup requires
+clarification, even when there is only one candidate. Named environment variable
+and executable availability can be checked without exposing credential values.
+Source-specific SSE/job polling can be generated, but the live acceptance fixture
+currently covers synchronous JSON through Node into a real Python agent.
+
+To use an existing test server, explicitly provide `--service-url http://localhost:8000`.
+The adapter neither starts nor stops that service. URL credentials/query/fragment
+are rejected; use the environment file for authentication. A URL discovered only
+in source is not authorization to call a deployed service. A paused run can receive
+`resume-agent RUN --service-url URL`, which re-explores and persists the new contract.
+Graph settings are retained across resumes. Detailed validation is recorded in
+[graph and REST verification](docs/graph-rest-verification-20260919.md).
+
+When multiple public interfaces or unresolved questions remain, the CLI displays
+the candidates and waits for a choice in an interactive terminal. Enter a number
+or candidate ID, `c` to clarify and rediscover, or `q` to save and leave. EOF or
+Ctrl+C at the prompt also saves. `--interactive` explicitly enables prompts;
+`--no-interactive` never waits. By default both stdin and stderr must be terminals.
+Noninteractive ambiguity saves `needs_confirmation` and exits with code **3**,
+without generating an adapter, calling the target, or creating the answer file.
+
+Continue in a new process using the printed run directory:
+
+```powershell
+lladar resume-agent .\.lladar\runs\<run> --candidate <id-from-proposal>
+# Or clarify the intended feature and repeat read-only discovery:
+lladar resume-agent .\.lladar\runs\<run> --clarification "Test customer chat, not ticket processing"
+```
+
+Omit both options to open the terminal selection menu. The saved dataset, output,
+model and interpreter are reused. `--env-file` may override the saved credential
+file path; no credential values are stored in the continuation state. Changing
+the original project, saved workspace or dataset invalidates the pause. Existing
+answers remain protected unless `--force` is explicit. Only paused runs resume;
+concurrent continuations are rejected. After a hard process crash, an abandoned
+`.resume.lock` must be inspected and removed only after confirming no continuation
+is running. Source evidence supports selection but cannot prove that no other
+public interface exists. Human selection and adapter replay are separate checks.
 
 `eval` reports LLaDAR Bias-Free Score, original accuracy, scoring coverage,
 clarification/error rates, omission and peer-cue breakdowns, policy-value and
@@ -341,3 +460,10 @@ Runner and evaluator behavior is specified in
 ## License
 
 LLaDAR is released under the [MIT License](LICENSE).
+
+## CI and live LLM acceptance
+
+Branch pushes and PRs run pytest; eligible runs also exercise real Gemini-based
+vibe-testing. Version-tag publishing requires both to pass. See
+[CI setup and coverage](docs/CI.md) for the required `GEMINI_API_KEY` secret,
+model configuration, fork PR behavior, and acceptance boundaries.
