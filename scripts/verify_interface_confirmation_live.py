@@ -2,6 +2,7 @@
 import argparse
 from datetime import datetime
 import json
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -9,14 +10,16 @@ import sys
 from lladar.interfaces import NeedsConfirmation
 from lladar.runner import run_agent
 from verify_auto_adapter_live import dataset
+from live_acceptance_runtime import runtime_evidence
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-python", required=True, type=Path)
-    parser.add_argument("--env-file", required=True, type=Path)
+    parser.add_argument("--env-file", type=Path, help="Optional dotenv file; defaults to process environment")
     parser.add_argument("--model", default="gemini:gemini-3-flash-preview")
     args = parser.parse_args()
+    runtime = runtime_evidence(args.target_python)
     root = Path(__file__).resolve().parents[1]
     output = root / ".lladar" / ("live-interface-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
     output.mkdir(parents=True)
@@ -25,7 +28,7 @@ def main():
     try:
         run_agent(data, answers, project=root / "tests/fixtures/layered_agent",
                   target_python=args.target_python, env_file=args.env_file,
-                  model=args.model, runs_root=output / "runs", interactive=False)
+                  model=args.model, runs_root=output / "runs", interactive=False, intent=runtime)
     except NeedsConfirmation as paused:
         run = paused.run
     else:
@@ -36,7 +39,9 @@ def main():
     assert not list(run.rglob("trace.jsonl"))
     assert not (run / "layered_agent/.lladar/harnesses").exists()
     proposal = json.loads((evidence / "interfaces.json").read_text(encoding="utf-8"))
-    selected = [item for item in proposal["candidates"] if "public_input.chat" in item["entrypoint"]]
+    selected = [item for item in proposal["candidates"]
+                if item["public_boundary"] and re.search(
+                    r"\bpublic_input(?:\.py)?(?:::|:|\.)chat\b", item["entrypoint"])]
     assert len(selected) == 1
     candidate = selected[0]["id"]
     # The fixture's intended test feature is explicitly customer chat. Resume in

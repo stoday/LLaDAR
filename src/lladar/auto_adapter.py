@@ -131,6 +131,28 @@ def _json_object(raw: str) -> dict:
     raise ValueError("Coding agent did not return an adapter proposal JSON object")
 
 
+def _stream_answer(events) -> str:
+    """Consume Akasha's stream without mixing thoughts/tool results into JSON."""
+    parts = []
+    for event in events:
+        if isinstance(event, str):
+            parts.append(event)
+        elif isinstance(event, dict):
+            if event.get("type") == "answer":
+                data = event.get("data")
+                if not isinstance(data, str):
+                    raise ValueError("Coding agent answer chunks must be strings")
+                parts.append(data)
+            elif event.get("type") == "error":
+                raise RuntimeError("Coding agent stream failed: " + str(event.get("data")))
+        else:
+            raise ValueError("Unsupported coding agent stream event")
+    answer = "".join(parts)
+    if not answer.strip():
+        raise ValueError("Coding agent stream returned no answer")
+    return answer
+
+
 class AutoAdapter:
     def __init__(self, workspace: Path, *, python: Path, env_file: str | Path | None,
                  model: str, timeout: float = 120, max_tool_calls: int = 100,
@@ -364,10 +386,11 @@ class AutoAdapter:
                             discovery = akasha.agents(
                                 model=self.model, env_file=self.env_file, tools=tools[:5],
                                 max_input_tokens=24000, max_output_tokens=8192,
-                                max_round=30, verbose=False, keep_logs=False)
-                            response = discovery(DISCOVERY_PROMPT + graph_context + "\nUser intent: " + intent
+                                max_round=30, thinking=True, stream=True,
+                                verbose=self.verbose, keep_logs=False)
+                            response = _stream_answer(discovery(DISCOVERY_PROMPT + graph_context + "\nUser intent: " + intent
                                                  + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
-                                                 + correction)
+                                                 + correction))
                         try:
                             plan = validate_plan(parse_object(str(response), "candidates"), self.explorer, service_url=self.service_url)
                             break
@@ -401,14 +424,15 @@ class AutoAdapter:
             with redirect_stdout(sys.stderr):
                 agent = akasha.agents(model=self.model, env_file=self.env_file, tools=tools,
                                       max_input_tokens=24000, max_output_tokens=8192,
-                                      max_round=30, verbose=False, keep_logs=False)
-                response = agent(CODING_PROMPT + "\nSELECTED PUBLIC INTERFACE: "
+                                      max_round=30, thinking=True, stream=True,
+                                      verbose=self.verbose, keep_logs=False)
+                response = _stream_answer(agent(CODING_PROMPT + "\nSELECTED PUBLIC INTERFACE: "
                                  + json.dumps(selected, ensure_ascii=False)
                                  + "\nYou MUST submit through this outer interface and preserve its full flow. "
                                    "Do not bypass it for an inner model/agent method. If unavailable, report a blocker."
                                  + "\nUser intent: " + intent
                                  + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
-                                 + "\nProbe questions: " + json.dumps(probes, ensure_ascii=False))
+                                 + "\nProbe questions: " + json.dumps(probes, ensure_ascii=False)))
             proposal = _json_object(str(response))
             self.report["proposal"] = proposal
             if proposal.get("blockers") or not proposal.get("harness"):

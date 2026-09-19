@@ -48,13 +48,16 @@ Use Traditional Chinese for labels, explanations and questions.
 For transport=http, service MUST be an object with:
 command: argv array for the original server (use {python}, {host}, {port} placeholders),
 readiness_path: existing local health/readiness URL path,
-request: actual method/path/body/auth/session requirements,
-response: final answer field, SSE completion rule, or job polling contract,
+request: a nonempty STRING describing the actual method/path/body/auth/session requirements,
+response: a nonempty STRING describing the final answer field, SSE completion rule, or job polling contract,
 coverage: nonempty array of included workflow steps,
 excluded: array of omitted layers or features,
 missing: array of required startup/auth/contract details that remain unknown.
 Use command=[] or readiness_path='' when unknown and explain in missing. Such
 candidates MUST pause for clarification before adapter generation, even if unique.
+The request and response fields MUST be strings, never nested JSON objects or arrays.
+For example, describe a body schema inside the request string rather than making
+request an object with method/path/body keys.
 Do not invent startup commands, health routes, credentials, or request schemas.
 service.mode defaults to managed. Only if the user supplied an authorized service
 URL, mode=existing and base_url=that EXACT URL are allowed; command may be [], and
@@ -111,7 +114,7 @@ def validate_plan(plan: dict, explorer, *, service_url: str | None = None) -> di
                     raise ValueError(f"Service requires {key} string array")
             for key in ("readiness_path", "request", "response"):
                 if not isinstance(service.get(key), str):
-                    raise ValueError(f"Service requires {key} string")
+                    raise ValueError(f"Service requires {key} string; got {type(service.get(key)).__name__}")
             existing = service.get('mode', 'managed') == 'existing'
             if service.get('mode', 'managed') not in {'managed', 'existing'}:
                 raise ValueError('Service mode must be managed or existing')

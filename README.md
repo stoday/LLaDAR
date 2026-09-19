@@ -336,6 +336,13 @@ does not require LLaDAR to be installed in the target environment.
 `--timeout 120` limits
 each execution and `--max-tool-calls 100` bounds exploration tools. Dependencies
 must already be installed. Progress goes to stderr (`--no-verbose` disables it).
+Automatic interface discovery and adapter generation use Akasha with
+`thinking=True` and `stream=True`. With `--verbose` (the default), tool calls,
+arguments, results, and available model-provided thinking summaries appear as
+the stream is consumed. Summaries depend on the provider and are not complete
+internal reasoning. Only answer chunks are assembled into the proposal JSON;
+traces stay on stderr. `--no-verbose` hides these traces while streaming continues.
+
 
 The run directory under `.lladar/runs/` preserves `adapter/adapter.py`, its hash,
 `adapter/run.json`, `adapter/audit.json`, and `adapter/observations.jsonl`, including
@@ -445,3 +452,10 @@ Runner and evaluator behavior is specified in
 ## License
 
 LLaDAR is released under the [MIT License](LICENSE).
+
+## CI and live LLM acceptance
+
+Branch pushes and PRs run pytest; eligible runs also exercise real Gemini-based
+vibe-testing. Version-tag publishing requires both to pass. See
+[CI setup and coverage](docs/CI.md) for the required `GEMINI_API_KEY` secret,
+model configuration, fork PR behavior, and acceptance boundaries.
