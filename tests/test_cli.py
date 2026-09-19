@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from lladar.cli import _reserve_default_dataset_output, main
+from lladar.cli import _reserve_default_dataset_output, build_parser, main
 from lladar.validation import QUALITY_CHECKS
 
 
@@ -353,6 +353,22 @@ def test_run_agent_help_exposes_verbose_toggle(capsys):
     assert "--verbose" in help_text
     assert "--no-verbose" in help_text
     assert "Schema-v2 LLaDAR test dataset JSONL" in help_text
-    assert "omit for automatic adapter" in help_text
+    assert "Default: automatic adapter" in help_text
     assert "--target-python" in help_text
     assert "--max-tool-calls" in help_text
+    assert "Only DATASET is required" in help_text
+    assert "Default: current directory (.)" in help_text
+    assert "Default: qa-results.jsonl" in help_text
+    assert "Default: gemini:gemini-2.5-flash" in help_text
+    assert "Default: 120" in help_text
+    assert "Default: 100" in help_text
+
+
+def test_run_agent_uses_current_project_and_documented_defaults():
+    args = build_parser().parse_args(["run-agent", "dataset.jsonl"])
+
+    assert args.project == "."
+    assert args.output == "qa-results.jsonl"
+    assert args.model == "gemini:gemini-2.5-flash"
+    assert args.timeout == 120
+    assert args.max_tool_calls == 100

@@ -310,6 +310,14 @@ lladar eval .\test-dataset.jsonl .\qa-results.jsonl `
   --output .\reports\evaluation.json
 ```
 
+From the target project directory, the shorter form uses the current directory as the project and writes `qa-results.jsonl` by default:
+
+```powershell
+lladar run-agent .\test-dataset.jsonl
+```
+
+Run `lladar run-agent --help` to see the defaults for the other options.
+
 Each ready group's original and every variant run as isolated sessions. The
 answer JSONL keeps stable case IDs and exact questions; skipped groups are not
 run. Without `--entrypoint`, a coding agent reads the project and generates a

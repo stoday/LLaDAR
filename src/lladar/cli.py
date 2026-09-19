@@ -525,31 +525,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run a project agent against a schema-v2 LLaDAR test dataset.",
         description=(
             "Discover project input/output with a coding agent, verify a generated adapter, "
-            "and produce id-keyed answers. Supply --entrypoint for the legacy explicit mode."
+            "and produce id-keyed answers. Only DATASET is required when run from "
+            "the target project directory. Supply --entrypoint for the legacy explicit mode."
         ),
         formatter_class=_HelpFormatter,
     )
     runner.add_argument("dataset", metavar="DATASET", help="Schema-v2 LLaDAR test dataset JSONL.")
-    runner.add_argument("--project", required=True, metavar="PATH", help="Project directory to copy.")
+    runner.add_argument("--project", default=".", metavar="PATH", help="Project directory to copy. Default: current directory (.).")
     runner.add_argument(
         "--entrypoint",
         metavar="PATH",
-        help="Optional explicit Python entrypoint; omit for automatic adapter discovery.",
+        help="Optional explicit Python entrypoint. Default: automatic adapter discovery.",
     )
-    runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH")
-    runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL")
-    runner.add_argument("--env-file", default=".env", metavar="PATH")
-    runner.add_argument("--target-python", metavar="PATH", help="Separate target interpreter; defaults to project .venv. Never falls back to LLaDAR's environment.")
-    runner.add_argument("--timeout", type=float, default=120, help="Seconds allowed per adapter/target execution.")
-    runner.add_argument("--max-tool-calls", type=int, default=100, help="Automatic discovery tool-call budget.")
-    runner.add_argument("--intent", default="", help="Public feature to test, in ordinary language.")
+    runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH", help="Answer JSONL path. Default: qa-results.jsonl.")
+    runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL", help=f"Adapter discovery model. Default: {DEFAULT_MODEL}.")
+    runner.add_argument("--env-file", default=".env", metavar="PATH", help="Credential file. Default: .env.")
+    runner.add_argument("--target-python", metavar="PATH", help="Separate target interpreter. Default: project .venv; never LLaDAR's environment.")
+    runner.add_argument("--timeout", type=float, default=120, help="Seconds allowed per adapter/target execution. Default: 120.")
+    runner.add_argument("--max-tool-calls", type=int, default=100, help="Automatic discovery tool-call budget. Default: 100.")
+    runner.add_argument("--intent", default="", help="Public feature to test, in ordinary language. Default: no additional intent.")
     runner.add_argument("--graphify", action=argparse.BooleanOptionalAction, default=True,
-                        help="Use an optional Graphify code graph first (default: enabled; source fallback on failure).")
-    runner.add_argument("--graphify-python", metavar="PATH", help="Independent Graphify interpreter; defaults to existing uv tool installation.")
-    runner.add_argument("--service-url", metavar="URL", help="Explicit existing test service URL; never start/stop that service.")
+                        help="Use an optional Graphify code graph first, with source fallback on failure. Default: enabled.")
+    runner.add_argument("--graphify-python", metavar="PATH", help="Independent Graphify interpreter. Default: existing uv tool installation.")
+    runner.add_argument("--service-url", metavar="URL", help="Explicit existing test service URL; never start/stop that service. Default: none.")
     runner.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=None,
-                        help="Ask about ambiguous interfaces; default: detect an interactive terminal.")
-    runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file.")
+                        help="Ask about ambiguous interfaces. Default: detect an interactive terminal.")
+    runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file. Default: disabled.")
     runner.add_argument(
         "--verbose",
         action=argparse.BooleanOptionalAction,
