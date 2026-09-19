@@ -264,9 +264,29 @@ def run_agent(
     target_python: str | Path | None = None,
     timeout: float = 120,
     max_tool_calls: int = 100,
+    interactive: bool | None = None,
+    intent: str = "",
+    graphify: bool = True,
+    graphify_python: str | Path | None = None,
+    service_url: str | None = None,
+    resume_run: str | Path | None = None,
+    candidate_id: str | None = None,
+    clarification: str | None = None,
 ) -> int:
     """Run an answer callback or project entrypoint and write id-keyed JSONL."""
     output_path = Path(output)
+    saved = None
+    if resume_run is not None:
+        from .run_context import load_context, resume_workspace
+
+        saved = load_context(resume_run)
+        if entrypoint is not None or answer is not None:
+            raise ValueError("Resume requires automatic project mode")
+        for key, value in (("dataset", dataset), ("project", project), ("output", output)):
+            if value is None or Path(value).resolve() != Path(saved[key]).resolve():
+                raise ValueError(f"Resume {key} differs from saved run")
+    elif candidate_id is not None or clarification is not None:
+        raise ValueError("Candidate selection and clarification require a paused run")
     if output_path.exists() and not force:
         raise FileExistsError(f"output already exists: {output_path}")
     if (answer is None) == (project is None):
@@ -309,6 +329,7 @@ def run_agent(
         reporter.emit("SOURCE", f"controller_python={sys.executable}")
         reporter.emit("SOURCE", f"target_python={project_python} target_prefix={runtime['prefix']}")
     workspace_context = (
+        resume_workspace(resume_run) if saved is not None else
         copy_project(project, runs_root=runs_root)
         if project is not None
         else _empty_context()
@@ -318,17 +339,36 @@ def run_agent(
         automatic = None
         if project is not None and entrypoint is None and cases:
             from .auto_adapter import AutoAdapter
+            from .interfaces import NeedsConfirmation
 
             reporter.emit("SOURCE", f"workspace={workspace}")
             reporter.emit("ADAPT", "Discovering project input/output and verifying an adapter")
             automatic = AutoAdapter(
                 workspace, python=project_python, env_file=env_file, model=model,
                 timeout=timeout, max_tool_calls=max_tool_calls, verbose=verbose,
+                resume=saved is not None,
+                graphify=graphify, graphify_python=graphify_python,
+                service_url=service_url,
             )
             automatic.report["target_environment"] = runtime
+            if saved is not None:
+                from .interfaces import write_json
+                saved['service_url'] = automatic.service_url
+                saved['env_file'] = str(Path(env_file).resolve()) if env_file else None
+                write_json(workspace.parent / 'run-context.json', saved)
+            if saved is None:
+                from .run_context import save_context
+
+                save_context(workspace, dataset=dataset, project=project, output=output,
+                             python=project_python, env_file=env_file, model=model,
+                             timeout=timeout, max_tool_calls=max_tool_calls, intent=intent,
+                             graphify=graphify, graphify_python=graphify_python, service_url=service_url)
             probes = list(dict.fromkeys(case["question"] for case in cases))[:2]
             try:
-                automatic.prepare(probes)
+                automatic.prepare(probes, interactive=interactive, candidate_id=candidate_id,
+                                  clarification=clarification, intent=intent)
+            except NeedsConfirmation:
+                raise
             except Exception:
                 reporter.emit("WARN", f"adapter preparation failed; evidence={automatic.evidence}")
                 raise

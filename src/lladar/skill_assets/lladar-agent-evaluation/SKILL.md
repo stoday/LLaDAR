@@ -15,6 +15,12 @@ Inspect the project's README, package metadata, entrypoints, tests, and
 configuration. Record the knowledge paths, one-question invocation seam,
 normal execution command, required services, and human-only login steps.
 
+The test boundary is the outer user-facing workflow, including initialization,
+configured services, knowledge, available tools, routing and final processing.
+Do not replace it with a lower-level model or agent method. Automatic mode first
+performs read-only discovery and validates source-line evidence. If the intended
+feature is unclear, pass `--intent` or obtain human clarification.
+
 Use `lladar run-agent --project` without an entrypoint to discover the project's
 input/output and generate an adapter. An existing executable that reads
 `LLADAR_QUESTION` may use the explicit `--entrypoint` compatibility mode. Use
@@ -66,6 +72,18 @@ credentials are blockers, not reasons to mock a provider or change the Agent.
 Explicit `--entrypoint` accepts a project-relative path or a path inside the
 original project and retains the existing `LLADAR_QUESTION`/stdout behavior.
 
+Ambiguous automatic runs pause before adapter generation or target calls. The
+terminal menu accepts a candidate, `c` for clarification, or `q` to save. In
+noninteractive mode (`--no-interactive`), exit code 3 means `needs_confirmation`,
+not execution failure. Preserve the printed run directory and hand the feature
+choice to the human; do not silently select the easiest candidate.
+
+Continue with `lladar resume-agent <run> --candidate <id>` or
+`lladar resume-agent <run> --clarification "<human intent>"`. Omitting both opens
+the menu when a terminal is available. Resume rejects changed source/data and
+protects existing outputs; do not edit saved evidence to bypass these checks.
+Human selection establishes the requested feature, not proof of runtime behavior.
+
 Preserve actual Agent output. Execution failures belong in answer JSONL as
 `execution_error`; later sessions may continue. Hand credentials, OTP, CAPTCHA,
 payment, and interactive login to the user. Keep tokens, cookies, hidden
@@ -101,6 +119,18 @@ the same dataset, and compare reports under the same protocol. Never fabricate
 missing answers or silently retry uncertain writes.
 
 ## Integrity boundaries
+
+- Automatic discovery tries an independent Graphify tool environment by default;
+  `--no-graphify` disables it. Missing/failed extraction falls back to source reads.
+  Inspect graph-status.json and source lines; graph inference is not runtime proof.
+- For REST targets, use the existing public route and preserve its request handling
+  and final formatting. Inspect startup/readiness/request/response/coverage in the
+  interface proposal. Never bypass the API by importing an internal agent function.
+- Missing service setup requires clarification. A supplied `--service-url` selects
+  an existing test service that the adapter must not start or stop. Otherwise use an
+  isolated local instance and the supplied service helper; retain logs and traces.
+- Report frontend omissions, unverified cross-language links and untested streaming
+  or job-polling contracts. Do not equate JSON API acceptance with browser coverage.
 
 - IDs are the only join keys; line order carries no meaning.
 - Existing datasets, answers, and reports require a new path or explicit

@@ -350,7 +350,75 @@ project such as `--entrypoint .\example_project\main.py`. This mode retains the
 `LLADAR_QUESTION`/stdout contract and copy adaptation behavior. See
 [automatic adapter design](docs/PRD-lladar-auto-adapter.md).
 For real API results, observed limitations, and a repeatable paid acceptance run,
-see [automatic adapter verification](docs/auto-adapter-verification-20260919.md).
+see [automatic adapter verification](docs/auto-adapter-verification-20260919.md)
+and [public-interface confirmation verification](docs/interface-confirmation-verification-20260919.md).
+
+Automatic discovery now first inspects the project **without running it** and
+proposes the complete user-facing interface, with source-line evidence and its
+initialization, knowledge, tools, workflow and final output path. It must preserve
+that outer flow instead of calling a convenient inner model method. Use
+`--intent "customer chat"` to identify the public feature in ordinary language.
+
+**Code graph (enabled by default):** install `graphifyy` in a separate tool
+environment with `uv tool install graphifyy` (tested with 0.9.61), or provide
+`--graphify-python PATH` to an existing environment. LLaDAR never installs packages
+during a test. Use `--no-graphify` to disable it. Missing tools, extraction failures,
+timeouts or an oversized corpus fall back to source inspection with a visible reason.
+Each run builds a fresh, directed AST graph from its filtered source snapshot; no
+semantic model calls or target imports occur during graph construction. The graph
+records version, file hashes, parser inputs and files without extracted nodes.
+Queries return bounded neighborhoods; inferred edges and cross-service links still
+require source confirmation. The integration parses common code extensions;
+unsupported files and frontend behavior must be inspected separately.
+
+**REST services:** the adapter calls the existing public API. It starts a separate
+localhost instance on a temporary port using the project's actual startup command,
+waits for readiness, submits the real request, and extracts the final response.
+The supplied stdlib service helper retains logs and stops its own process tree on
+success, failure or adapter timeout. It does not add a test route or substitute a
+direct call to an internal agent. Python adapters can launch installed runtimes such
+as Node; target dependencies must already exist. Each request has its own instance.
+
+HTTP proposals include startup argv, readiness, request/auth/session requirements,
+answer extraction, included steps and omitted layers. Missing setup requires
+clarification, even when there is only one candidate. Named environment variable
+and executable availability can be checked without exposing credential values.
+Source-specific SSE/job polling can be generated, but the live acceptance fixture
+currently covers synchronous JSON through Node into a real Python agent.
+
+To use an existing test server, explicitly provide `--service-url http://localhost:8000`.
+The adapter neither starts nor stops that service. URL credentials/query/fragment
+are rejected; use the environment file for authentication. A URL discovered only
+in source is not authorization to call a deployed service. A paused run can receive
+`resume-agent RUN --service-url URL`, which re-explores and persists the new contract.
+Graph settings are retained across resumes. Detailed validation is recorded in
+[graph and REST verification](docs/graph-rest-verification-20260919.md).
+
+When multiple public interfaces or unresolved questions remain, the CLI displays
+the candidates and waits for a choice in an interactive terminal. Enter a number
+or candidate ID, `c` to clarify and rediscover, or `q` to save and leave. EOF or
+Ctrl+C at the prompt also saves. `--interactive` explicitly enables prompts;
+`--no-interactive` never waits. By default both stdin and stderr must be terminals.
+Noninteractive ambiguity saves `needs_confirmation` and exits with code **3**,
+without generating an adapter, calling the target, or creating the answer file.
+
+Continue in a new process using the printed run directory:
+
+```powershell
+lladar resume-agent .\.lladar\runs\<run> --candidate <id-from-proposal>
+# Or clarify the intended feature and repeat read-only discovery:
+lladar resume-agent .\.lladar\runs\<run> --clarification "Test customer chat, not ticket processing"
+```
+
+Omit both options to open the terminal selection menu. The saved dataset, output,
+model and interpreter are reused. `--env-file` may override the saved credential
+file path; no credential values are stored in the continuation state. Changing
+the original project, saved workspace or dataset invalidates the pause. Existing
+answers remain protected unless `--force` is explicit. Only paused runs resume;
+concurrent continuations are rejected. After a hard process crash, an abandoned
+`.resume.lock` must be inspected and removed only after confirming no continuation
+is running. Source evidence supports selection but cannot prove that no other
+public interface exists. Human selection and adapter replay are separate checks.
 
 `eval` reports LLaDAR Bias-Free Score, original accuracy, scoring coverage,
 clarification/error rates, omission and peer-cue breakdowns, policy-value and
