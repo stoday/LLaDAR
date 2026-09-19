@@ -41,7 +41,8 @@ def stop_tree(process):
             pass
 
 
-def cleanup_saved_service(workspace: Path, request_id: str | None = None):
+def cleanup_saved_service(workspace: Path, request_id: str | None = None, *,
+                          timeout: float = 5):
     """Parent-runner fallback when adapter timeout prevents its finally block."""
     path = workspace / 'lladar-service.json'
     if not path.is_file():
@@ -62,6 +63,21 @@ def cleanup_saved_service(workspace: Path, request_id: str | None = None):
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    if os.name != 'nt':
+        # Sending a signal does not wait for the kernel to close the listener.
+        # The service may be an orphan, so the runner cannot use Popen.wait().
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                with socket.create_connection(('127.0.0.1', state['port']), timeout=0.1):
+                    pass
+            except ConnectionRefusedError:
+                break
+            except TimeoutError:
+                pass
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Service on port {state['port']} did not stop")
+            time.sleep(0.05)
     state['stopped'] = True
     state['cleanup'] = 'runner'
     path.write_text(json.dumps(state), encoding='utf-8')
