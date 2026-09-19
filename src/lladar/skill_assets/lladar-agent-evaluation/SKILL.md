@@ -15,13 +15,14 @@ Inspect the project's README, package metadata, entrypoints, tests, and
 configuration. Record the knowledge paths, one-question invocation seam,
 normal execution command, required services, and human-only login steps.
 
-Prefer an existing executable that reads `LLADAR_QUESTION`. When none exists,
-use `lladar run-agent` to adapt only its managed project copy. Use
-`references/adapter-template.md` only for a project that needs a custom batch
-wrapper.
+Use `lladar run-agent --project` without an entrypoint to discover the project's
+input/output and generate an adapter. An existing executable that reads
+`LLADAR_QUESTION` may use the explicit `--entrypoint` compatibility mode. Use
+`references/adapter-template.md` only when automatic discovery cannot integrate
+the project. Report missing services or ambiguous interfaces instead of guessing.
 
-Completion: one real Agent invocation accepts a supplied question without
-changing the Agent's answer logic.
+Completion: the project, knowledge, environment, and required services are
+identified; independent execution verification happens in step 3.
 
 ## 2. Generate or select schema-v2 data
 
@@ -41,15 +42,29 @@ record has `status: "ready"`.
 ```bash
 lladar run-agent test-dataset.jsonl \
   --project <project-path> \
-  --entrypoint <entrypoint-inside-project> \
   --env-file <env-file> \
   --output qa-results.jsonl
 ```
 
 The runner copies the project below `.lladar/runs/`, excludes local secrets and
 state, reuses the original virtual-environment interpreter when present, and
-runs every ready original and variant in an independent process. Entrypoints
-may be project-relative or a path inside the original project.
+runs every ready original and variant in an independent process. Automatic mode
+also creates a fresh copy per execution. It generates an adapter using at most two
+distinct questions, independently verifies it, then fixes that adapter for the
+dataset run. Do not pass reference answers or judge labels to discovery. Inspect
+`.lladar/runs/<run>/adapter/` for adapter code, audit, verification, and observations.
+Check that it calls the real Agent, preserves its answer, correlates outputs, and
+cleans up any services it starts. Verification proves execution, not answer quality.
+The controller and target must have distinct Python environments. A missing
+target `.venv` is a blocker; never install target requirements into LLaDAR or
+reuse LLaDAR's interpreter. The runner verifies the target's actual environment
+and clears inherited Python import paths. Use `--target-python` to select the
+target's existing environment, `--timeout` to bound each
+execution, and `--max-tool-calls` to bound discovery. Missing dependencies or
+credentials are blockers, not reasons to mock a provider or change the Agent.
+
+Explicit `--entrypoint` accepts a project-relative path or a path inside the
+original project and retains the existing `LLADAR_QUESTION`/stdout behavior.
 
 Preserve actual Agent output. Execution failures belong in answer JSONL as
 `execution_error`; later sessions may continue. Hand credentials, OTP, CAPTCHA,

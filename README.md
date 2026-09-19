@@ -304,7 +304,6 @@ The schema-v2 dataset flows directly into the runner and evaluator:
 ```powershell
 lladar run-agent .\test-dataset.jsonl `
   --project .\example_project `
-  --entrypoint .\example_project\main.py `
   --output .\qa-results.jsonl
 
 lladar eval .\test-dataset.jsonl .\qa-results.jsonl `
@@ -313,8 +312,45 @@ lladar eval .\test-dataset.jsonl .\qa-results.jsonl `
 
 Each ready group's original and every variant run as isolated sessions. The
 answer JSONL keeps stable case IDs and exact questions; skipped groups are not
-run. `run-agent` accepts either a project-relative entrypoint such as `main.py`
-or a path inside the project such as `.\example_project\main.py`.
+run. Without `--entrypoint`, a coding agent reads the project and generates a
+standalone adapter for its actual input and output mechanism. It tries at most two
+distinct questions, then the runner independently replays the final adapter before
+running the dataset. Reference answers and evaluation labels are not supplied to
+the coding agent. Each execution uses a fresh project copy and Python process.
+The adapter can extract answers from messages, asynchronous calls, files or a
+request-correlated database row; it must not rewrite the target's answer.
+
+Discovery and target execution can both incur model API costs. The target keeps
+its own model/provider. `--model` selects the discovery model; `--env-file` supplies
+credentials without copying `.env` into the workspace. LLaDAR's coding agent and
+the target agent must use **separate Python environments**, including in explicit
+entrypoint mode. The target's `.venv` is selected automatically;
+`--target-python PATH` selects another existing environment. Missing target
+environments fail before discovery instead of falling back to LLaDAR's Python.
+The runner checks the target's actual `sys.prefix`, rejects a shared environment
+or a venv with system packages enabled, and removes inherited `PYTHONPATH`,
+`PYTHONHOME`, user-site imports and controller activation settings. It prepends
+the target interpreter directory to PATH. Install each project's dependencies in
+its own environment; the adapter only exchanges JSON across subprocesses and
+does not require LLaDAR to be installed in the target environment.
+`--timeout 120` limits
+each execution and `--max-tool-calls 100` bounds exploration tools. Dependencies
+must already be installed. Progress goes to stderr (`--no-verbose` disables it).
+
+The run directory under `.lladar/runs/` preserves `adapter/adapter.py`, its hash,
+`adapter/run.json`, `adapter/audit.json`, and `adapter/observations.jsonl`, including
+failed preparation evidence. Verification means the adapter replayed successfully,
+not that its answers are correct. Project copies isolate local state but are not
+an OS security sandbox; run only trusted projects. Adapters must use local test
+storage and clean up services they start. Reports can contain target answer text
+and runtime error details; keep the run directory private.
+
+For the existing explicit mode, supply `--entrypoint main.py` or a path inside the
+project such as `--entrypoint .\example_project\main.py`. This mode retains the
+`LLADAR_QUESTION`/stdout contract and copy adaptation behavior. See
+[automatic adapter design](docs/PRD-lladar-auto-adapter.md).
+For real API results, observed limitations, and a repeatable paid acceptance run,
+see [automatic adapter verification](docs/auto-adapter-verification-20260919.md).
 
 `eval` reports LLaDAR Bias-Free Score, original accuracy, scoring coverage,
 clarification/error rates, omission and peer-cue breakdowns, policy-value and

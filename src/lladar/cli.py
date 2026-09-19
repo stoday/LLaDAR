@@ -523,8 +523,8 @@ def build_parser() -> argparse.ArgumentParser:
         "run-agent",
         help="Run a project agent against a schema-v2 LLaDAR test dataset.",
         description=(
-            "Copy a project to a managed .lladar/runs workspace, adapt the copy with Akasha "
-            "only when its entrypoint lacks LLADAR_QUESTION, and produce id-keyed answers."
+            "Discover project input/output with a coding agent, verify a generated adapter, "
+            "and produce id-keyed answers. Supply --entrypoint for the legacy explicit mode."
         ),
         formatter_class=_HelpFormatter,
     )
@@ -532,13 +532,15 @@ def build_parser() -> argparse.ArgumentParser:
     runner.add_argument("--project", required=True, metavar="PATH", help="Project directory to copy.")
     runner.add_argument(
         "--entrypoint",
-        required=True,
         metavar="PATH",
-        help="Project-relative Python entrypoint or a path inside the project.",
+        help="Optional explicit Python entrypoint; omit for automatic adapter discovery.",
     )
     runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH")
     runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL")
     runner.add_argument("--env-file", default=".env", metavar="PATH")
+    runner.add_argument("--target-python", metavar="PATH", help="Separate target interpreter; defaults to project .venv. Never falls back to LLaDAR's environment.")
+    runner.add_argument("--timeout", type=float, default=120, help="Seconds allowed per adapter/target execution.")
+    runner.add_argument("--max-tool-calls", type=int, default=100, help="Automatic discovery tool-call budget.")
     runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file.")
     runner.add_argument(
         "--verbose",
@@ -636,6 +638,10 @@ def main(
                 force=args.force,
                 verbose=args.verbose,
                 runs_root=runs_root,
+                model=args.model,
+                target_python=args.target_python,
+                timeout=args.timeout,
+                max_tool_calls=args.max_tool_calls,
             )
             print(f"Answered {completed} session(s) at {args.output}")
             return 0
@@ -695,7 +701,7 @@ def main(
         _discard_empty_reservation(reserved_default_output)
         print("lladar: provider generation failed", file=sys.stderr)
         return 2
-    except (LladarError, FileExistsError, OSError, ValueError) as error:
+    except (LladarError, FileExistsError, OSError, ValueError, RuntimeError) as error:
         _discard_empty_reservation(reserved_default_output)
         print(f"lladar: {error}", file=sys.stderr)
         return 2
