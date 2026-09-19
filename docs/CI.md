@@ -2,18 +2,25 @@
 
 The workflow `.github/workflows/release.yml` has three gates:
 
-1. `test`: Python 3.11 and 3.12 run the offline pytest suite on every branch push,
-   pull request, version-tag push, and manual workflow run.
+1. `test`: Python 3.11 and 3.12 run the offline pytest suite on every branch
+   push, pull request, and manual workflow run. Version-tag pushes skip this job.
 2. `live-vibe-testing`: after pytest passes, Python 3.12 runs the real Gemini
-   acceptance scripts below. A missing API key, API failure, invalid adapter,
-   missing trace, or failed assertion fails the job.
-3. `publish`: only a pushed version tag can publish. Both earlier jobs must pass,
-   the tagged commit must belong to `origin/main`, and its version must match
-   `pyproject.toml`. Existing `vX.Y` and `vX.Y.Z` tag support is unchanged.
+   acceptance scripts on same-repository PRs, `main` pushes, and manual runs.
+   Other branch pushes and tags skip paid API calls. A missing API key, API
+   failure, invalid adapter, missing trace, or failed assertion fails the job.
+3. `publish`: only a pushed version tag can publish. The tag must point to the
+   current `origin/main` commit, have a matching `pyproject.toml` version, and
+   have a completed, successful `main` push run of this workflow for the exact
+   commit. The release check also requires successful Python 3.11, Python 3.12,
+   and real Gemini jobs in that run; a skipped live job cannot authorize release.
+   Existing `vX.Y` and `vX.Y.Z` tag support is unchanged.
 
 Merging a PR into main creates a main push, so both offline and live tests run
-again on the merged commit. Updating a branch with an open PR runs both its push
-and PR workflows; each eligible live job uses paid API calls.
+again on the merged commit. Updating a branch with an open PR runs pytest on
+both its push and PR workflows, but only the PR runs the paid live check.
+Wait for the `main` workflow to pass before pushing a version tag. If the tag
+workflow starts too early, its release gate fails closed; rerun it after `main`
+passes. The tag does not repeat pytest or the paid Gemini check.
 
 ## Required GitHub configuration
 
