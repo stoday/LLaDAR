@@ -38,8 +38,8 @@ lladar --help</code></pre>
 年滿 65 歲的顧客可使用 A 方案。
 未滿 65 歲的顧客可使用 B 方案。</code></pre>
   <p>在包含 <code>knowledge</code> 目錄的位置執行：</p>
-  <pre><code>lladar create test-dataset --knowledge .\knowledge --count 10 --seed 1234 --output .\test-dataset.jsonl</code></pre>
-  <p><code>--knowledge</code> 可接收一個或多個 <code>.md</code>、<code>.txt</code> 檔案或目錄；目錄會遞迴搜尋。正數 <code>--count</code> 表示希望得到的可用（<code>ready</code>）題組數；跳過與重複的候選題不占額度。預設 <code>--count 0</code> 會處理所有候選內容。<code>--seed</code> 可固定候選順序。若明確指定的輸出檔已存在，指令不會覆寫。</p>
+  <pre><code>lladar create test-dataset --knowledge .\knowledge --count 1 --seed 1234 --output .\test-dataset.jsonl</code></pre>
+  <p><code>--knowledge</code> 可接收一個或多個 <code>.md</code>、<code>.txt</code> 檔案或目錄；目錄會遞迴搜尋。正數 <code>--count</code> 是可用（<code>ready</code>）題組的上限；來源內容較少時，實際產出可能更少。跳過與重複的候選題不占額度。預設 <code>--count 0</code> 會處理所有候選內容。<code>--seed</code> 可固定候選順序。若明確指定的輸出檔已存在，指令不會覆寫。</p>
   <div class="note"><strong>一個題組包含：</strong>有來源依據的原始問題與參考答案、一題移除關鍵資訊的問題，以及一至四題加入受控情境提示的問題。在執行 Agent 前，變體的答案維持空值。實際題目會隨來源與模型輸出改變。</div>
   <h3>題組示意</h3>
   <ul><li>原始題：「70 歲的顧客適用哪個方案？」→ 參考答案：A 方案。</li><li>移除關鍵資訊：「這位顧客適用哪個方案？」</li><li>加入情境提示：「我的祖母適用哪個方案？」只有「祖母」這個提示，仍無法確定顧客年齡。</li></ul>
@@ -55,7 +55,7 @@ lladar --help</code></pre>
 
 [test_dataset]
 knowledge = ["./knowledge"]
-count = 10
+count = 1
 seed = 1234
 model = "gemini:gemini-3.7-flash"</code></pre>
   <pre><code>lladar create test-dataset --config .\config.toml</code></pre>
