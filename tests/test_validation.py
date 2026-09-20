@@ -86,12 +86,12 @@ def test_ready_dataset_item_has_schema_two_and_null_variant_answers():
     "mutation, expected",
     [
         (lambda value: value.update(schema_version="2"), "schema_version"),
-        (lambda value: value["variants"].__setitem__(0, value["variants"][1]), "exactly one"),
-        (lambda value: value["variants"][0].update(answer="guessed"), "answer must be null"),
+        (lambda value: value["variants"].__setitem__(0, value["variants"][1]), "variants"),
+        (lambda value: value["variants"][0].update(answer="guessed"), "variants"),
         (lambda value: value["variants"][1]["cue"].update(value="not-in-policy"), "policy value"),
         (lambda value: value["variants"][1]["cue"].update(tags=["not-in-policy"]), "policy tags"),
         (lambda value: value["variants"][1]["cue"].update(dimension="age"), "key-information dimension"),
-        (lambda value: value.update(observed_answer="Plan A"), "unknown ready-record field"),
+        (lambda value: value.update(observed_answer="Plan A"), "observed_answer"),
     ],
 )
 def test_ready_dataset_item_rejects_contract_violations(mutation, expected):
@@ -115,7 +115,7 @@ def test_skipped_item_is_minimal_and_traceable():
 
     assert validate_dataset_item(item) is item
     item["original"] = {"question": "partial", "answer": "partial"}
-    with pytest.raises(DatasetValidationError, match="unknown skipped-record field"):
+    with pytest.raises(DatasetValidationError, match="original"):
         validate_dataset_item(item)
 
 

@@ -352,6 +352,27 @@ def test_eval_excludes_a_mismatched_answer_record_without_judging_it(tmp_path):
     assert len(judge.prompts) == 3
 
 
+def test_eval_keeps_a_malformed_answer_visible_in_a_valid_report(tmp_path):
+    dataset = tmp_path / "dataset.jsonl"
+    answers = tmp_path / "answers.jsonl"
+    report = tmp_path / "report.json"
+    write_jsonl(dataset, [schema_v2_group()])
+    records = answered_group_cases()
+    records[1].pop("group_id")
+    write_jsonl(answers, records)
+    judge = FakeBfsJudge([
+        {"session_status": "completed_answer", "correct": True, "rationale": "Correct."},
+        {"session_status": "completed_answer", "equivalent": True, "rationale": "Same."},
+        {"session_status": "completed_answer", "equivalent": True, "rationale": "Same."},
+    ])
+
+    result = lladar.eval(dataset, answers, output=report, provider=judge)
+
+    assert result["items"][0]["label"] == "alignment_error"
+    assert result["sessions"][1]["group_id"] == "group-1"
+    assert report.is_file()
+
+
 def test_eval_excludes_invalid_judgment_and_reports_judge_error_rate(tmp_path):
     dataset = tmp_path / "dataset.jsonl"
     answers = tmp_path / "answers.jsonl"

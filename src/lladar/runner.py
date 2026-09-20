@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import os
@@ -14,6 +15,7 @@ from typing import Any
 from .exceptions import DatasetValidationError
 from .progress import ProgressReporter
 from .validation import validate_dataset_item
+from .artifact_schema import artifact_version, validate_artifact
 
 
 Answerer = Callable[[str], str]
@@ -248,6 +250,59 @@ def _dataset_cases(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return cases
 
 
+def _benchmark_cases(bundle: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != 3:
+        raise DatasetValidationError("unsupported benchmark bundle version")
+    validate_artifact("BenchmarkManifest", manifest)
+    from .benchmark_eval import _verified_file, _verify_pinned_source
+
+    _verify_pinned_source(bundle, manifest)
+    artifacts = manifest["artifacts"]
+    cases_path = _verified_file(bundle, artifacts, "cases.jsonl")
+    scoring_path = _verified_file(bundle, artifacts, "scoring-plan.json")
+    for name in artifacts:
+        if name.startswith("scorers/"):
+            _verified_file(bundle, artifacts, name)
+    scoring_plan = json.loads(scoring_path.read_text(encoding="utf-8"))
+    validate_artifact("BenchmarkScoringPlan", scoring_plan)
+    rule_ids = {rule["id"] for rule in scoring_plan["rules"]}
+    items = list(_read_jsonl(cases_path))
+    samples_per_generation_case = manifest.get("generation_protocol", {}).get("samples_per_case", 1)
+    cases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        validate_artifact("BenchmarkCase", item)
+        identifier = item.get("id")
+        if not isinstance(identifier, str) or not identifier or identifier in seen:
+            raise DatasetValidationError(f"missing or duplicate benchmark case id: {identifier}")
+        seen.add(identifier)
+        if item.get("status") != "ready":
+            continue
+        if item.get("rule_id") not in rule_ids:
+            raise DatasetValidationError(f"artifact_integrity_error: unknown scoring rule for {identifier}")
+        prompt = item.get("prompt")
+        if not isinstance(prompt, str) or not prompt:
+            raise DatasetValidationError(f"missing prompt for benchmark case: {identifier}")
+        if item.get("kind") == "generation":
+            question = prompt
+        else:
+            parts = [item.get("context", ""), prompt]
+            options = item.get("options") or []
+            parts.extend(f"{option['id']}. {option['text']}" for option in options)
+            if options:
+                if item.get("kind") == "single_choice":
+                    parts.append("Respond with the option ID only.")
+                else:
+                    parts.append("Respond with option IDs separated by commas; preserve order when asked to rank.")
+            question = "\n".join(part for part in parts if part)
+        sample_count = samples_per_generation_case if item.get("kind") == "generation" else 1
+        for sample_number in range(1, sample_count + 1):
+            cases.append({"id": identifier, "kind": item.get("kind"),
+                          "question": question,
+                          "sample_id": f"{identifier}:{sample_number}"})
+    return items, cases
+
 def run_agent(
     dataset: str | Path,
     output: str | Path,
@@ -264,6 +319,7 @@ def run_agent(
     target_python: str | Path | None = None,
     timeout: float = 120,
     max_tool_calls: int = 100,
+    max_cases: int | None = None,
     interactive: bool | None = None,
     intent: str = "",
     graphify: bool = True,
@@ -291,6 +347,8 @@ def run_agent(
         raise FileExistsError(f"output already exists: {output_path}")
     if (answer is None) == (project is None):
         raise ValueError("provide exactly one of answer or project")
+    if max_cases is not None and max_cases <= 0:
+        raise ValueError("max_cases must be positive")
     if timeout <= 0 or max_tool_calls <= 0:
         raise ValueError("timeout and max_tool_calls must be positive")
 
@@ -300,11 +358,31 @@ def run_agent(
         else None
     )
 
-    items = [
-        validate_dataset_item(item, check_policy_references=False)
-        for item in _read_jsonl(Path(dataset))
-    ]
-    cases = _dataset_cases(items)
+    bundle_path = Path(dataset)
+    benchmark = bundle_path.is_dir()
+    benchmark_record_path = output_path.with_name(output_path.name + ".run.json")
+    if benchmark_record_path.exists() and not force:
+        raise FileExistsError(f"run record already exists: {benchmark_record_path}")
+    if benchmark:
+        items, cases = _benchmark_cases(bundle_path)
+        if max_cases is not None:
+            selected_cases = []
+            selected_ids: set[str] = set()
+            for case in cases:
+                if case["id"] not in selected_ids:
+                    if len(selected_ids) == max_cases:
+                        break
+                    selected_ids.add(case["id"])
+                selected_cases.append(case)
+            cases = selected_cases
+    else:
+        if max_cases is not None:
+            raise ValueError("max_cases requires a benchmark bundle")
+        items = [
+            validate_dataset_item(item, check_policy_references=False)
+            for item in _read_jsonl(bundle_path)
+        ]
+        cases = _dataset_cases(items)
     reporter = ProgressReporter(verbose)
     reporter.configuration(
         {
@@ -334,7 +412,40 @@ def run_agent(
         if project is not None
         else _empty_context()
     )
+    profile: dict[str, Any] = {"status": "unavailable", "reason": "no target project"}
+    profile_workspace_path: str | None = None
+    profile_evidence_path: str | None = None
     with workspace_context as workspace:
+        if project is not None:
+            profile_workspace_path = str(workspace.resolve())
+            try:
+                credential_env = ("OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+                                  "ANTHROPIC_API_KEY", "AZURE_OPENAI_API_KEY")
+                provider_name = model.split(":", 1)[0].casefold()
+                requires_credential = provider_name in {"gemini", "openai",
+                                                        "anthropic", "azure"}
+                if (requires_credential and not
+                    ((env_file is not None and Path(env_file).is_file())
+                     or any(os.environ.get(key) for key in credential_env))):
+                    raise FileNotFoundError("no credential source for project profile")
+                from .project_profile import describe_project
+
+                reporter.emit("SOURCE", "Describing target project from README and code")
+                profile = describe_project(workspace, model=model, env_file=env_file)
+                evidence_root = workspace.parent / "project-profile-evidence"
+                for name in profile["evidence"]:
+                    source_file = (workspace / name).resolve()
+                    if (not source_file.is_relative_to(workspace.resolve())
+                            or not source_file.is_file() or source_file.stat().st_size > 128_000):
+                        raise ValueError(f"invalid project profile evidence: {name}")
+                    destination = evidence_root / name
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source_file, destination)
+                profile_evidence_path = str(evidence_root.resolve())
+            except Exception as error:
+                profile = {"status": "unavailable",
+                           "reason": f"{type(error).__name__}: {error}"}
+                reporter.emit("WARN", "project profile unavailable")
         adapted_entrypoint = None
         automatic = None
         if project is not None and entrypoint is None and cases:
@@ -392,12 +503,15 @@ def run_agent(
             total = len(cases)
             for index, case in enumerate(cases, start=1):
                 result: dict[str, Any] = {
-                    "schema_version": 2,
+                    "schema_version": 3 if benchmark else artifact_version(),
                     "id": case.get("id"),
-                    "group_id": case.get("group_id"),
                     "kind": case.get("kind"),
                     "question": case.get("question"),
                 }
+                if benchmark:
+                    result["sample_id"] = case["sample_id"]
+                else:
+                    result["group_id"] = case.get("group_id")
                 question = case.get("question")
                 if not isinstance(question, str) or not question.strip():
                     result.update(
@@ -409,7 +523,7 @@ def run_agent(
                         if answer is not None:
                             response = answer(question)
                         elif automatic is not None:
-                            response = automatic.answer(question, case["id"])
+                            response = automatic.answer(question, case["sample_id"] if benchmark else case["id"])
                         else:
                             response = _run_entrypoint(
                                 adapted_entrypoint,
@@ -433,9 +547,47 @@ def run_agent(
                             "WARN",
                             f"item={case.get('id')} stage=answer error_type={type(error).__name__}",
                         )
+                if not benchmark:
+                    validate_artifact("ObservedAnswerRecord", result)
                 target.write(json.dumps(result, ensure_ascii=False) + "\n")
                 target.flush()
                 reporter.session(index, total, result["status"])
+    run_id = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    record: dict[str, Any] = {
+        "schema_version": 3 if benchmark else artifact_version(), "run_id": run_id,
+        "dataset": str(bundle_path.resolve()),
+        "answers": str(output_path.resolve()),
+        "answers_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+        "completed": completed,
+        "target": {
+            "project_path": str(Path(project).resolve()) if project is not None else None,
+            "workspace_path": profile_workspace_path,
+            "profile_evidence_path": profile_evidence_path,
+            "entrypoint": str(relative_entrypoint) if relative_entrypoint else None,
+            "project_profile": profile,
+            "adapter_discovery_model": model if project is not None else None,
+        },
+    }
+    if benchmark:
+        manifest_path = bundle_path / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        record.update({
+            "dataset_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "source": manifest["source"],
+            "generation_protocol": manifest.get("generation_protocol"),
+            "executed_samples_per_generation_case": manifest.get(
+                "generation_protocol", {}).get("samples_per_case", 1),
+            "sample_count_source_defined": "samples_per_case" in manifest.get(
+                "generation_protocol", {}),
+            "generation_settings_controlled": False,
+        })
+    benchmark_record_path.write_text(
+        json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if benchmark:
+        registry = Path.cwd() / ".lladar" / "benchmark-runs"
+        registry.mkdir(parents=True, exist_ok=True)
+        (registry / f"{run_id}.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     reporter.done(completed, metric="completed_sessions")
     return completed
 

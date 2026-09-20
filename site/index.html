@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Use local LLaDAR source to generate test questions, import benchmark cases, run an agent, and evaluate answers.">
+  <title>LLaDAR user guide · English</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap top">
+    <a class="brand" href="./">LLaDAR</a>
+    <div class="lang" aria-label="Language"><a href="./" lang="en" aria-current="page">English</a><a href="zh-TW/" lang="zh-Hant">繁體中文</a></div>
+  </div>
+  <div class="wrap hero">
+    <div class="eyebrow">User guide</div>
+    <h1>Generate and evaluate agent test cases</h1>
+    <p class="lead">Create controlled question groups from knowledge files or import cases from an external benchmark. Run your own agent and evaluate its observed answers with source evidence.</p>
+  </div>
+</header>
+<nav class="toc" aria-label="On this page"><div class="wrap"><a href="#setup">Setup</a><a href="#generate">Generate a dataset</a><a href="#config">Reuse settings</a><a href="#agent">Run your agent</a><a href="#evaluate">Evaluate</a><a href="#benchmark">Benchmarks</a><a href="#report">Write a report</a><a href="#files">Files</a><a href="#reference">Reference</a></div></nav>
+<main id="main" class="wrap">
+<section id="setup">
+  <h2>1. Install and prepare a provider</h2>
+  <p>These instructions follow the current repository source, including local changes that may not be in a published package yet. Use Python 3.11 or 3.12. From a checkout of this repository, install LLaDAR in its own environment. The examples use PowerShell.</p>
+  <pre><code>py -3.12 -m venv .venv-lladar
+.\.venv-lladar\Scripts\Activate.ps1
+python -m pip install -e .
+lladar --help</code></pre>
+  <p>LLaDAR uses Akasha for model calls. Put the credentials required by your chosen provider in a local <code>.env</code> file or in your process environment. The default dataset model is <code>gemini:gemini-3.7-flash</code>; select a different Akasha model with <code>--model</code> if needed. Keep <code>.env</code> and generated runtime files out of public repositories.</p>
+  <h3>Read the commands and choose output paths</h3>
+  <p>Run the examples from the repository root unless a step says otherwise. In PowerShell, <code>.\</code> means the current directory: <code>.\my-agent</code> is a project folder and <code>.\my-agent\.venv\Scripts\python.exe</code> is a file inside it. Replace <code>my-agent</code> with your real project path. A positional value follows the command name; an option such as <code>--output PATH</code> names a setting. The sample paths do not upload anything to GitHub Pages.</p>
+  <p><code>--output</code> selects where this particular command writes its main result. Its value is a file or a new directory depending on the command. When examples start with <code>.\</code>, they refer to the directory where you run the command:</p>
+  <div class="table-wrap"><table><thead><tr><th>Command</th><th>Meaning of <code>--output</code></th><th>Other files</th></tr></thead><tbody>
+    <tr><td><code>create config</code></td><td>TOML settings file</td><td>None in this example</td></tr>
+    <tr><td><code>create test-dataset --knowledge</code></td><td>JSONL question-group file</td><td>Optional trace/cache files only when enabled</td></tr>
+    <tr><td><code>create test-dataset --convert-from</code></td><td>New benchmark bundle directory</td><td>The bundle contains cases, scoring rules, and source evidence</td></tr>
+    <tr><td><code>run-agent</code></td><td>JSONL observed-answer file</td><td><code>&lt;answers&gt;.run.json</code> and managed run data</td></tr>
+    <tr><td><code>eval DATASET ANSWERS</code></td><td>JSON evaluation file</td><td>For a generated dataset, also <code>&lt;output stem&gt;.items.jsonl</code></td></tr>
+    <tr><td><code>eval --from</code></td><td>New evaluation directory</td><td><code>report.json</code>, scoring plans, and evidence inside it</td></tr>
+    <tr><td><code>report</code></td><td>Markdown report file</td><td><code>&lt;report&gt;.meta.json</code>, or <code>&lt;report&gt;.failed.json</code> on writing failure</td></tr>
+  </tbody></table></div>
+  <p><code>.json</code> is one JSON document; <code>.jsonl</code> is one JSON record per line; <code>.toml</code> holds editable settings; <code>.md</code> is Markdown text. The setup commands create <code>.venv-lladar</code>, activate it, install this checkout with <code>pip install -e .</code>, and show top-level CLI help. The target project's <code>.venv</code> is separate from <code>.venv-lladar</code>.</p>
+</section>
+<section id="generate">
+  <h2>2. Generate a test dataset</h2>
+  <p>Create a UTF-8 knowledge file, for example <code>knowledge/plans.md</code>:</p>
+  <pre><code># Membership plans
+Plan A is available to customers aged 65 or older.
+Plan B is available to customers younger than 65.</code></pre>
+  <p>Run the generator from the directory containing <code>knowledge</code>:</p>
+  <pre><code>lladar create test-dataset --knowledge .\knowledge --count 1 --seed 1234 --output .\test-dataset.jsonl</code></pre>
+  <p><code>--knowledge</code> accepts one or more <code>.md</code> or <code>.txt</code> files or directories, scanning directories recursively. A positive <code>--count</code> sets the maximum number of usable (<code>ready</code>) question groups; a short source may yield fewer. Skipped or duplicate candidates do not use the quota. <code>--count 0</code>, the default, processes every candidate. <code>--seed</code> makes candidate order reproducible. An existing explicit output file is protected from overwrite.</p>
+  <div class="note"><strong>What a group contains:</strong> a source-grounded original question and reference answer, one question with key information removed, and one to four questions with controlled peer cues. Variant answers remain empty until your agent is run. The exact questions depend on the source and model.</div>
+  <h3>Illustrative question group</h3>
+  <ul><li>Original: “Which plan applies to a 70-year-old customer?” → reference answer: Plan A.</li><li>Key information removed: “Which plan applies to this customer?”</li><li>Peer cue: “Which plan applies to my grandmother?” The cue alone does not establish the customer’s age.</li></ul>
+  <p>The result is UTF-8 JSONL: one JSON object per line. To inspect the first record in PowerShell:</p>
+  <pre><code>Get-Content .\test-dataset.jsonl -TotalCount 1 | ConvertFrom-Json | Format-List</code></pre>
+  <p>If you omit <code>--output</code>, LLaDAR creates a collision-safe file named <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>. For a quick one-file run, replace <code>.\knowledge</code> with <code>.\knowledge\plans.md</code>.</p>
+  <h3>What each part of the generation command means</h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>lladar create test-dataset</code></td><td>Create LLaDAR test questions from the supplied knowledge documents.</td></tr>
+    <tr><td><code>--knowledge .\knowledge</code></td><td>Read the local <code>knowledge</code> folder; only <code>.md</code> and <code>.txt</code> files are searched recursively. You can also name individual files or multiple paths.</td></tr>
+    <tr><td><code>--count 1</code></td><td>Request at most one usable <code>ready</code> question group. The default <code>0</code> processes all candidates; the source may yield fewer than requested.</td></tr>
+    <tr><td><code>--seed 1234</code></td><td>Fix candidate ordering for repeatable selection. Model-generated wording can still vary.</td></tr>
+    <tr><td><code>--output .\test-dataset.jsonl</code></td><td>Write the generated groups to this UTF-8 JSONL file. Each line is one group, including its source-grounded original and variants.</td></tr>
+  </tbody></table></div>
+  <p><code>knowledge/plans.md</code> is your input, not a generated file. <code>test-dataset.jsonl</code> is the dataset passed to <code>run-agent</code> and later to <code>eval</code>. In the inspection command, <code>Get-Content -TotalCount 1</code> reads the first JSONL line, <code>ConvertFrom-Json</code> parses it, and <code>Format-List</code> displays its fields.</p>
+</section>
+<section id="config">
+  <h2>3. Save settings for repeated runs</h2>
+  <pre><code>lladar create config --output .\config.toml</code></pre>
+  <p>Edit <code>config.toml</code>, for example:</p>
+  <pre><code>schema_version = 2
+
+[test_dataset]
+knowledge = ["./knowledge"]
+count = 1
+seed = 1234
+model = "gemini:gemini-3.7-flash"</code></pre>
+  <pre><code>lladar create test-dataset --config .\config.toml</code></pre>
+  <p>Paths written in the config file are relative to that file. Paths passed as CLI options are relative to the current directory. Explicit CLI options override the config. The config template is also protected from overwrite unless you pass <code>--force</code>.</p>
+  <h3>Optional local policy</h3>
+  <p>For a project-specific comparison, create a local TOML policy and select it with <code>--policy .\policies\food-recommendation.toml</code>. <code>--policy</code> can be repeated. When you specify any policies, that list is exact; add <code>--policy builtin:general-social-context</code> explicitly if you want the built-in policy too. See the <a href="https://github.com/stoday/LLaDAR#custom-policy">policy example in the repository README</a>.</p>
+  <h3>What the configuration files and options do</h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>lladar create config --output .\config.toml</code></td><td>Write an editable TOML template at <code>config.toml</code>. It does not generate questions.</td></tr>
+    <tr><td><code>schema_version = 2</code></td><td>Version of the configuration file format, not the number of question groups.</td></tr>
+    <tr><td><code>[test_dataset]</code></td><td>Section containing options for <code>create test-dataset</code>.</td></tr>
+    <tr><td><code>knowledge</code>, <code>count</code>, <code>seed</code>, <code>model</code></td><td>Saved values for the source paths, ready-group limit, ordering seed, and Akasha generation model.</td></tr>
+    <tr><td><code>lladar create test-dataset --config .\config.toml</code></td><td>Read those saved settings and generate a dataset. Set <code>output</code> in the TOML file or add <code>--output</code> to choose its filename; otherwise LLaDAR makes a collision-safe timestamped JSONL file.</td></tr>
+  </tbody></table></div>
+</section>
+<section id="agent">
+  <h2>4. Run the questions against your agent</h2>
+  <p>Your target project needs its own Python environment with its dependencies installed. It must be different from LLaDAR's environment. The following example assumes your project is in <code>my-agent</code> and has <code>my-agent/.venv</code>:</p>
+  <pre><code>lladar run-agent .\test-dataset.jsonl --project .\my-agent --target-python .\my-agent\.venv\Scripts\python.exe --no-graphify --output .\qa-results.jsonl</code></pre>
+  <p>Without <code>--entrypoint</code>, LLaDAR inspects the project, proposes its public input/output interface, creates an adapter in a managed project copy, checks that the adapter can replay a question, and then runs each ready case in an isolated session. <code>--no-graphify</code> uses source inspection without the optional Graphify tool. If the project has several possible public interfaces, an interactive terminal asks you to choose one; a noninteractive run saves a continuation state that you can resume with <code>lladar resume-agent RUN</code>.</p>
+  <p>The answer file contains case IDs, exact questions, execution status and the agent's observed response. A successful adapter replay confirms that the connection worked; it does not establish that the answer was correct. Inspect the answers and the managed run directory under <code>.lladar/runs/</code>. Run only projects you trust: the managed copy is not an operating-system sandbox.</p>
+  <div class="note"><strong>Provider and cost:</strong> dataset generation and automatic interface discovery use model calls. The target agent keeps its own model and credentials. Avoid publishing <code>.env</code>, datasets with private source text, answer files, traces or <code>.lladar/</code>.</div>
+  <h3>Every argument in the <code>run-agent</code> example</h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>lladar run-agent</code></td><td>Run the target Agent on usable cases and collect its actual answers.</td></tr>
+    <tr><td><code>.\test-dataset.jsonl</code></td><td>Required positional input: the dataset created in step 2. For a benchmark run, replace it with the bundle directory <code>.\bbq-bundle</code>.</td></tr>
+    <tr><td><code>--project .\my-agent</code></td><td>Root directory of your Agent's source project. Replace the example folder with a real project; LLaDAR inspects it and works in a managed copy.</td></tr>
+    <tr><td><code>--target-python .\my-agent\.venv\Scripts\python.exe</code></td><td>The Python executable in the target project's own environment, with that project's dependencies installed. It is separate from LLaDAR's Python. The file must exist.</td></tr>
+    <tr><td><code>--no-graphify</code></td><td>Skip the optional Graphify code graph and use direct source inspection for interface discovery. The default is to try Graphify first.</td></tr>
+    <tr><td><code>--output .\qa-results.jsonl</code></td><td>Write one observed-answer record per line here. This file is the second positional input for <code>lladar eval</code>.</td></tr>
+  </tbody></table></div>
+  <p>The runner also writes <code>qa-results.jsonl.run.json</code> beside the answer file. It records the dataset and answer paths, an answer-file hash, run identity, and available target-project information; benchmark runs additionally record source and bundle identity. Managed adapter and continuation state live under <code>.lladar/runs/</code>. If a run pauses for interface confirmation, <code>RUN</code> in <code>lladar resume-agent RUN</code> means the saved run directory path, not the answer file. An existing answer file is protected unless you explicitly use <code>--force</code>.</p>
+</section>
+<section id="evaluate">
+  <h2>5. Evaluate the observed answers</h2>
+  <p>For a dataset made with <code>create test-dataset</code>, join it with the answer file from <code>run-agent</code>:</p>
+  <pre><code>lladar eval .\test-dataset.jsonl .\qa-results.jsonl --output .\evaluation.json</code></pre>
+  <p>The evaluator matches cases by stable ID and writes a JSON evaluation artifact. It includes original-answer accuracy, scoring coverage, clarification and error outcomes, and differences between the original and its variants. The LLaDAR Bias-Free Score is a project-specific measure, not an official external benchmark score. The evaluator may call a model judge, so keep provider credentials available. Existing output artifacts are protected unless you explicitly use <code>--force</code>.</p>
+  <h3>Inputs and files produced by <code>eval</code></h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>.\test-dataset.jsonl</code></td><td>First positional input: the question groups to score.</td></tr>
+    <tr><td><code>.\qa-results.jsonl</code></td><td>Second positional input: observed answers from <code>run-agent</code>. IDs connect answers to questions.</td></tr>
+    <tr><td><code>--output .\evaluation.json</code></td><td>Write the overall JSON evaluation here, including summary statistics and per-item outcomes.</td></tr>
+  </tbody></table></div>
+  <p>This generated-dataset example also writes <code>evaluation.items.jsonl</code> next to <code>evaluation.json</code>, with one comparison per line. Pass <code>evaluation.json</code>, not the <code>.items.jsonl</code> file, to <code>lladar report</code>. Both files are protected from overwrite unless you add <code>--force</code>.</p>
+</section>
+<section id="benchmark">
+  <h2>6. Example: import BBQ with <code>lladar create test-dataset --convert-from</code> (experimental)</h2>
+  <p>This example imports the public BBQ repository. <code>--convert-from</code> also accepts a local source directory. The import agent reads source files and documented scoring rules without running programs from the source repository. This URL example needs network access and credentials for the selected Akasha model. Import coverage depends on the available source evidence.</p>
+  <pre><code>lladar create test-dataset --convert-from https://github.com/nyu-mll/BBQ --output .\bbq-bundle</code></pre>
+  <p>The bundle contains <code>manifest.json</code>, <code>cases.jsonl</code>, <code>scoring-plan.json</code>, a declarative converter, and a pinned source snapshot under <code>evidence/source</code>. Cases with supported rules are <code>ready</code>; unsupported cases and malformed source rows remain visible as <code>unsupported</code> and <code>source_invalid</code>. The specified output directory must not already exist.</p>
+  <h3>Run and evaluate the imported cases</h3>
+  <pre><code>lladar run-agent .\bbq-bundle --project .\my-agent --target-python .\my-agent\.venv\Scripts\python.exe --no-graphify --output .\bbq-answers.jsonl
+lladar eval .\bbq-bundle .\bbq-answers.jsonl --output .\bbq-evaluation.json</code></pre>
+  <p>The runner executes ready cases and writes <code>bbq-answers.jsonl.run.json</code> beside the answers to identify the source revision and bundle. For a short trial, add <code>--max-cases 20</code> to <code>run-agent</code>; unattempted ready cases appear as missing answers, so coverage is partial. Evaluation verifies saved hashes and the pinned converter before applying the saved scoring plan. Unsupported source metrics remain identified rather than being silently replaced.</p>
+  <h3>Optional scoring rediscovery</h3>
+  <p>To independently rediscover source scoring for a completed benchmark run, use the same source and its run record. This makes additional model calls and writes a new output directory:</p>
+  <pre><code>lladar eval --from https://github.com/nyu-mll/BBQ --run .\bbq-answers.jsonl.run.json --output .\bbq-rediscovered-evaluation</code></pre>
+  <p>Imported and rediscovered evaluations follow source-supported rules. They do not imply that your agent's generation settings reproduce the benchmark paper's conditions.</p>
+  <h3>How the BBQ import command works</h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>lladar create test-dataset</code></td><td>Use the same command family as knowledge-based generation, in import mode.</td></tr>
+    <tr><td><code>--convert-from https://github.com/nyu-mll/BBQ</code></td><td>Read the public BBQ repository as the benchmark source. A local directory can also be used. Import mode cannot be combined with <code>--knowledge</code>.</td></tr>
+    <tr><td><code>--output .\bbq-bundle</code></td><td>Create a new directory containing imported cases, scoring rules, and a pinned source snapshot. It is a directory, not a JSONL filename, and must not already exist.</td></tr>
+  </tbody></table></div>
+  <p>In the benchmark runner command, <code>.\bbq-bundle</code> replaces the generated JSONL dataset, and <code>--output .\bbq-answers.jsonl</code> names the observed answers. Its other options have the same meanings as the table in step 4. The runner also creates <code>bbq-answers.jsonl.run.json</code>. In the next command, <code>eval</code> reads the bundle and answers and writes <code>bbq-evaluation.json</code>. You can add <code>--max-cases 20</code> to the benchmark <code>run-agent</code> command for a 20-case trial; this option requires a benchmark bundle.</p>
+  <h3>What the optional rediscovery command means</h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>--from https://github.com/nyu-mll/BBQ</code></td><td>Identify the same benchmark source and independently rediscover scoring rules from its pinned snapshot.</td></tr>
+    <tr><td><code>--run .\bbq-answers.jsonl.run.json</code></td><td>Use the completed benchmark run record to locate and verify its exact bundle and answers. Do not pass the answer JSONL here.</td></tr>
+    <tr><td><code>--output .\bbq-rediscovered-evaluation</code></td><td>Create a new directory with <code>report.json</code>, scoring-plan files, and audit evidence. Pass this directory to <code>lladar report</code>.</td></tr>
+  </tbody></table></div>
+</section>
+<section id="report">
+  <h2>7. Write a Markdown report</h2>
+  <p>Use <code>lladar report</code> after evaluation. It accepts a LLaDAR evaluation JSON file for a generated dataset or an imported benchmark, or the output directory created by <code>eval --from</code>. These commands use the files created in the examples above:</p>
+  <pre><code>lladar report .\evaluation.json --output .\evaluation-report.md
+lladar report .\bbq-evaluation.json --output .\bbq-report.md
+lladar report .\bbq-rediscovered-evaluation --output .\bbq-rediscovered-report.md</code></pre>
+  <p>The report is currently written in Traditional Chinese, regardless of this page's language. It includes a dataset introduction, test and evaluation methods, a description of the target project, results, and a per-question appendix. Statistics come from the evaluation artifact; an Akasha model writes explanatory text using the available evidence. Missing details are marked explicitly rather than guessed.</p>
+  <p>For <code>.\bbq-report.md</code>, LLaDAR also writes <code>.\bbq-report.md.meta.json</code> with provenance and report-generation details. An existing Markdown report or sidecar is protected unless you pass <code>--force</code>. If report writing fails, inspect <code>.\bbq-report.md.failed.json</code>; no partial Markdown report is published. Use <code>--model</code> to choose the writing model and <code>--env-file</code> to choose its credentials file. Review the report before sharing it because the appendix can contain source questions and your agent's answers.</p>
+  <h3>Report command arguments</h3>
+  <div class="table-wrap"><table><thead><tr><th>Part</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td><code>.\evaluation.json</code> or <code>.\bbq-evaluation.json</code></td><td>Positional input: a completed LLaDAR evaluation JSON file.</td></tr>
+    <tr><td><code>.\bbq-rediscovered-evaluation</code></td><td>Alternative positional input: the directory produced by <code>eval --from</code>; LLaDAR reads its <code>report.json</code>.</td></tr>
+    <tr><td><code>--output .\bbq-report.md</code></td><td>Required destination for the human-readable Markdown report. It does not change the input evaluation JSON.</td></tr>
+    <tr><td><code>--model MODEL</code>, <code>--env-file PATH</code></td><td>Optional writing model and provider credential file. The report model explains saved evidence; it is not the target Agent's model.</td></tr>
+    <tr><td><code>--force</code></td><td>Explicitly replace an existing Markdown report and provenance sidecar.</td></tr>
+  </tbody></table></div>
+</section>
+<section id="files">
+  <h2>8. File and directory map</h2>
+  <p>These names follow the examples on this page. Different <code>--output</code> paths change the names of generated artifacts; the roles stay the same.</p>
+  <div class="table-wrap"><table><thead><tr><th>Path</th><th>Created by / purpose</th></tr></thead><tbody>
+    <tr><td><code>.env</code></td><td>Local provider credentials for model calls. You supply it; do not publish it.</td></tr>
+    <tr><td><code>knowledge/plans.md</code></td><td>Your input knowledge text for generating controlled questions.</td></tr>
+    <tr><td><code>config.toml</code></td><td>Editable settings template from <code>create config</code>; read by <code>--config</code>.</td></tr>
+    <tr><td><code>test-dataset.jsonl</code></td><td>Generated question groups; input to the regular runner and evaluator.</td></tr>
+    <tr><td><code>my-agent/</code> and <code>my-agent/.venv/Scripts/python.exe</code></td><td>Your target project and its separate Python interpreter. These are prerequisites, not LLaDAR outputs.</td></tr>
+    <tr><td><code>qa-results.jsonl</code></td><td>Actual per-question Agent responses and execution statuses from <code>run-agent</code>.</td></tr>
+    <tr><td><code>qa-results.jsonl.run.json</code></td><td>Run identity, file hashes, and target-project details. The runner creates it next to the answers.</td></tr>
+    <tr><td><code>evaluation.json</code> / <code>evaluation.items.jsonl</code></td><td>Generated-dataset evaluation summary and individual comparisons.</td></tr>
+    <tr><td><code>bbq-bundle/manifest.json</code></td><td>Imported benchmark source identity, counts, and artifact hashes.</td></tr>
+    <tr><td><code>bbq-bundle/cases.jsonl</code></td><td>Imported benchmark cases, one record per line, including ready and excluded cases.</td></tr>
+    <tr><td><code>bbq-bundle/scoring-plan.json</code> / <code>scorers/converter.json</code></td><td>Source-supported scoring rules and declarative case conversion.</td></tr>
+    <tr><td><code>bbq-bundle/evidence/source/</code></td><td>Pinned copy of source files used for import and later integrity checks.</td></tr>
+    <tr><td><code>bbq-answers.jsonl</code> / <code>bbq-answers.jsonl.run.json</code></td><td>Observed benchmark answers and their run record.</td></tr>
+    <tr><td><code>bbq-evaluation.json</code></td><td>Benchmark evaluation based on the saved scoring plan.</td></tr>
+    <tr><td><code>bbq-rediscovered-evaluation/</code></td><td>Optional independent scoring output: <code>report.json</code>, scoring plans, and evidence.</td></tr>
+    <tr><td><code>bbq-report.md</code> / <code>bbq-report.md.meta.json</code></td><td>Readable report and its provenance record; a failed writing attempt uses <code>bbq-report.md.failed.json</code>.</td></tr>
+    <tr><td><code>.lladar/runs/</code></td><td>Local managed Agent workspaces, adapter state, and optional traces. Keep private.</td></tr>
+  </tbody></table></div>
+</section>
+<section id="reference">
+  <h2>Command reference</h2>
+  <pre><code>lladar create test-dataset --help
+lladar create config --help
+lladar run-agent --help
+lladar resume-agent --help
+lladar eval --help
+lladar report --help
+lladar skill --help</code></pre>
+  <p>For Python API use and advanced options, see the <a href="https://github.com/stoday/LLaDAR">project repository</a>. Check the help output from your installed checkout because published packages may differ from the current source.</p>
+</section>
+</main>
+<footer><div class="wrap">LLaDAR · <a href="https://github.com/stoday/LLaDAR">Source and license</a> · <a href="zh-TW/" lang="zh-Hant">繁體中文</a></div></footer>
+</body>
+</html>

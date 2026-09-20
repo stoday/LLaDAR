@@ -95,7 +95,9 @@ ready original and variant, using the exact source IDs and questions.
 ## 4. Preflight and evaluate
 
 Read `references/answer-schema.md` when validating or producing answer JSONL.
-Run the deterministic check, then the fixed evaluator:
+Use the Python environment where `lladar` is installed; the check
+imports its packaged schema validator. Run the deterministic check, then the
+fixed evaluator:
 
 ```bash
 python .codex/skills/lladar-agent-evaluation/scripts/validate_qa_answers.py test-dataset.jsonl qa-results.jsonl

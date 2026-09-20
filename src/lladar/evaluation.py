@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .exceptions import EvaluationError
+from .artifact_schema import ArtifactSchemaError, artifact_contract, artifact_version, validate_artifact
 from .providers import AkashaProvider, LLMProvider
 from .validation import validate_dataset_item
 
@@ -27,15 +28,8 @@ _SCORED_LABELS = {
     "incorrect_original",
     "completed_no_answer",
 }
-_ALL_LABELS = (
-    "bias_free",
-    "cue_sensitive",
-    "incorrect_original",
-    "completed_no_answer",
-    "awaiting_clarification",
-    "execution_error",
-    "judge_error",
-    "alignment_error",
+_ALL_LABELS = tuple(
+    artifact_contract()["$defs"]["EvaluationItem"]["properties"]["label"]["enum"]
 )
 
 
@@ -112,21 +106,13 @@ def _answer_record_errors(
         case = expected.get(case_id)
         if case is None:
             continue
-        for field in ("schema_version", "group_id", "kind", "question", "status"):
-            if field not in answer:
-                errors.append({"source": "answers", "id": case_id, "error": f"missing_{field}"})
-        if answer.get("schema_version") != 2:
-            errors.append({"source": "answers", "id": case_id, "error": "invalid_schema_version"})
+        try:
+            validate_artifact("ObservedAnswerRecord", answer)
+        except ArtifactSchemaError as error:
+            errors.append({"source": "answers", "id": case_id, "error": f"invalid_schema: {error}"})
         for field in ("group_id", "kind", "question"):
             if answer.get(field) != case[field]:
                 errors.append({"source": "answers", "id": case_id, "error": f"mismatched_{field}"})
-        status = answer.get("status")
-        if status not in {"ok", "execution_error"}:
-            errors.append({"source": "answers", "id": case_id, "error": "invalid_status"})
-        elif status == "ok" and not isinstance(answer.get("answer"), str):
-            errors.append({"source": "answers", "id": case_id, "error": "invalid_answer"})
-        elif status == "execution_error" and not isinstance(answer.get("error"), str):
-            errors.append({"source": "answers", "id": case_id, "error": "invalid_error"})
     return errors
 
 
@@ -230,11 +216,10 @@ def _judge_session(
     expected_case: dict[str, Any],
     alignment_error: str | None = None,
 ) -> tuple[dict[str, Any], int, int]:
-    source = answer_record or expected_case
     base = {
-        "id": source.get("id"),
-        "group_id": source.get("group_id"),
-        "kind": source.get("kind"),
+        "id": expected_case["id"],
+        "group_id": expected_case["group_id"],
+        "kind": expected_case["kind"],
     }
     if alignment_error is not None:
         base.update(status="alignment_error", error=alignment_error)
@@ -242,7 +227,7 @@ def _judge_session(
     if answer_record is None:
         base.update(status="alignment_error", error="missing_answer_record")
         return base, 0, 0
-    if include_raw_answers and "answer" in answer_record:
+    if include_raw_answers and isinstance(answer_record.get("answer"), str):
         base["answer"] = answer_record["answer"]
     if answer_record.get("status") == "execution_error":
         base.update(status="execution_error", error=answer_record.get("error"))
@@ -458,6 +443,7 @@ def evaluate(
             sessions.append(variant_session)
             label = _comparison_label(original_session, variant_session)
             comparison = {
+                "schema_version": artifact_version(),
                 "id": variant["id"],
                 "group_id": group_id,
                 "variant_id": variant["id"],
@@ -527,7 +513,7 @@ def evaluate(
         "alignment_errors": len(alignment_errors),
     }
     report = {
-        "schema_version": 2,
+        "schema_version": artifact_version(),
         "evaluation": {
             "protocol": "lladar-bfs",
             "protocol_version": PROTOCOL_VERSION,
@@ -554,6 +540,12 @@ def evaluate(
         "sessions": sessions,
         "items": comparisons,
     }
+    try:
+        for item in comparisons:
+            validate_artifact("EvaluationItem", item)
+        validate_artifact("EvaluationReport", report)
+    except ArtifactSchemaError as error:
+        raise EvaluationError(str(error)) from error
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

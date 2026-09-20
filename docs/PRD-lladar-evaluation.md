@@ -1,5 +1,8 @@
 # LLaDAR schema-v2 evaluation and reporting
 
+Serialized artifact shapes are defined by `src/lladar/schemas/v2.json` and
+`docs/PRD-unified-artifact-schema.md`.
+
 ## Goal and protocol boundary
 
 `lladar eval` compares each schema-v2 variant response with its group's

@@ -16,6 +16,7 @@ from .chunking import (
     semantic_chunk_text,
     serialize_chunks,
 )
+from .artifact_schema import artifact_version
 from .exceptions import ChunkingError, DatasetValidationError, ProviderError
 from .loaders import KnowledgeInput, load_knowledge
 from .model_profiles import resolve_model_profile
@@ -464,7 +465,7 @@ def _ready_record(
         )
         variant["id"] = f"{group_id}-{_stable_hash(variant['kind'], identity)[:12]}"
     item = {
-        "schema_version": 2,
+        "schema_version": artifact_version(),
         "id": group_id,
         "status": "ready",
         "source": source,
@@ -483,7 +484,7 @@ def _skipped_record(
     duplicate_of: str | None = None,
 ) -> dict[str, Any]:
     item: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": artifact_version(),
         "id": item_id,
         "status": "skipped",
         "source": source,

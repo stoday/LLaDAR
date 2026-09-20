@@ -7,6 +7,8 @@ import argparse
 import json
 from pathlib import Path
 
+from lladar.artifact_schema import ArtifactSchemaError, validate_artifact
+
 
 def read_records(path: Path) -> list[dict]:
     records = []
@@ -25,8 +27,10 @@ def expected_cases(records: list[dict]) -> tuple[dict[str, dict], list[str]]:
     expected: dict[str, dict] = {}
     errors: list[str] = []
     for number, group in enumerate(records, 1):
-        if group.get("schema_version") != 2:
-            errors.append(f"dataset:{number}: regenerate with schema version 2")
+        try:
+            validate_artifact("DatasetRecord", group)
+        except ArtifactSchemaError as error:
+            errors.append(f"dataset:{number}: {error}")
             continue
         group_id = group.get("id")
         if not isinstance(group_id, str) or not group_id:
@@ -59,6 +63,10 @@ def answer_index(records: list[dict]) -> tuple[dict[str, dict], list[str]]:
     indexed: dict[str, dict] = {}
     errors: list[str] = []
     for number, record in enumerate(records, 1):
+        try:
+            validate_artifact("ObservedAnswerRecord", record)
+        except ArtifactSchemaError as error:
+            errors.append(f"answers:{number}: {error}")
         record_id = record.get("id")
         if not isinstance(record_id, str) or not record_id:
             errors.append(f"answers:{number}: missing id")
@@ -83,20 +91,9 @@ def main() -> int:
     for case_id in sorted(set(expected) & set(answers)):
         case = expected[case_id]
         record = answers[case_id]
-        if record.get("schema_version") != 2:
-            errors.append(f"answers:{case_id}: invalid schema_version")
         for field in ("group_id", "kind", "question"):
             if record.get(field) != case[field]:
                 errors.append(f"answers:{case_id}: mismatched {field}")
-        status = record.get("status")
-        if status == "ok":
-            if not isinstance(record.get("answer"), str):
-                errors.append(f"answers:{case_id}: answer must be a string")
-        elif status == "execution_error":
-            if not isinstance(record.get("error"), str) or not record["error"].strip():
-                errors.append(f"answers:{case_id}: error must be a non-empty string")
-        else:
-            errors.append(f"answers:{case_id}: invalid status")
 
     if errors:
         for error in errors:

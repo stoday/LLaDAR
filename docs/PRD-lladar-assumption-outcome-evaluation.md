@@ -1,5 +1,9 @@
 # LLaDAR assumption-probing test dataset generation
 
+The packaged `src/lladar/schemas/v2.json` is authoritative for serialized
+artifact shapes; see `PRD-unified-artifact-schema.md`. Examples below explain
+the workflow but do not define a separate schema.
+
 ## Status
 
 Product requirements agreed. Implemented in the working tree on 2026-09-11
@@ -250,7 +254,7 @@ files and use the same schema as built-in policies.
 Example:
 
 ```toml
-schema_version = 1
+schema_version = 2
 id = "food-recommendation"
 version = 1
 description = "Probe unrelated preferences in restaurant recommendations."
@@ -272,7 +276,7 @@ description = "a long-established restaurant"
 
 Each policy contains:
 
-- `schema_version`: policy schema version, initially `1`;
+- `schema_version`: policy schema version, exactly `2`;
 - `id`: stable policy identifier;
 - `version`: positive policy revision number;
 - `description`: human-readable purpose;

@@ -555,3 +555,50 @@ def test_akasha_adapter_controller_uses_tools_only_inside_workspace(tmp_path, mo
 
     assert "LLADAR_QUESTION" in entrypoint.read_text(encoding="utf-8")
     assert captured["kwargs"]["tools"]
+
+
+def test_run_agent_persists_evidenced_project_profile(tmp_path, isolated_target_python, monkeypatch):
+    from lladar import project_profile
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.md").write_text("A simple agent.", encoding="utf-8")
+    (project / "main.py").write_text(
+        "import os\nprint(os.environ['LLADAR_QUESTION'])\n", encoding="utf-8"
+    )
+    dataset = tmp_path / "dataset.jsonl"
+    answers = tmp_path / "answers.jsonl"
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    write_jsonl(dataset, [ready_group()])
+    monkeypatch.setattr(project_profile, "describe_project", lambda *args, **kwargs: {
+        "status": "ready", "overview": "A simple agent.", "project_name": "Example",
+        "agent_name": "Example", "model_name": None, "identity_status": "inferred",
+        "candidates": [], "evidence": ["README.md"], "profile_model": kwargs["model"],
+    })
+    class NoOpAdapter:
+        def adapt(self, workspace, entrypoint):
+            return None
+    assert lladar.run_agent(
+        dataset, answers, project=project, entrypoint="main.py",
+        adapter=NoOpAdapter(), env_file=env_file,
+        target_python=isolated_target_python, runs_root=tmp_path / "runs",
+        verbose=False,
+    ) == 4
+    record = json.loads((tmp_path / "answers.jsonl.run.json").read_text(encoding="utf-8"))
+    assert record["target"]["project_profile"]["evidence"] == ["README.md"]
+    assert record["target"]["project_profile"]["identity_status"] == "inferred"
+    assert (Path(record["target"]["profile_evidence_path"]) / "README.md").read_text(encoding="utf-8") == "A simple agent."
+    def broken_profile(*args, **kwargs):
+        raise RuntimeError("profile model unavailable")
+    monkeypatch.setattr(project_profile, "describe_project", broken_profile)
+    second_answers = tmp_path / "answers-again.jsonl"
+    assert lladar.run_agent(
+        dataset, second_answers, project=project, entrypoint="main.py",
+        adapter=NoOpAdapter(), env_file=env_file,
+        target_python=isolated_target_python, runs_root=tmp_path / "runs",
+        verbose=False,
+    ) == 4
+    second_record = json.loads((tmp_path / "answers-again.jsonl.run.json").read_text(encoding="utf-8"))
+    assert second_record["target"]["project_profile"]["status"] == "unavailable"
+    assert "profile model unavailable" in second_record["target"]["project_profile"]["reason"]

@@ -1,5 +1,8 @@
 # LLaDAR schema-v2 agent runner
 
+Serialized artifact shapes are defined by `src/lladar/schemas/v2.json` and
+`docs/PRD-unified-artifact-schema.md`.
+
 ## Goal
 
 `lladar run-agent` executes every runnable case in a schema-v2 question-group

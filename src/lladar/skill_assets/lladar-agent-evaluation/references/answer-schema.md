@@ -1,5 +1,9 @@
 # Schema-v2 observed-answer contract
 
+The authoritative machine-readable definition is
+`lladar/schemas/v2.json` (`$defs/ObservedAnswerRecord`) in the installed
+LLaDAR package. The examples here show how to fill that contract.
+
 The answer artifact is UTF-8 JSONL with one record per attempted original or
 variant session.
 

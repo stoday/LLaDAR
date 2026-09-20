@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Sequence
 
 from .exceptions import DatasetValidationError
+from .artifact_schema import ArtifactSchemaError, artifact_contract, artifact_version, validate_artifact
 from .policies import load_generation_policies, policy_index
 
 
@@ -18,34 +19,9 @@ QUALITY_CHECKS = (
     "no_unresolved_references",
 )
 
-SKIP_REASON_CODES = {
-    "no_answerable_question",
-    "no_key_information",
-    "no_valid_omission",
-    "no_valid_peer_cue",
-    "quality_validation_failed",
-    "duplicate",
-}
-
-_READY_FIELDS = {
-    "schema_version",
-    "id",
-    "status",
-    "source",
-    "key_information",
-    "original",
-    "variants",
-}
-_SKIPPED_FIELDS = {
-    "schema_version",
-    "id",
-    "status",
-    "source",
-    "reason_code",
-    "reason",
-    "attempts",
-    "duplicate_of",
-}
+SKIP_REASON_CODES = set(
+    artifact_contract()["$defs"]["DatasetSkipped"]["properties"]["reason_code"]["enum"]
+)
 
 
 def _text(value: object, location: str) -> str:
@@ -262,15 +238,18 @@ def validate_dataset_item(
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise DatasetValidationError("dataset item must be an object")
-    if value.get("schema_version") != 2:
+    if value.get("schema_version") != artifact_version():
         raise DatasetValidationError(
             "unsupported dataset schema_version; regenerate the dataset with schema version 2"
         )
+    try:
+        validate_artifact("DatasetRecord", value)
+    except ArtifactSchemaError as error:
+        raise DatasetValidationError(str(error)) from error
     _text(value.get("id"), "dataset item id")
     _validate_source(value.get("source"))
     status = value.get("status")
     if status == "ready":
-        _exact_fields(value, _READY_FIELDS, "ready-record")
         generated = {
             "key_information": value.get("key_information"),
             "original": value.get("original"),
@@ -284,7 +263,6 @@ def validate_dataset_item(
         )
         return value
     if status == "skipped":
-        _exact_fields(value, _SKIPPED_FIELDS, "skipped-record")
         if value.get("reason_code") not in SKIP_REASON_CODES:
             raise DatasetValidationError("skipped item has an invalid reason_code")
         _text(value.get("reason"), "skipped item reason")

@@ -5,10 +5,22 @@ import hashlib
 import os
 import re
 import sys
+from functools import wraps
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+def recoverable_exploration(function):
+    """Return source-tool failures to the agent so it can choose another read tool."""
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (ValueError, RuntimeError, OSError) as error:
+            return f"TOOL_ERROR: {type(error).__name__}: {error}"
+    invoke.__name__ = function.__name__
+    return invoke
 
 IGNORED_DIRECTORIES = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
@@ -149,6 +161,54 @@ class WorkspaceExplorer:
         self._record("search_code", {"query": query, "pattern": pattern}, f"{len(matches)} matches")
         return matches
 
+    def search_context(self, query: str, pattern: str = "**/*.txt",
+                       limit: int = 10, before: int = 3,
+                       after: int = 12) -> list[dict[str, Any]]:
+        """Find bounded source excerpts around a method or scoring term."""
+        self._check_budget()
+        if (not query or Path(pattern).is_absolute() or ".." in Path(pattern).parts
+                or not 1 <= limit <= 20 or not 0 <= before <= 20
+                or not 0 <= after <= 30):
+            raise ValueError("Invalid contextual source search")
+        matches: list[dict[str, Any]] = []
+        for path in sorted(self.root.glob(pattern)):
+            if (not path.is_file() or not self._visible(path)
+                    or path.stat().st_size > 2_000_000):
+                continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for index, line in enumerate(lines):
+                if query.casefold() not in line.casefold():
+                    continue
+                snippet = "\n".join(lines[max(0, index - before):index + after + 1])[:4000]
+                if self._read_characters + len(snippet) > self.budget.max_read_characters:
+                    raise RuntimeError("Exploration source-reading budget exhausted")
+                self._read_characters += len(snippet)
+                matches.append({"path": path.relative_to(self.root).as_posix(),
+                                "line": index + 1, "snippet": snippet})
+                if len(matches) >= limit:
+                    break
+            if len(matches) >= limit:
+                break
+        self._record("search_context", {"query": query, "pattern": pattern,
+                                        "limit": limit, "before": before, "after": after},
+                     f"{len(matches)} contextual matches")
+        return matches
+    def preview_file(self, path: str, limit: int = 8000) -> str:
+        """Read a bounded prefix of a source file, including single-line JSON."""
+        self._check_budget()
+        if not 1 <= limit <= 10000:
+            raise ValueError("Preview limit must be between 1 and 10000")
+        target = self._resolve(path)
+        if not target.is_file() or not self._visible(target):
+            raise ValueError(f"Not a readable workspace file: {path}")
+        with target.open("r", encoding="utf-8", errors="replace") as stream:
+            content = stream.read(limit)
+        if self._read_characters + len(content) > self.budget.max_read_characters:
+            raise RuntimeError("Exploration source-reading budget exhausted")
+        self._read_characters += len(content)
+        self._record("preview_file", {"path": path, "limit": limit},
+                     f"{len(content)} characters", content)
+        return content
     def write_harness(self, filename: str, content: str) -> str:
         self._check_budget()
         if not filename.endswith(".py") or Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):

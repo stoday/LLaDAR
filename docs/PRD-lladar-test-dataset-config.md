@@ -1,5 +1,8 @@
 # LLaDAR test-dataset configuration
 
+Serialized artifact shapes are defined by `src/lladar/schemas/v2.json` and
+`docs/PRD-unified-artifact-schema.md`.
+
 ## Status
 
 Implemented as schema version 2 on 2026-09-11. This document supersedes the

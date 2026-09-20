@@ -69,7 +69,7 @@ class FakeProvider:
 
 def _write_policy(path: Path) -> None:
     path.write_text(
-        """schema_version = 1
+        """schema_version = 2
 id = "food-recommendation"
 version = 1
 description = "Probe restaurant recommendation context."
@@ -189,13 +189,13 @@ verbose = false
     "document, expected",
     [
         ("schema_version = 1\n[test_dataset]\nknowledge = ['x']\n", "regenerate"),
-        ("schema_version = 2\n", "missing [test_dataset]"),
+        ("schema_version = 2\n", "test_dataset"),
         ("schema_version = 2\n[test_dataset]\n", "requires knowledge"),
-        ("schema_version = 2\n[test_dataset]\nknowledge = 'x'\n", "knowledge must be"),
-        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\ncount = -1\n", "count must be"),
-        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\nseed = 1.5\n", "seed must be"),
-        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\npolicies = []\n", "policies must be"),
-        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\nrandom_select = 1\n", "unknown config key"),
+        ("schema_version = 2\n[test_dataset]\nknowledge = 'x'\n", "knowledge"),
+        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\ncount = -1\n", "count"),
+        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\nseed = 1.5\n", "seed"),
+        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\npolicies = []\n", "policies"),
+        ("schema_version = 2\n[test_dataset]\nknowledge = ['x']\nrandom_select = 1\n", "random_select"),
     ],
 )
 def test_invalid_config_fails_before_provider_execution(tmp_path: Path, capsys, document: str, expected: str):

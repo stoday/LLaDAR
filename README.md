@@ -13,9 +13,9 @@ generate test inputs -> collect Agent responses -> expose response differences
 -> human review -> improve the Agent
 ```
 
-The current schema-v2 MVP implements the first step only: test-dataset
-generation. It does not run an Agent, fill variant answers, score differences,
-or decide whether a result is biased, fair, acceptable, or unacceptable.
+The current workflow generates datasets, runs an Agent on each ready case,
+and evaluates answer differences. Its LLaDAR BFS score is an operational measure,
+not a universal fairness judgment.
 
 ## What dataset generation does
 
@@ -33,6 +33,14 @@ Peer cues come from versioned generation policies. The built-in policy covers
 general social/contextual dimensions. Projects can add local TOML policies—for
 example, a food-recommendation policy that compares newly opened and established
 restaurants—without changing Python code.
+
+## Artifact schema
+
+The packaged [v2 JSON Schema](src/lladar/schemas/v2.json) is the single
+machine-readable contract for public config, policy, dataset, answer, and
+report files. See the [artifact contract](docs/PRD-unified-artifact-schema.md)
+for producer and consumer paths. TOML files are validated after parsing;
+JSONL files are validated one record per line.
 
 ## Installation
 
@@ -102,7 +110,7 @@ them.
 Create a local UTF-8 TOML file:
 
 ```toml
-schema_version = 1
+schema_version = 2
 id = "food-recommendation"
 version = 1
 description = "Probe unrelated preferences in restaurant recommendations."
@@ -467,3 +475,55 @@ Branch pushes and PRs run pytest; eligible runs also exercise real Gemini-based
 vibe-testing. Version-tag publishing requires both to pass. See
 [CI setup and coverage](docs/CI.md) for the required `GEMINI_API_KEY` secret,
 model configuration, fork PR behavior, and acceptance boundaries.
+
+## External benchmark datasets (experimental)
+
+Use a public GitHub repository URL or a local directory. LLaDAR's import and
+scoring-discovery agents use `akasha.agents` with read-only source tools. The
+source repository's own programs are read as evidence and are not executed.
+
+```powershell
+lladar create test-dataset --convert-from https://github.com/nyu-mll/BBQ --output .\bbq-bundle
+lladar run-agent .\bbq-bundle --project .\my-agent --output .\bbq-answers.jsonl
+lladar eval .\bbq-bundle .\bbq-answers.jsonl --output .\bbq-report.json
+lladar report .\bbq-report.json --output .\report-2026-09-21.md
+```
+
+The import command creates `manifest.json`, `cases.jsonl`,
+`scoring-plan.json`, `scorers/converter.json`, and a pinned source snapshot
+under `evidence/source`. The ordinary `eval` command verifies the saved file
+hashes, reruns the saved declarative converter against that snapshot, then
+uses the sealed scoring plan. The answer run also records
+`<answers>.run.json`, which identifies the dataset and source revision.
+
+To independently rediscover source scoring with Akasha, use the completed run:
+
+```powershell
+lladar eval --from https://github.com/nyu-mll/BBQ `
+  --run .\bbq-answers.jsonl.run.json `
+  --output .\bbq-rediscovered-eval
+lladar report .\bbq-rediscovered-eval --output .\bbq-rediscovered-report.md
+```
+
+Each case retains its source locator and original prompt. The common case
+format covers single choice, multiple choice, ordering, free answer, and
+text generation. Cases without a source-supported scoring rule are marked
+`unsupported`; malformed source rows are marked `source_invalid`. The report
+lists coverage, per-case outcomes, source rule evidence, applicable group
+metrics, and documented source metrics that cannot yet be reproduced. The
+runner gives each generation sample a stable `sample_id` and follows an
+imported `generation_protocol.samples_per_case` when source evidence supports
+one. Generation scores describe the observed answers; reports mark
+source-study comparability as `not_established` because target generation
+length, stopping behavior, and other model settings are not yet controlled.
+
+`lladar report` accepts a schema-v2 or schema-v3 evaluation JSON file, or an
+`eval --from` output directory. It writes a Traditional Chinese Markdown
+report and a `<report>.meta.json` provenance sidecar. Python computes the
+statistics and writes every question and observed answer into the appendix;
+`akasha.agents` writes only the explanatory sections from the saved evidence.
+The run record stores a source-cited project overview when provider credentials
+are available. Missing metadata is marked explicitly, and inferred target
+identities are labeled as inferences. A report-writing failure leaves
+`<report>.failed.json` for diagnosis without publishing a partial Markdown
+report. Use `--model` and `--env-file` to select the writing agent.

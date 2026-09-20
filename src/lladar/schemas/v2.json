@@ -1,0 +1,1480 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/stoday/LLaDAR/blob/main/src/lladar/schemas/v2.json",
+  "title": "LLaDAR public artifact contract version 2",
+  "$defs": {
+    "NonEmptyText": {
+      "type": "string",
+      "minLength": 1
+    },
+    "Source": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunk_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "file",
+        "chunk_id",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "KeyInformation": {
+      "type": "object",
+      "properties": {
+        "dimension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "dimension",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "Original": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "question",
+        "answer"
+      ],
+      "additionalProperties": false
+    },
+    "Change": {
+      "type": "object",
+      "properties": {
+        "removed": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "removed",
+        "added"
+      ],
+      "additionalProperties": false
+    },
+    "Cue": {
+      "type": "object",
+      "properties": {
+        "policy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dimension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "set_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "policy_id",
+        "policy_version",
+        "dimension",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "OmissionVariant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "information_omission"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": "null"
+        },
+        "change": {
+          "$ref": "#/$defs/Change"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "question",
+        "answer",
+        "change"
+      ],
+      "additionalProperties": false
+    },
+    "PeerCueVariant": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "peer_cue_addition"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answer": {
+          "type": "null"
+        },
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "cue": {
+          "$ref": "#/$defs/Cue"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "question",
+        "answer",
+        "change",
+        "cue"
+      ],
+      "additionalProperties": false
+    },
+    "PolicyValue": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "PolicyDimension": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "applies_when": {
+          "type": "string",
+          "minLength": 1
+        },
+        "paired": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyValue"
+          },
+          "minItems": 2
+        }
+      },
+      "required": [
+        "id",
+        "applies_when",
+        "paired",
+        "values"
+      ],
+      "additionalProperties": false
+    },
+    "GenerationPolicy": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "dimensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyDimension"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "version",
+        "description",
+        "dimensions"
+      ],
+      "additionalProperties": false
+    },
+    "TestDatasetSettings": {
+      "type": "object",
+      "properties": {
+        "knowledge": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunk_size": {
+          "oneOf": [
+            {
+              "const": "auto"
+            },
+            {
+              "type": "integer",
+              "minimum": 1
+            }
+          ]
+        },
+        "overlap": {
+          "type": "number",
+          "minimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "policies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "auto_window_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "verbose": {
+          "type": "boolean"
+        },
+        "trace": {
+          "type": "boolean"
+        },
+        "trace_console": {
+          "type": "boolean"
+        },
+        "trace_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "output": {
+          "type": "string",
+          "minLength": 1
+        },
+        "env_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "strict": {
+          "type": "boolean"
+        },
+        "cache": {
+          "type": "boolean"
+        },
+        "cache_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "refresh_cache": {
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "prompt",
+          "prompt_file"
+        ]
+      }
+    },
+    "TestDatasetConfig": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "test_dataset": {
+          "$ref": "#/$defs/TestDatasetSettings"
+        }
+      },
+      "required": [
+        "schema_version",
+        "test_dataset"
+      ],
+      "additionalProperties": false
+    },
+    "DatasetReady": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "ready"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "key_information": {
+          "$ref": "#/$defs/KeyInformation"
+        },
+        "original": {
+          "$ref": "#/$defs/Original"
+        },
+        "variants": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/OmissionVariant"
+              },
+              {
+                "$ref": "#/$defs/PeerCueVariant"
+              }
+            ]
+          },
+          "minItems": 2,
+          "maxItems": 5,
+          "allOf": [
+            {
+              "contains": {
+                "$ref": "#/$defs/OmissionVariant"
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "$ref": "#/$defs/PeerCueVariant"
+              },
+              "minContains": 1,
+              "maxContains": 4
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "status",
+        "source",
+        "key_information",
+        "original",
+        "variants"
+      ],
+      "additionalProperties": false
+    },
+    "DatasetSkipped": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "skipped"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "reason_code": {
+          "enum": [
+            "no_answerable_question",
+            "no_key_information",
+            "no_valid_omission",
+            "no_valid_peer_cue",
+            "quality_validation_failed",
+            "duplicate"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "duplicate_of": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "status",
+        "source",
+        "reason_code",
+        "reason",
+        "attempts"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "reason_code": {
+                "const": "duplicate"
+              }
+            },
+            "required": [
+              "reason_code"
+            ]
+          },
+          "then": {
+            "required": [
+              "duplicate_of"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "duplicate_of"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "DatasetRecord": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/DatasetReady"
+        },
+        {
+          "$ref": "#/$defs/DatasetSkipped"
+        }
+      ]
+    },
+    "ObservedAnswerOk": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "original",
+            "information_omission",
+            "peer_cue_addition"
+          ]
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "ok"
+        },
+        "answer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "group_id",
+        "kind",
+        "question",
+        "status",
+        "answer"
+      ],
+      "additionalProperties": false
+    },
+    "ObservedAnswerError": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "original",
+            "information_omission",
+            "peer_cue_addition"
+          ]
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "const": "execution_error"
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "group_id",
+        "kind",
+        "question",
+        "status",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "ObservedAnswerRecord": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ObservedAnswerOk"
+        },
+        {
+          "$ref": "#/$defs/ObservedAnswerError"
+        }
+      ]
+    },
+    "EvaluationSession": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "original",
+            "information_omission",
+            "peer_cue_addition"
+          ]
+        },
+        "status": {
+          "enum": [
+            "completed_answer",
+            "completed_no_answer",
+            "awaiting_clarification",
+            "execution_error",
+            "judge_error",
+            "alignment_error"
+          ]
+        },
+        "answer": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "correct": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "equivalent": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "group_id",
+        "kind",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluationItem": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "variant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "information_omission",
+            "peer_cue_addition"
+          ]
+        },
+        "label": {
+          "enum": [
+            "bias_free",
+            "cue_sensitive",
+            "incorrect_original",
+            "completed_no_answer",
+            "awaiting_clarification",
+            "execution_error",
+            "judge_error",
+            "alignment_error"
+          ]
+        },
+        "score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "enum": [
+            0,
+            1,
+            null
+          ]
+        },
+        "eligible": {
+          "type": "boolean"
+        },
+        "original_session": {
+          "$ref": "#/$defs/EvaluationSession"
+        },
+        "variant_session": {
+          "$ref": "#/$defs/EvaluationSession"
+        },
+        "cue": {
+          "$ref": "#/$defs/Cue"
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "group_id",
+        "variant_id",
+        "kind",
+        "label",
+        "score",
+        "eligible",
+        "original_session",
+        "variant_session"
+      ],
+      "additionalProperties": false
+    },
+    "ComparisonBucket": {
+      "type": "object",
+      "properties": {
+        "scheduled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eligible": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bias_free": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cue_sensitive": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "incorrect_original": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completed_no_answer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bfs_lladar": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scheduled",
+        "eligible",
+        "bias_free",
+        "cue_sensitive",
+        "incorrect_original",
+        "completed_no_answer",
+        "excluded",
+        "bfs_lladar"
+      ],
+      "additionalProperties": false
+    },
+    "PolicyBucket": {
+      "type": "object",
+      "properties": {
+        "policy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "dimension": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scheduled": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eligible": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bias_free": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cue_sensitive": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "incorrect_original": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completed_no_answer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excluded": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bfs_lladar": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "policy_id",
+        "policy_version",
+        "dimension",
+        "value",
+        "scheduled",
+        "eligible",
+        "bias_free",
+        "cue_sensitive",
+        "incorrect_original",
+        "completed_no_answer",
+        "excluded",
+        "bfs_lladar"
+      ],
+      "additionalProperties": false
+    },
+    "MatchedSetValue": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "label": {
+          "enum": [
+            "bias_free",
+            "cue_sensitive",
+            "incorrect_original",
+            "completed_no_answer",
+            "awaiting_clarification",
+            "execution_error",
+            "judge_error",
+            "alignment_error"
+          ]
+        },
+        "cue_sensitive_rate": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "value",
+        "label",
+        "cue_sensitive_rate"
+      ],
+      "additionalProperties": false
+    },
+    "MatchedSet": {
+      "type": "object",
+      "properties": {
+        "group_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "policy_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "set_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MatchedSetValue"
+          }
+        },
+        "cue_sensitive_rate_gap": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "group_id",
+        "policy_id",
+        "policy_version",
+        "set_id",
+        "values",
+        "cue_sensitive_rate_gap"
+      ],
+      "additionalProperties": false
+    },
+    "AlignmentError": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "source",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluationMetadata": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "const": "lladar-bfs"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "additional_guidance": {
+          "type": "string"
+        },
+        "dataset": {
+          "type": "string",
+          "minLength": 1
+        },
+        "answers": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operational_assumption": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol",
+        "protocol_version",
+        "model",
+        "additional_guidance",
+        "dataset",
+        "answers",
+        "operational_assumption"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluationSummary": {
+      "type": "object",
+      "properties": {
+        "ready_groups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped_groups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scheduled_sessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_sessions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attempted_agent_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scheduled_comparisons": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eligible_comparisons": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bias_free": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cue_sensitive": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "incorrect_original": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completed_no_answer": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "awaiting_clarification": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "execution_error": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "judge_error": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "alignment_error": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attempted_judgments": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "alignment_errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bfs_lladar": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "original_accuracy": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scoring_coverage": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clarification_rate": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_error_rate": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "judge_error_rate": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ready_groups",
+        "skipped_groups",
+        "scheduled_sessions",
+        "started_sessions",
+        "attempted_agent_calls",
+        "scheduled_comparisons",
+        "eligible_comparisons",
+        "bias_free",
+        "cue_sensitive",
+        "incorrect_original",
+        "completed_no_answer",
+        "awaiting_clarification",
+        "execution_error",
+        "judge_error",
+        "alignment_error",
+        "attempted_judgments",
+        "alignment_errors",
+        "bfs_lladar",
+        "original_accuracy",
+        "scoring_coverage",
+        "clarification_rate",
+        "execution_error_rate",
+        "judge_error_rate"
+      ],
+      "additionalProperties": false
+    },
+    "AllVariantsBiasFree": {
+      "type": "object",
+      "properties": {
+        "scheduled_groups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eligible_groups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bias_free_groups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rate": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "coverage": {
+          "oneOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "scheduled_groups",
+        "eligible_groups",
+        "bias_free_groups",
+        "rate",
+        "coverage"
+      ],
+      "additionalProperties": false
+    },
+    "EvaluationReport": {
+      "type": "object",
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "evaluation": {
+          "$ref": "#/$defs/EvaluationMetadata"
+        },
+        "summary": {
+          "$ref": "#/$defs/EvaluationSummary"
+        },
+        "session_counts": {
+          "type": "object",
+          "properties": {
+            "completed_answer": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completed_no_answer": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "awaiting_clarification": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "execution_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "judge_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "alignment_error": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "by_label": {
+          "type": "object",
+          "properties": {
+            "bias_free": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cue_sensitive": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "incorrect_original": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "completed_no_answer": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "awaiting_clarification": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "execution_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "judge_error": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "alignment_error": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "bias_free",
+            "cue_sensitive",
+            "incorrect_original",
+            "completed_no_answer",
+            "awaiting_clarification",
+            "execution_error",
+            "judge_error",
+            "alignment_error"
+          ],
+          "additionalProperties": false
+        },
+        "by_kind": {
+          "type": "object",
+          "properties": {
+            "information_omission": {
+              "$ref": "#/$defs/ComparisonBucket"
+            },
+            "peer_cue_addition": {
+              "$ref": "#/$defs/ComparisonBucket"
+            }
+          },
+          "required": [
+            "information_omission",
+            "peer_cue_addition"
+          ],
+          "additionalProperties": false
+        },
+        "by_policy_dimension_value": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolicyBucket"
+          }
+        },
+        "matched_sets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MatchedSet"
+          }
+        },
+        "all_variants_bias_free": {
+          "$ref": "#/$defs/AllVariantsBiasFree"
+        },
+        "alignment_errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AlignmentError"
+          }
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvaluationSession"
+          }
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvaluationItem"
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "evaluation",
+        "summary",
+        "session_counts",
+        "by_label",
+        "by_kind",
+        "by_policy_dimension_value",
+        "matched_sets",
+        "all_variants_bias_free",
+        "alignment_errors",
+        "sessions",
+        "items"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tomllib
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
+from .artifact_schema import artifact_version, validate_artifact
 from .api import DEFAULT_DATASET_MODEL, DEFAULT_MODEL, create_test_dataset
 from .configuration import load_test_dataset_config, validate_test_dataset_input_paths
 from .evaluation import DEFAULT_EVALUATION_MODEL, DEFAULT_EVALUATION_PROMPT, evaluate
@@ -13,11 +15,12 @@ from .exceptions import LladarError, ProviderError
 from .providers import LLMProvider
 from .progress import ProgressReporter
 from .runner import AkashaAdapterController, AdapterController, run_agent
+from .reporting import DEFAULT_REPORT_MODEL, create_report
 from .interfaces import NeedsConfirmation
 from .skill import SkillError, install_skill, list_skills, uninstall_skill
 
 
-_CONFIG_TEMPLATE = """schema_version = 2
+_CONFIG_TEMPLATE = """schema_version = {schema_version}
 
 [test_dataset]
 # Replace this example with one or more .txt/.md files or directories.
@@ -280,19 +283,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Replace an existing configuration file.",
     )
+    benchmark = create_commands.add_parser(
+        "dataset", help="Compatibility alias for test-dataset --convert-from.",
+    )
+    benchmark.add_argument("--convert-from", required=True, metavar="SOURCE")
+    benchmark.add_argument("--output", metavar="DIRECTORY")
+    benchmark.add_argument("--model", default="gemini:gemini-3.7-flash", metavar="MODEL",
+                           help="Akasha exploration model. Default: gemini:gemini-3.7-flash.")
+    benchmark.add_argument("--env-file", default=".env", metavar="PATH",
+                           help="Provider credentials file. Default: .env.")
     dataset = create_commands.add_parser(
         "test-dataset",
         help="Generate controlled source-grounded question groups.",
         description=(
-            "Generate schema-v2 original questions, information omissions, and "
-            "policy-driven peer-cue variants from .txt and .md knowledge sources."
+            "Generate schema-v2 question groups from knowledge sources, or import "
+            "a source-backed schema-v3 external benchmark with --convert-from."
         ),
         epilog="""Examples:
   lladar create test-dataset --knowledge ./knowledge
   lladar create test-dataset --config config.toml
   lladar create test-dataset --knowledge guide.md --chunk-size auto --strict
   lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
-  lladar create test-dataset --knowledge guide.md --chunk-size auto --max-output-tokens 32768""",
+  lladar create test-dataset --knowledge guide.md --chunk-size auto --max-output-tokens 32768
+  lladar create test-dataset --convert-from ./benchmark-source --output ./benchmark-bundle""",
         formatter_class=_HelpFormatter,
     )
     dataset.add_argument(
@@ -302,8 +315,13 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Files or directories containing knowledge documents. Directories are "
             "searched recursively for .txt and .md files; multiple paths are allowed. "
-            "Required from either --knowledge or --config."
+            "Required unless --config or --convert-from is used."
         ),
+    )
+    dataset.add_argument(
+        "--convert-from",
+        metavar="SOURCE",
+        help="Import a benchmark from a local directory or public GitHub repository URL.",
     )
     guidance = dataset.add_mutually_exclusive_group()
     guidance.add_argument(
@@ -426,8 +444,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         metavar="PATH",
         help=(
-            "Destination JSONL file. Existing files are never overwritten. If omitted, "
-            "creates test-dataset-YYYYMMDD-HHMMSS.jsonl in the current directory."
+            "Destination JSONL file. Existing files are never overwritten. "
+            "With --convert-from, destination is a new directory. If omitted, "
+            "creates a collision-safe name in the current directory."
         ),
     )
     dataset.add_argument(
@@ -498,8 +517,11 @@ def build_parser() -> argparse.ArgumentParser:
         description="Join schema-v2 observed answers by stable case ID and write a differential report.",
         formatter_class=_HelpFormatter,
     )
-    evaluation.add_argument("dataset", metavar="DATASET", help="Schema-v2 test dataset JSONL.")
-    evaluation.add_argument("answers", metavar="ANSWERS", help="Schema-v2 observed-answer JSONL.")
+    evaluation.add_argument("dataset", nargs="?", metavar="DATASET", help="Schema-v2 test dataset JSONL or schema-v3 benchmark bundle.")
+    evaluation.add_argument("answers", nargs="?", metavar="ANSWERS", help="Schema-v2 observed-answer JSONL or schema-v3 benchmark answers.")
+    evaluation.add_argument("--from", dest="from_source", metavar="SOURCE",
+                            help="Rediscover scoring from the pinned benchmark source.")
+    evaluation.add_argument("--run", metavar="PATH", help="Explicit benchmark run record for --from.")
     evaluation.add_argument(
         "--prompt",
         default=DEFAULT_EVALUATION_PROMPT,
@@ -520,6 +542,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Include answer text in the report. Default: enabled.",
     )
+    reporting = commands.add_parser(
+        "report", help="Write an evidence-based Markdown evaluation report.",
+        formatter_class=_HelpFormatter,
+    )
+    reporting.add_argument("eval_output", metavar="EVAL_OUTPUT",
+                           help="Evaluation JSON or an eval --from output directory.")
+    reporting.add_argument("--output", required=True, metavar="PATH",
+                           help="Markdown report path.")
+    reporting.add_argument("--model", default=DEFAULT_REPORT_MODEL, metavar="MODEL",
+                           help="Akasha report writing model.")
+    reporting.add_argument("--env-file", default=".env", metavar="PATH")
+    reporting.add_argument("--force", action="store_true",
+                           help="Replace an existing Markdown report and sidecar.")
     runner = commands.add_parser(
         "run-agent",
         help="Run a project agent against a schema-v2 LLaDAR test dataset.",
@@ -538,6 +573,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional explicit Python entrypoint. Default: automatic adapter discovery.",
     )
     runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH", help="Answer JSONL path. Default: qa-results.jsonl.")
+    runner.add_argument("--max-cases", type=int, metavar="N", help="Run at most N ready benchmark cases in source order.")
     runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL", help=f"Adapter discovery model. Default: {DEFAULT_MODEL}.")
     runner.add_argument("--env-file", default=".env", metavar="PATH", help="Credential file. Default: .env.")
     runner.add_argument("--target-python", metavar="PATH", help="Separate target interpreter. Default: project .venv; never LLaDAR's environment.")
@@ -607,12 +643,44 @@ def main(
             config_path = Path(args.output)
             try:
                 config_path.parent.mkdir(parents=True, exist_ok=True)
+                template = _CONFIG_TEMPLATE.format(schema_version=artifact_version())
+                validate_artifact("TestDatasetConfig", tomllib.loads(template))
                 mode = "w" if args.force else "x"
                 with config_path.open(mode, encoding="utf-8") as destination:
-                    destination.write(_CONFIG_TEMPLATE)
+                    destination.write(template)
             except FileExistsError as error:
                 raise LladarError(f"config already exists: {config_path}") from error
             print(f"Created config template at {config_path}")
+            return 0
+        if args.command == "create" and args.create_command == "dataset":
+            from .benchmark_import import import_benchmark
+
+            bundle = import_benchmark(args.convert_from, args.output,
+                                      model=args.model, env_file=args.env_file)
+            print(f"Created benchmark dataset at {bundle}")
+            return 0
+        if (
+            args.command == "create"
+            and args.create_command == "test-dataset"
+            and args.convert_from is not None
+        ):
+            incompatible = ["--config"] if args.config is not None else []
+            for key, flags in _DATASET_OPTION_FLAGS.items():
+                if key not in {"model", "output", "env_file"}:
+                    incompatible.extend(
+                        flag for flag in flags
+                        if _option_is_explicit(raw_argv, (flag,))
+                    )
+            if incompatible:
+                raise LladarError(
+                    "--convert-from cannot be combined with " + ", ".join(incompatible)
+                )
+            from .benchmark_import import import_benchmark
+
+            bundle = import_benchmark(
+                args.convert_from, args.output, model=args.model, env_file=args.env_file
+            )
+            print(f"Created benchmark dataset at {bundle}")
             return 0
         if args.command == "skill":
             if args.skill_command in ("install", "update"):
@@ -630,6 +698,37 @@ def main(
                 destinations = uninstall_skill(args.target, force=args.force)
                 for destination in destinations:
                     print(f"Uninstalled {destination}")
+            return 0
+        if args.command == "report":
+            destination = create_report(args.eval_output, args.output,
+                                        model=args.model, env_file=args.env_file,
+                                        force=args.force)
+            print(f"Created evaluation report at {destination}")
+            return 0
+        if args.command == "eval" and args.from_source:
+            from .benchmark_eval import find_matching_run
+            from .benchmark_rediscovery import rediscover_and_evaluate
+
+            if args.dataset is not None or args.answers is not None:
+                raise LladarError("eval --from selects its dataset and answers from the run record")
+            run = find_matching_run(args.from_source, args.run)
+            destination = None if args.output == "evaluation-report.json" else args.output
+            bundle = rediscover_and_evaluate(
+                run, output=destination, model=args.model, env_file=args.env_file,
+                strict=args.strict, include_raw_answers=args.include_raw_answers,
+            )
+            print(f"Evaluated benchmark run at {bundle}")
+            return 0
+        if args.command == "eval" and (args.dataset is None or args.answers is None):
+            raise LladarError("eval requires DATASET and ANSWERS unless --from is supplied")
+        if args.command == "eval" and args.dataset and Path(args.dataset).is_dir():
+            from .benchmark_eval import evaluate_benchmark
+            report = evaluate_benchmark(
+                args.dataset, args.answers, output=args.output, force=args.force,
+                strict=args.strict, include_raw_answers=args.include_raw_answers,
+                judge_model=args.model, env_file=args.env_file,
+            )
+            print(f"Evaluated {report['summary']['scored']} benchmark case(s) at {args.output}")
             return 0
         if args.command == "eval":
             report = evaluate(
@@ -685,6 +784,7 @@ def main(
                 target_python=args.target_python,
                 timeout=args.timeout,
                 max_tool_calls=args.max_tool_calls,
+                max_cases=args.max_cases,
                 interactive=args.interactive,
                 intent=args.intent,
                 graphify=args.graphify, graphify_python=args.graphify_python,
