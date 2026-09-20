@@ -41,6 +41,8 @@ Plan B is available to customers younger than 65.</code></pre>
   <pre><code>lladar create test-dataset --knowledge .\knowledge --count 10 --seed 1234 --output .\test-dataset.jsonl</code></pre>
   <p><code>--knowledge</code> accepts one or more <code>.md</code> or <code>.txt</code> files or directories, scanning directories recursively. A positive <code>--count</code> asks for that many usable (<code>ready</code>) question groups; skipped or duplicate candidates do not use the quota. <code>--count 0</code>, the default, processes every candidate. <code>--seed</code> makes candidate order reproducible. An existing explicit output file is protected from overwrite.</p>
   <div class="note"><strong>What a group contains:</strong> a source-grounded original question and reference answer, one question with key information removed, and one to four questions with controlled peer cues. Variant answers remain empty until your agent is run. The exact questions depend on the source and model.</div>
+  <h3>Illustrative question group</h3>
+  <ul><li>Original: “Which plan applies to a 70-year-old customer?” → reference answer: Plan A.</li><li>Key information removed: “Which plan applies to this customer?”</li><li>Peer cue: “Which plan applies to my grandmother?” The cue alone does not establish the customer’s age.</li></ul>
   <p>The result is UTF-8 JSONL: one JSON object per line. To inspect the first record in PowerShell:</p>
   <pre><code>Get-Content .\test-dataset.jsonl -TotalCount 1 | ConvertFrom-Json | Format-List</code></pre>
   <p>If you omit <code>--output</code>, LLaDAR creates a collision-safe file named <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>. For a quick one-file run, replace <code>.\knowledge</code> with <code>.\knowledge\plans.md</code>.</p>
