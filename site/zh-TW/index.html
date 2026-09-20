@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="安裝 LLaDAR、產生有來源依據的測試題組，並以自己的 Agent 執行測試。">
+  <title>LLaDAR 操作說明 · 繁體中文</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到主要內容</a>
+<header>
+  <div class="wrap top">
+    <a class="brand" href="../">LLaDAR</a>
+    <div class="lang" aria-label="語言"><a href="../" lang="en">English</a><a href="./" lang="zh-Hant" aria-current="page">繁體中文</a></div>
+  </div>
+  <div class="wrap hero">
+    <div class="eyebrow">操作說明</div>
+    <h1>觀察 Agent 在資訊不足時會如何推斷</h1>
+    <p class="lead">LLaDAR 依據知識文件產生受控的測試題組，也能把問題交給你的 Agent，保存實際回答供人工檢視。</p>
+  </div>
+</header>
+<nav class="toc" aria-label="本頁目錄"><div class="wrap"><a href="#setup">安裝</a><a href="#generate">產生題組</a><a href="#config">重複使用設定</a><a href="#agent">執行 Agent</a><a href="#reference">指令索引</a></div></nav>
+<main id="main" class="wrap">
+<section id="setup">
+  <h2>1. 安裝並準備模型服務</h2>
+  <p>使用 Python 3.11 或 3.12，並為 LLaDAR 建立獨立的 Python 環境。以下指令適用於 PowerShell；啟用虛擬環境後即可使用 <code>lladar</code>。</p>
+  <pre><code>py -3.12 -m venv .venv-lladar
+.\.venv-lladar\Scripts\Activate.ps1
+python -m pip install lladar
+lladar --help</code></pre>
+  <p>LLaDAR 透過 Akasha 呼叫模型。請將所選模型服務需要的憑證放在本機 <code>.env</code> 或程序環境變數中。產生題組預設使用 <code>gemini:gemini-3.7-flash</code>；若要使用其他 Akasha 模型，可加上 <code>--model</code>。請勿把 <code>.env</code> 或執行資料上傳到公開儲存庫。</p>
+</section>
+<section id="generate">
+  <h2>2. 從知識文件產生測試題組</h2>
+  <p>先建立 UTF-8 文件，例如 <code>knowledge/plans.md</code>：</p>
+  <pre><code># 會員方案
+年滿 65 歲的顧客可使用 A 方案。
+未滿 65 歲的顧客可使用 B 方案。</code></pre>
+  <p>在包含 <code>knowledge</code> 目錄的位置執行：</p>
+  <pre><code>lladar create test-dataset --knowledge .\knowledge --count 10 --seed 1234 --output .\test-dataset.jsonl</code></pre>
+  <p><code>--knowledge</code> 可接收一個或多個 <code>.md</code>、<code>.txt</code> 檔案或目錄；目錄會遞迴搜尋。正數 <code>--count</code> 表示希望得到的可用（<code>ready</code>）題組數；跳過與重複的候選題不占額度。預設 <code>--count 0</code> 會處理所有候選內容。<code>--seed</code> 可固定候選順序。若明確指定的輸出檔已存在，指令不會覆寫。</p>
+  <div class="note"><strong>一個題組包含：</strong>有來源依據的原始問題與參考答案、一題移除關鍵資訊的問題，以及一至四題加入受控情境提示的問題。在執行 Agent 前，變體的答案維持空值。實際題目會隨來源與模型輸出改變。</div>
+  <p>輸出為 UTF-8 JSONL，每行是一筆 JSON。可在 PowerShell 檢視第一筆：</p>
+  <pre><code>Get-Content .\test-dataset.jsonl -TotalCount 1 | ConvertFrom-Json | Format-List</code></pre>
+  <p>若省略 <code>--output</code>，LLaDAR 會在目前目錄建立不與現有檔名衝突的 <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>。只測一個檔案時，可把 <code>.\knowledge</code> 改成 <code>.\knowledge\plans.md</code>。</p>
+</section>
+<section id="config">
+  <h2>3. 保存可重用的設定</h2>
+  <pre><code>lladar create config --output .\config.toml</code></pre>
+  <p>編輯 <code>config.toml</code>，例如：</p>
+  <pre><code>schema_version = 2
+
+[test_dataset]
+knowledge = ["./knowledge"]
+count = 10
+seed = 1234
+model = "gemini:gemini-3.7-flash"</code></pre>
+  <pre><code>lladar create test-dataset --config .\config.toml</code></pre>
+  <p>設定檔內的路徑以設定檔所在目錄為基準；CLI 指定的路徑以目前工作目錄為基準。CLI 明確指定的選項優先於設定檔。若設定檔樣板已存在，必須明確加上 <code>--force</code> 才會覆寫。</p>
+  <h3>選用自訂 policy</h3>
+  <p>需要比較特定情境時，可以建立本機 TOML policy，再用 <code>--policy .\policies\food-recommendation.toml</code> 指定。<code>--policy</code> 可重複使用；一旦指定，所列項目就是完整選擇。若也要使用內建 policy，請明確加上 <code>--policy builtin:general-social-context</code>。格式範例見<a href="https://github.com/stoday/LLaDAR#custom-policy">專案 README</a>。</p>
+</section>
+<section id="agent">
+  <h2>4. 用自己的 Agent 回答測試問題</h2>
+  <p>目標專案必須有自己的 Python 環境，而且已安裝所需套件；該環境不能與 LLaDAR 共用。以下假設目標專案位於 <code>my-agent</code>，其虛擬環境位於 <code>my-agent/.venv</code>：</p>
+  <pre><code>lladar run-agent .\test-dataset.jsonl --project .\my-agent --target-python .\my-agent\.venv\Scripts\python.exe --no-graphify --output .\qa-results.jsonl</code></pre>
+  <p>未指定 <code>--entrypoint</code> 時，LLaDAR 會檢查專案，提出對外輸入與輸出的介面，在受管理的專案副本內建立 adapter，重播問題確認連接成功，接著以獨立工作階段執行每個可用案例。<code>--no-graphify</code> 會略過可選的 Graphify 工具，直接檢查原始碼。若專案有多個可能介面，互動終端機會要求選擇；非互動執行則會保存狀態，之後可用 <code>lladar resume-agent RUN</code> 繼續。</p>
+  <p>答案檔會保存案例 ID、原題、執行狀態與 Agent 的實際回覆。adapter 重播成功代表連接可執行，不代表答案正確。請檢視答案及 <code>.lladar/runs/</code> 下的執行資料。受管理副本不是作業系統沙箱，僅執行你信任的專案。</p>
+  <div class="note"><strong>模型與費用：</strong>產生題組及自動尋找介面都會呼叫模型。目標 Agent 保留自己的模型和憑證。請勿公開 <code>.env</code>、含私人來源文字的題組、答案檔、追蹤紀錄或 <code>.lladar/</code>。</div>
+</section>
+<section id="reference">
+  <h2>指令索引</h2>
+  <pre><code>lladar create test-dataset --help
+lladar create config --help
+lladar run-agent --help
+lladar resume-agent --help</code></pre>
+  <p>Python API 與進階選項請參閱<a href="https://github.com/stoday/LLaDAR">專案儲存庫</a>。正式發行套件可於 <a href="https://pypi.org/project/lladar/">PyPI</a> 安裝。</p>
+</section>
+</main>
+<footer><div class="wrap">LLaDAR · <a href="https://github.com/stoday/LLaDAR">原始碼與授權</a> · <a href="../" lang="en">English</a></div></footer>
+</body>
+</html>
