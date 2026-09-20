@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install LLaDAR, generate source-grounded test questions, and run them against your agent.">
+  <title>LLaDAR user guide · English</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap top">
+    <a class="brand" href="./">LLaDAR</a>
+    <div class="lang" aria-label="Language"><a href="./" lang="en" aria-current="page">English</a><a href="zh-TW/" lang="zh-Hant">繁體中文</a></div>
+  </div>
+  <div class="wrap hero">
+    <div class="eyebrow">User guide</div>
+    <h1>Test what an agent assumes when information is missing</h1>
+    <p class="lead">LLaDAR builds controlled question groups from your knowledge files, then can send those questions to your own agent and save its observed answers.</p>
+  </div>
+</header>
+<nav class="toc" aria-label="On this page"><div class="wrap"><a href="#setup">Setup</a><a href="#generate">Generate a dataset</a><a href="#config">Reuse settings</a><a href="#agent">Run your agent</a><a href="#reference">Reference</a></div></nav>
+<main id="main" class="wrap">
+<section id="setup">
+  <h2>1. Install and prepare a provider</h2>
+  <p>Use Python 3.11 or 3.12. Install LLaDAR in its own Python environment. The examples below use PowerShell; after activating a virtual environment, <code>lladar</code> is on your PATH.</p>
+  <pre><code>py -3.12 -m venv .venv-lladar
+.\.venv-lladar\Scripts\Activate.ps1
+python -m pip install lladar
+lladar --help</code></pre>
+  <p>LLaDAR uses Akasha for model calls. Put the credentials required by your chosen provider in a local <code>.env</code> file or in your process environment. The default dataset model is <code>gemini:gemini-3.7-flash</code>; select a different Akasha model with <code>--model</code> if needed. Keep <code>.env</code> and generated runtime files out of public repositories.</p>
+</section>
+<section id="generate">
+  <h2>2. Generate a test dataset</h2>
+  <p>Create a UTF-8 knowledge file, for example <code>knowledge/plans.md</code>:</p>
+  <pre><code># Membership plans
+Plan A is available to customers aged 65 or older.
+Plan B is available to customers younger than 65.</code></pre>
+  <p>Run the generator from the directory containing <code>knowledge</code>:</p>
+  <pre><code>lladar create test-dataset --knowledge .\knowledge --count 10 --seed 1234 --output .\test-dataset.jsonl</code></pre>
+  <p><code>--knowledge</code> accepts one or more <code>.md</code> or <code>.txt</code> files or directories, scanning directories recursively. A positive <code>--count</code> asks for that many usable (<code>ready</code>) question groups; skipped or duplicate candidates do not use the quota. <code>--count 0</code>, the default, processes every candidate. <code>--seed</code> makes candidate order reproducible. An existing explicit output file is protected from overwrite.</p>
+  <div class="note"><strong>What a group contains:</strong> a source-grounded original question and reference answer, one question with key information removed, and one to four questions with controlled peer cues. Variant answers remain empty until your agent is run. The exact questions depend on the source and model.</div>
+  <p>The result is UTF-8 JSONL: one JSON object per line. To inspect the first record in PowerShell:</p>
+  <pre><code>Get-Content .\test-dataset.jsonl -TotalCount 1 | ConvertFrom-Json | Format-List</code></pre>
+  <p>If you omit <code>--output</code>, LLaDAR creates a collision-safe file named <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>. For a quick one-file run, replace <code>.\knowledge</code> with <code>.\knowledge\plans.md</code>.</p>
+</section>
+<section id="config">
+  <h2>3. Save settings for repeated runs</h2>
+  <pre><code>lladar create config --output .\config.toml</code></pre>
+  <p>Edit <code>config.toml</code>, for example:</p>
+  <pre><code>schema_version = 2
+
+[test_dataset]
+knowledge = ["./knowledge"]
+count = 10
+seed = 1234
+model = "gemini:gemini-3.7-flash"</code></pre>
+  <pre><code>lladar create test-dataset --config .\config.toml</code></pre>
+  <p>Paths written in the config file are relative to that file. Paths passed as CLI options are relative to the current directory. Explicit CLI options override the config. The config template is also protected from overwrite unless you pass <code>--force</code>.</p>
+  <h3>Optional local policy</h3>
+  <p>For a project-specific comparison, create a local TOML policy and select it with <code>--policy .\policies\food-recommendation.toml</code>. <code>--policy</code> can be repeated. When you specify any policies, that list is exact; add <code>--policy builtin:general-social-context</code> explicitly if you want the built-in policy too. See the <a href="https://github.com/stoday/LLaDAR#custom-policy">policy example in the repository README</a>.</p>
+</section>
+<section id="agent">
+  <h2>4. Run the questions against your agent</h2>
+  <p>Your target project needs its own Python environment with its dependencies installed. It must be different from LLaDAR's environment. The following example assumes your project is in <code>my-agent</code> and has <code>my-agent/.venv</code>:</p>
+  <pre><code>lladar run-agent .\test-dataset.jsonl --project .\my-agent --target-python .\my-agent\.venv\Scripts\python.exe --no-graphify --output .\qa-results.jsonl</code></pre>
+  <p>Without <code>--entrypoint</code>, LLaDAR inspects the project, proposes its public input/output interface, creates an adapter in a managed project copy, checks that the adapter can replay a question, and then runs each ready case in an isolated session. <code>--no-graphify</code> uses source inspection without the optional Graphify tool. If the project has several possible public interfaces, an interactive terminal asks you to choose one; a noninteractive run saves a continuation state that you can resume with <code>lladar resume-agent RUN</code>.</p>
+  <p>The answer file contains case IDs, exact questions, execution status and the agent's observed response. A successful adapter replay confirms that the connection worked; it does not establish that the answer was correct. Inspect the answers and the managed run directory under <code>.lladar/runs/</code>. Run only projects you trust: the managed copy is not an operating-system sandbox.</p>
+  <div class="note"><strong>Provider and cost:</strong> dataset generation and automatic interface discovery use model calls. The target agent keeps its own model and credentials. Avoid publishing <code>.env</code>, datasets with private source text, answer files, traces or <code>.lladar/</code>.</div>
+</section>
+<section id="reference">
+  <h2>Command reference</h2>
+  <pre><code>lladar create test-dataset --help
+lladar create config --help
+lladar run-agent --help
+lladar resume-agent --help</code></pre>
+  <p>For Python API use and more advanced options, see the <a href="https://github.com/stoday/LLaDAR">project repository</a>. Installable releases are on <a href="https://pypi.org/project/lladar/">PyPI</a>.</p>
+</section>
+</main>
+<footer><div class="wrap">LLaDAR · <a href="https://github.com/stoday/LLaDAR">Source and license</a> · <a href="zh-TW/" lang="zh-Hant">繁體中文</a></div></footer>
+</body>
+</html>
