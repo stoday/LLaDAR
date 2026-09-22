@@ -18,7 +18,7 @@ The implementation incorporates VIDE-TESTING's coding-agent exploration workflow
   labels, or the evaluator rubric. Fix the adapter before the full dataset run.
 - Independently replay every probe in a fresh copy and process. Run every dataset
   case in another fresh copy and process; correlate results to LLaDAR case IDs.
-- Preserve the existing schema-v2 answer JSONL and evaluation semantics. Runtime
+- Preserve the current three-field response JSONL and evaluation semantics. Runtime
   errors remain execution errors, not substantive answers or judge failures.
 - Preserve adapter source/hash, proposal, exploration audit, verification, and
   per-request observations under `.lladar/runs/`. On preparation failure, preserve

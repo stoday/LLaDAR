@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 class NeedsConfirmation(RuntimeError):
     def __init__(self, run: Path):
         self.run = run
-        super().__init__(f"需要確認測試入口。狀態已保存：{run}\n續跑：lladar resume-agent \"{run}\"")
+        super().__init__(f"需要確認測試入口；請加上 --interactive 重新執行。探索證據：{run}")
 
 
 DISCOVERY_PROMPT = """Read this project's source and documentation using ONLY the

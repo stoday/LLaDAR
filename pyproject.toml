@@ -5,13 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lladar"
 version = "0.6.0"
-description = "Generate and evaluate controlled question groups for LLM agents"
+description = "Create questions, run an Agent, evaluate responses, and render reports"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "akasha-terminal[light]>=1.4",
-  "jsonschema>=4.18,<5",
   "requests>=2.31,<3",
   "pypdf>=4,<7",
 ]
@@ -20,7 +19,6 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
 ]
 
 [project.scripts]
@@ -31,12 +29,6 @@ test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-lladar = ["skill_assets/**/*", "schemas/*.json"]
-
-[tool.setuptools.exclude-package-data]
-lladar = ["skill_assets/**/__pycache__/*", "skill_assets/**/*.pyc"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

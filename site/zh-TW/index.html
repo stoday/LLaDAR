@@ -3,206 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="從本地 LLaDAR 原始碼產生測試題組、匯入 benchmark、執行 Agent 並評估答案。">
-  <title>LLaDAR 操作說明 · 繁體中文</title>
+  <meta name="description" content="使用 LLaDAR 建立問題、執行 Agent、評估回應並產生報告。">
+  <title>LLaDAR 使用指南</title>
   <link rel="stylesheet" href="../assets/style.css">
 </head>
 <body>
 <a class="skip" href="#main">跳到主要內容</a>
-<header>
-  <div class="wrap top">
-    <a class="brand" href="../">LLaDAR</a>
-    <div class="lang" aria-label="語言"><a href="../" lang="en">English</a><a href="./" lang="zh-Hant" aria-current="page">繁體中文</a></div>
-  </div>
-  <div class="wrap hero">
-    <div class="eyebrow">操作說明</div>
-    <h1>產生並評估 Agent 測試案例</h1>
-    <p class="lead">從知識文件產生受控題組，或從外部 benchmark 匯入有來源依據的案例。用自己的 Agent 回答，再依據來源證據評估結果。</p>
-  </div>
-</header>
-<nav class="toc" aria-label="本頁目錄"><div class="wrap"><a href="#setup">安裝</a><a href="#generate">產生題組</a><a href="#config">重複使用設定</a><a href="#agent">執行 Agent</a><a href="#evaluate">評估答案</a><a href="#benchmark">外部 benchmark</a><a href="#report">撰寫報告</a><a href="#files">檔案對照</a><a href="#reference">指令索引</a></div></nav>
+<header><div class="wrap top"><a class="brand" href="../">LLaDAR</a><div class="lang"><a href="../" lang="en">English</a><a href="./" aria-current="page">繁體中文</a></div></div><div class="wrap hero"><div class="eyebrow">使用指南</div><h1>精簡的 Agent 評估流程</h1><p class="lead">問題、預期答案、真實回應，接著由 Agent 協助評估並產生可重現的報告。</p></div></header>
+<nav class="toc"><div class="wrap"><a href="#format">格式</a><a href="#create">建立</a><a href="#run">執行</a><a href="#eval">評估</a><a href="#report">報告</a></div></nav>
 <main id="main" class="wrap">
-<section id="setup">
-  <h2>1. 安裝並準備模型服務</h2>
-  <p>這份說明以目前儲存庫的原始碼為準，包含可能尚未進入已發布套件的本地變更。請使用 Python 3.11 或 3.12，從本專案的工作樹建立獨立的 LLaDAR 環境。以下指令適用於 PowerShell。</p>
-  <pre><code>py -3.12 -m venv .venv-lladar
-.\.venv-lladar\Scripts\Activate.ps1
-python -m pip install -e .
-lladar --help</code></pre>
-  <p>LLaDAR 透過 Akasha 呼叫模型。請將所選模型服務需要的憑證放在本機 <code>.env</code> 或程序環境變數中。產生題組預設使用 <code>gemini:gemini-3.7-flash</code>；若要使用其他 Akasha 模型，可加上 <code>--model</code>。請勿把 <code>.env</code> 或執行資料上傳到公開儲存庫。</p>
-  <h3>先看懂路徑與 <code>--output</code></h3>
-  <p>除非特別說明，範例都在本專案根目錄執行。在 PowerShell，<code>.\</code> 代表目前目錄：<code>.\my-agent</code> 是專案資料夾，<code>.\my-agent\.venv\Scripts\python.exe</code> 是裡面的檔案。請把 <code>my-agent</code> 換成自己的專案路徑。緊接在指令後面的值稱為位置參數；<code>--output PATH</code> 這類項目是選項。這些本機路徑不會把檔案上傳到 GitHub Pages。</p>
-  <p><code>--output</code> 指定該指令主要產物的儲存位置。依指令不同，它可以是檔案，也可以是新資料夾。範例中的 <code>.\</code> 都以執行指令時的目錄為基準：</p>
-  <div class="table-wrap"><table><thead><tr><th>指令</th><th><code>--output</code> 代表</th><th>其他產物</th></tr></thead><tbody>
-    <tr><td><code>create config</code></td><td>TOML 設定檔</td><td>此範例沒有其他產物</td></tr>
-    <tr><td><code>create test-dataset --knowledge</code></td><td>JSONL 題組檔</td><td>只有啟用追蹤或快取時才有相關檔案</td></tr>
-    <tr><td><code>create test-dataset --convert-from</code></td><td>新的 benchmark 題組資料夾</td><td>資料夾內含案例、評分規則與來源證據</td></tr>
-    <tr><td><code>run-agent</code></td><td>JSONL 實際回答檔</td><td><code>&lt;回答檔&gt;.run.json</code> 與受管理的執行資料</td></tr>
-    <tr><td><code>eval DATASET ANSWERS</code></td><td>JSON 評估檔</td><td>一般產生的題組另有 <code>&lt;輸出檔主名&gt;.items.jsonl</code></td></tr>
-    <tr><td><code>eval --from</code></td><td>新的評估資料夾</td><td>內含 <code>report.json</code>、評分方案與證據</td></tr>
-    <tr><td><code>report</code></td><td>Markdown 報告檔</td><td><code>&lt;報告檔&gt;.meta.json</code>；撰寫失敗時為 <code>&lt;報告檔&gt;.failed.json</code></td></tr>
-  </tbody></table></div>
-  <p><code>.json</code> 是一份 JSON 文件；<code>.jsonl</code> 每行是一筆 JSON；<code>.toml</code> 用於可編輯的設定；<code>.md</code> 是 Markdown 文字。安裝範例依序建立 <code>.venv-lladar</code>、啟用環境、用 <code>pip install -e .</code> 安裝目前工作樹，最後顯示 CLI 的第一層說明。待測專案的 <code>.venv</code> 與 <code>.venv-lladar</code> 是兩個不同環境。</p>
-</section>
-<section id="generate">
-  <h2>2. 從知識文件產生測試題組</h2>
-  <p>先建立 UTF-8 文件，例如 <code>knowledge/plans.md</code>：</p>
-  <pre><code># 會員方案
-年滿 65 歲的顧客可使用 A 方案。
-未滿 65 歲的顧客可使用 B 方案。</code></pre>
-  <p>在包含 <code>knowledge</code> 目錄的位置執行：</p>
-  <pre><code>lladar create test-dataset --knowledge .\knowledge --count 1 --seed 1234 --output .\test-dataset.jsonl</code></pre>
-  <p><code>--knowledge</code> 可接收一個或多個 <code>.md</code>、<code>.txt</code> 檔案或目錄；目錄會遞迴搜尋。正數 <code>--count</code> 是可用（<code>ready</code>）題組的上限；來源內容較少時，實際產出可能更少。跳過與重複的候選題不占額度。預設 <code>--count 0</code> 會處理所有候選內容。<code>--seed</code> 可固定候選順序。若明確指定的輸出檔已存在，指令不會覆寫。</p>
-  <div class="note"><strong>一個題組包含：</strong>有來源依據的原始問題與參考答案、一題移除關鍵資訊的問題，以及一至四題加入受控情境提示的問題。在執行 Agent 前，變體的答案維持空值。實際題目會隨來源與模型輸出改變。</div>
-  <h3>題組示意</h3>
-  <ul><li>原始題：「70 歲的顧客適用哪個方案？」→ 參考答案：A 方案。</li><li>移除關鍵資訊：「這位顧客適用哪個方案？」</li><li>加入情境提示：「我的祖母適用哪個方案？」只有「祖母」這個提示，仍無法確定顧客年齡。</li></ul>
-  <p>輸出為 UTF-8 JSONL，每行是一筆 JSON。可在 PowerShell 檢視第一筆：</p>
-  <pre><code>Get-Content .\test-dataset.jsonl -TotalCount 1 | ConvertFrom-Json | Format-List</code></pre>
-  <p>若省略 <code>--output</code>，LLaDAR 會在目前目錄建立不與現有檔名衝突的 <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>。只測一個檔案時，可把 <code>.\knowledge</code> 改成 <code>.\knowledge\plans.md</code>。</p>
-  <h3>產生題組指令逐項解釋</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>lladar create test-dataset</code></td><td>根據提供的知識文件產生 LLaDAR 測試問題。</td></tr>
-    <tr><td><code>--knowledge .\knowledge</code></td><td>讀取本機 <code>knowledge</code> 目錄，遞迴尋找 <code>.md</code> 與 <code>.txt</code>。也可指定單一檔案或多個路徑。</td></tr>
-    <tr><td><code>--count 1</code></td><td>最多產生一個可用的 <code>ready</code> 題組。預設 <code>0</code> 處理所有候選內容；來源不足時可能少於指定數量。</td></tr>
-    <tr><td><code>--seed 1234</code></td><td>固定候選內容的選取順序；模型生成的題目文字仍可能變動。</td></tr>
-    <tr><td><code>--output .\test-dataset.jsonl</code></td><td>將題組寫入這個 UTF-8 JSONL 檔。每行是一個題組，包含原題與變體。</td></tr>
-  </tbody></table></div>
-  <p><code>knowledge/plans.md</code> 是你提供的輸入文件，不是 LLaDAR 產物。<code>test-dataset.jsonl</code> 接著會交給 <code>run-agent</code>，再交給 <code>eval</code>。檢視指令中的 <code>Get-Content -TotalCount 1</code> 讀第一行，<code>ConvertFrom-Json</code> 解析 JSON，<code>Format-List</code> 列出欄位。</p>
-</section>
-<section id="config">
-  <h2>3. 保存可重用的設定</h2>
-  <pre><code>lladar create config --output .\config.toml</code></pre>
-  <p>編輯 <code>config.toml</code>，例如：</p>
-  <pre><code>schema_version = 2
-
-[test_dataset]
-knowledge = ["./knowledge"]
-count = 1
-seed = 1234
-model = "gemini:gemini-3.7-flash"</code></pre>
-  <pre><code>lladar create test-dataset --config .\config.toml</code></pre>
-  <p>設定檔內的路徑以設定檔所在目錄為基準；CLI 指定的路徑以目前工作目錄為基準。CLI 明確指定的選項優先於設定檔。若設定檔樣板已存在，必須明確加上 <code>--force</code> 才會覆寫。</p>
-  <h3>選用自訂 policy</h3>
-  <p>需要比較特定情境時，可以建立本機 TOML policy，再用 <code>--policy .\policies\food-recommendation.toml</code> 指定。<code>--policy</code> 可重複使用；一旦指定，所列項目就是完整選擇。若也要使用內建 policy，請明確加上 <code>--policy builtin:general-social-context</code>。格式範例見<a href="https://github.com/stoday/LLaDAR#custom-policy">專案 README</a>。</p>
-  <h3>設定檔與指令各自的作用</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>lladar create config --output .\config.toml</code></td><td>建立可編輯的 TOML 設定樣板，不會產生測試題目。</td></tr>
-    <tr><td><code>schema_version = 2</code></td><td>設定檔格式版本，不是要產生兩組題目。</td></tr>
-    <tr><td><code>[test_dataset]</code></td><td>保存 <code>create test-dataset</code> 選項的區段。</td></tr>
-    <tr><td><code>knowledge</code>、<code>count</code>、<code>seed</code>、<code>model</code></td><td>依序是來源路徑、可用題組上限、候選順序種子與 Akasha 產題模型。</td></tr>
-    <tr><td><code>lladar create test-dataset --config .\config.toml</code></td><td>讀取保存的設定並產生題組。可在 TOML 設定 <code>output</code>，或於指令加上 <code>--output</code> 指定檔名；否則會建立避免撞名的時間戳記 JSONL 檔。</td></tr>
-  </tbody></table></div>
-</section>
-<section id="agent">
-  <h2>4. 用自己的 Agent 回答測試問題</h2>
-  <p>目標專案必須有自己的 Python 環境，而且已安裝所需套件；該環境不能與 LLaDAR 共用。以下假設目標專案位於 <code>my-agent</code>，其虛擬環境位於 <code>my-agent/.venv</code>：</p>
-  <pre><code>lladar run-agent .\test-dataset.jsonl --project .\my-agent --target-python .\my-agent\.venv\Scripts\python.exe --no-graphify --output .\qa-results.jsonl</code></pre>
-  <p>未指定 <code>--entrypoint</code> 時，LLaDAR 會檢查專案，提出對外輸入與輸出的介面，在受管理的專案副本內建立 adapter，重播問題確認連接成功，接著以獨立工作階段執行每個可用案例。<code>--no-graphify</code> 會略過可選的 Graphify 工具，直接檢查原始碼。若專案有多個可能介面，互動終端機會要求選擇；非互動執行則會保存狀態，之後可用 <code>lladar resume-agent RUN</code> 繼續。</p>
-  <p>答案檔會保存案例 ID、原題、執行狀態與 Agent 的實際回覆。adapter 重播成功代表連接可執行，不代表答案正確。請檢視答案及 <code>.lladar/runs/</code> 下的執行資料。受管理副本不是作業系統沙箱，僅執行你信任的專案。</p>
-  <div class="note"><strong>模型與費用：</strong>產生題組及自動尋找介面都會呼叫模型。目標 Agent 保留自己的模型和憑證。請勿公開 <code>.env</code>、含私人來源文字的題組、答案檔、追蹤紀錄或 <code>.lladar/</code>。</div>
-  <h3><code>run-agent</code> 範例的每個引數</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>lladar run-agent</code></td><td>把可用案例交給待測 Agent，收集它實際回答的內容。</td></tr>
-    <tr><td><code>.\test-dataset.jsonl</code></td><td>必填的位置參數：第 2 步產生的題組檔。執行 benchmark 時，改放資料夾 <code>.\bbq-bundle</code>。</td></tr>
-    <tr><td><code>--project .\my-agent</code></td><td>待測 Agent 原始碼專案的根目錄。請換成自己的專案；LLaDAR 會檢查它，並在受管理的副本內工作。</td></tr>
-    <tr><td><code>--target-python .\my-agent\.venv\Scripts\python.exe</code></td><td>待測專案自己的 Python 執行檔，該環境須已安裝專案依賴；它與 LLaDAR 的 Python 分開，而且檔案必須存在。</td></tr>
-    <tr><td><code>--no-graphify</code></td><td>略過可選的 Graphify 程式碼圖，直接檢查原始碼尋找介面。預設會先嘗試 Graphify。</td></tr>
-    <tr><td><code>--output .\qa-results.jsonl</code></td><td>將實際回答逐行寫入這個檔案。之後它是 <code>lladar eval</code> 的第二個位置參數。</td></tr>
-  </tbody></table></div>
-  <p>Runner 也會在答案檔旁建立 <code>qa-results.jsonl.run.json</code>，記錄題組與答案路徑、答案檔雜湊、執行識別及可取得的待測專案資訊；benchmark 執行另記錄來源與題組識別。受管理的 adapter 與待續狀態放在 <code>.lladar/runs/</code>。若因介面選擇而暫停，<code>lladar resume-agent RUN</code> 的 <code>RUN</code> 是已保存的執行資料夾路徑，不是答案檔。既有答案檔只有明確加上 <code>--force</code> 才能覆寫。</p>
-</section>
-<section id="evaluate">
-  <h2>5. 評估 Agent 的實際回答</h2>
-  <p>對於 <code>create test-dataset</code> 產生的題組，搭配 <code>run-agent</code> 的答案檔執行：</p>
-  <pre><code>lladar eval .\test-dataset.jsonl .\qa-results.jsonl --output .\evaluation.json</code></pre>
-  <p>評估器依穩定案例 ID 對齊資料，輸出 JSON 評估結果，包含原題正確率、評分涵蓋率、澄清與錯誤狀態，以及原題和變體答案的差異。LLaDAR Bias-Free Score 是本專案自己的指標，並非外部 benchmark 的官方分數。評估可能呼叫模型裁判，請保留服務憑證。既有輸出檔受到保護，只有明確加入 <code>--force</code> 才會覆寫。</p>
-  <h3><code>eval</code> 讀取與產出的檔案</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>.\test-dataset.jsonl</code></td><td>第一個位置參數：待評分的測試題組。</td></tr>
-    <tr><td><code>.\qa-results.jsonl</code></td><td>第二個位置參數：<code>run-agent</code> 取得的實際回答。以案例 ID 對應問題與答案。</td></tr>
-    <tr><td><code>--output .\evaluation.json</code></td><td>輸出 JSON 評估結果，包含摘要統計與逐項結果。</td></tr>
-  </tbody></table></div>
-  <p>此一般題組範例還會在 <code>evaluation.json</code> 旁建立 <code>evaluation.items.jsonl</code>，每行是一筆比較結果。交給 <code>lladar report</code> 的是 <code>evaluation.json</code>，不是 <code>.items.jsonl</code>。若任一輸出檔已存在，必須明確加入 <code>--force</code> 才會覆寫。</p>
-</section>
-<section id="benchmark">
-  <h2>6. 範例：使用 <code>lladar create test-dataset --convert-from</code> 匯入 BBQ（實驗功能）</h2>
-  <p>這個範例使用公開的 BBQ 儲存庫網址匯入資料；<code>--convert-from</code> 也接受本機來源目錄。匯入 Agent 會讀取來源檔案及文件化的評分規則，不會執行來源儲存庫的程式。使用網址需要網路連線與所選 Akasha 模型的憑證。匯入涵蓋率取決於來源提供的證據。</p>
-  <pre><code>lladar create test-dataset --convert-from https://github.com/nyu-mll/BBQ --output .\bbq-bundle</code></pre>
-  <p>輸出目錄包含 <code>manifest.json</code>、<code>cases.jsonl</code>、<code>scoring-plan.json</code>、宣告式轉換器，以及 <code>evidence/source</code> 下的固定來源快照。有來源支持評分規則的案例標為 <code>ready</code>；無法支持或格式錯誤的來源案例仍會以 <code>unsupported</code>、<code>source_invalid</code> 保留。明確指定的輸出目錄不得已存在。</p>
-  <h3>執行並評估匯入案例</h3>
-  <pre><code>lladar run-agent .\bbq-bundle --project .\my-agent --target-python .\my-agent\.venv\Scripts\python.exe --no-graphify --output .\bbq-answers.jsonl
-lladar eval .\bbq-bundle .\bbq-answers.jsonl --output .\bbq-evaluation.json</code></pre>
-  <p>Runner 只執行 <code>ready</code> 案例，並在答案旁建立 <code>bbq-answers.jsonl.run.json</code>，記錄資料集與來源版本。若只想先小量試跑，可在 <code>run-agent</code> 加上 <code>--max-cases 20</code>；未執行的可用案例會列為缺少答案，因此評估涵蓋率只會是部分。評估前會核對已保存的雜湊與固定來源轉換器，再套用保存的評分計畫。無法重現的來源指標會明確列出。</p>
-  <h3>選用：重新探索來源評分規則</h3>
-  <p>若要對已完成的 benchmark 執行獨立探索，請使用同一來源與執行紀錄。此步驟會增加模型呼叫，並建立新的輸出目錄：</p>
-  <pre><code>lladar eval --from https://github.com/nyu-mll/BBQ --run .\bbq-answers.jsonl.run.json --output .\bbq-rediscovered-evaluation</code></pre>
-  <p>匯入與重新探索的評估都以來源支持的規則為界；結果不代表目標 Agent 的生成設定已重現原始研究條件。</p>
-  <h3>BBQ 匯入指令逐項解釋</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>lladar create test-dataset</code></td><td>沿用題組指令，但切換為外部 benchmark 匯入模式。</td></tr>
-    <tr><td><code>--convert-from https://github.com/nyu-mll/BBQ</code></td><td>以公開的 BBQ 儲存庫為來源；也可以改成一個本機資料夾。此匯入模式不能同時使用 <code>--knowledge</code>。</td></tr>
-    <tr><td><code>--output .\bbq-bundle</code></td><td>建立包含匯入案例、評分規則與固定來源快照的新資料夾。這裡不是 JSONL 檔名，指定的資料夾不可已存在。</td></tr>
-  </tbody></table></div>
-  <p>benchmark 的 <code>run-agent</code> 指令以 <code>.\bbq-bundle</code> 取代一般 JSONL 題組，<code>--output .\bbq-answers.jsonl</code> 指定回答檔；其他選項與第 4 步的表格相同。Runner 另建立 <code>bbq-answers.jsonl.run.json</code>。下一行 <code>eval</code> 讀取題組資料夾與回答，寫出 <code>bbq-evaluation.json</code>。小量試跑可在 benchmark 的 <code>run-agent</code> 加上 <code>--max-cases 20</code>，最多執行二十個案例；這個選項只適用 benchmark 題組。</p>
-  <h3>選用的重新探索指令逐項解釋</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>--from https://github.com/nyu-mll/BBQ</code></td><td>指出同一個 benchmark 來源，依固定來源快照重新探索評分規則。</td></tr>
-    <tr><td><code>--run .\bbq-answers.jsonl.run.json</code></td><td>使用完成執行時留下的紀錄，定位並核對當時的題組及答案；這裡不填答案 JSONL。</td></tr>
-    <tr><td><code>--output .\bbq-rediscovered-evaluation</code></td><td>建立新資料夾，包含 <code>report.json</code>、評分方案檔與稽核證據。之後把這個資料夾交給 <code>lladar report</code>。</td></tr>
-  </tbody></table></div>
-</section>
-<section id="report">
-  <h2>7. 產生 Markdown 評估報告</h2>
-  <p>完成評估後使用 <code>lladar report</code>。輸入可以是一般題組或匯入 benchmark 的評估 JSON，也可以是 <code>eval --from</code> 建立的輸出目錄。以下指令接續前面的範例檔案：</p>
-  <pre><code>lladar report .\evaluation.json --output .\evaluation-report.md
-lladar report .\bbq-evaluation.json --output .\bbq-report.md
-lladar report .\bbq-rediscovered-evaluation --output .\bbq-rediscovered-report.md</code></pre>
-  <p>目前報告以繁體中文撰寫，包含資料介紹、測試與評估方法、待測專案說明、結果，以及逐題附錄。統計數值取自評估檔；Akasha 模型依據可取得的證據撰寫說明文字。缺少的資料會明確標示，不會臆測。</p>
-  <p>以 <code>.\bbq-report.md</code> 為例，LLaDAR 也會建立 <code>.\bbq-report.md.meta.json</code>，記錄來源及報告產生資訊。若 Markdown 報告或附帶檔案已存在，必須加入 <code>--force</code> 才能覆寫。若撰寫失敗，可檢查 <code>.\bbq-report.md.failed.json</code>；此時不會發布未完成的 Markdown 報告。可用 <code>--model</code> 指定撰寫模型、<code>--env-file</code> 指定憑證檔。分享前請檢查報告，逐題附錄可能包含來源題目與 Agent 回答。</p>
-  <h3>報告指令的引數</h3>
-  <div class="table-wrap"><table><thead><tr><th>片段</th><th>意思</th></tr></thead><tbody>
-    <tr><td><code>.\evaluation.json</code> 或 <code>.\bbq-evaluation.json</code></td><td>位置參數：已完成的 LLaDAR JSON 評估檔。</td></tr>
-    <tr><td><code>.\bbq-rediscovered-evaluation</code></td><td>另一種位置參數：<code>eval --from</code> 建立的資料夾；LLaDAR 會讀其中的 <code>report.json</code>。</td></tr>
-    <tr><td><code>--output .\bbq-report.md</code></td><td>必填：可供人閱讀的 Markdown 報告位置；不會改動輸入的評估 JSON。</td></tr>
-    <tr><td><code>--model MODEL</code>、<code>--env-file PATH</code></td><td>選用：撰寫說明的模型與服務憑證檔。報告模型負責解釋已保存的證據，不是待測 Agent 的模型。</td></tr>
-    <tr><td><code>--force</code></td><td>明確允許覆寫既有的 Markdown 報告及來源紀錄附檔。</td></tr>
-  </tbody></table></div>
-</section>
-<section id="files">
-  <h2>8. 檔案與資料夾對照</h2>
-  <p>以下名稱沿用本頁範例。自行更改 <code>--output</code> 後，產物名稱也會改變，但用途相同。</p>
-  <div class="table-wrap"><table><thead><tr><th>路徑</th><th>來源與用途</th></tr></thead><tbody>
-    <tr><td><code>.env</code></td><td>模型服務的本機憑證檔；由你提供，請勿公開。</td></tr>
-    <tr><td><code>knowledge/plans.md</code></td><td>你提供的產題知識文件。</td></tr>
-    <tr><td><code>config.toml</code></td><td><code>create config</code> 建立的可編輯設定樣板，由 <code>--config</code> 讀取。</td></tr>
-    <tr><td><code>test-dataset.jsonl</code></td><td>產生的測試題組，供一般 Runner 與評估器使用。</td></tr>
-    <tr><td><code>my-agent/</code> 與 <code>my-agent/.venv/Scripts/python.exe</code></td><td>你的待測專案及獨立 Python；它們是前置條件，不是 LLaDAR 產物。</td></tr>
-    <tr><td><code>qa-results.jsonl</code></td><td><code>run-agent</code> 產生的逐題實際回答與執行狀態。</td></tr>
-    <tr><td><code>qa-results.jsonl.run.json</code></td><td>Runner 放在答案旁的執行識別、檔案雜湊與待測專案資料。</td></tr>
-    <tr><td><code>evaluation.json</code>／<code>evaluation.items.jsonl</code></td><td>一般題組的評估摘要與逐項比較。</td></tr>
-    <tr><td><code>bbq-bundle/manifest.json</code></td><td>匯入 benchmark 的來源識別、案例數與產物雜湊。</td></tr>
-    <tr><td><code>bbq-bundle/cases.jsonl</code></td><td>逐行保存匯入案例，也包含無法執行或評分的案例狀態。</td></tr>
-    <tr><td><code>bbq-bundle/scoring-plan.json</code>／<code>scorers/converter.json</code></td><td>來源支持的評分規則與宣告式案例轉換方式。</td></tr>
-    <tr><td><code>bbq-bundle/evidence/source/</code></td><td>匯入時固定的來源檔案副本，供後續核對。</td></tr>
-    <tr><td><code>bbq-answers.jsonl</code>／<code>bbq-answers.jsonl.run.json</code></td><td>benchmark 的實際回答與執行紀錄。</td></tr>
-    <tr><td><code>bbq-evaluation.json</code></td><td>依已保存評分方案產生的 benchmark 評估檔。</td></tr>
-    <tr><td><code>bbq-rediscovered-evaluation/</code></td><td>選用的獨立評分結果，包含 <code>report.json</code>、評分方案與證據。</td></tr>
-    <tr><td><code>bbq-report.md</code>／<code>bbq-report.md.meta.json</code></td><td>可閱讀的報告與來源紀錄；撰寫失敗會留下 <code>bbq-report.md.failed.json</code>。</td></tr>
-    <tr><td><code>.lladar/runs/</code></td><td>本機受管理的 Agent 工作目錄、adapter 狀態及選用追蹤紀錄；請保持私有。</td></tr>
-  </tbody></table></div>
-</section>
-<section id="reference">
-  <h2>指令索引</h2>
-  <pre><code>lladar create test-dataset --help
-lladar create config --help
-lladar run-agent --help
-lladar resume-agent --help
-lladar eval --help
-lladar report --help
-lladar skill --help</code></pre>
-  <p>Python API 與進階選項請參閱<a href="https://github.com/stoday/LLaDAR">專案儲存庫</a>。已發布套件與目前原始碼可能不同，請以你安裝的工作樹執行 <code>--help</code> 核對。</p>
-</section>
+<section id="format"><h2>固定三欄 record</h2><pre><code>{"question":"台灣的首都是哪座城市？","expected_answer":"台北","actual_response":null}</code></pre><p>JSONL 每一筆固定只有這三個欄位，不再有 schema 版本或相容模式。</p></section>
+<section id="create"><h2>一、建立資料集</h2><pre><code>lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl</code></pre><p>模型會針對每個採用的知識片段，建立一個有來源依據的問題與預期答案。</p></section>
+<section id="run"><h2>二、執行目標 Agent</h2><pre><code>lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl</code></pre><p>Runner 只填入 <code>actual_response</code>，不做評分；執行錯誤會記錄在 <code>responses.jsonl.run.json</code>。</p></section>
+<section id="eval"><h2>三、評估</h2><pre><code>lladar eval responses.jsonl --prompt "評估正確性與完整度。" --output evaluation.json</code></pre><p>評估 Agent 先固定適合的維度，再逐筆判讀。所有筆數、分佈、比率與描述統計都由 Python 計算。</p></section>
+<section id="report"><h2>四、產生報告</h2><pre><code>lladar report evaluation.json --output report.md</code></pre><p>報告包含確定性表格、有證據邊界的解讀、限制與逐筆附錄。</p></section>
 </main>
-<footer><div class="wrap">LLaDAR · <a href="https://github.com/stoday/LLaDAR">原始碼與授權</a> · <a href="../" lang="en">English</a></div></footer>
+<footer><div class="wrap">LLaDAR</div></footer>
 </body>
 </html>

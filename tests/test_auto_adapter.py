@@ -7,6 +7,7 @@ import pytest
 
 from lladar.auto_adapter import AutoAdapter
 from lladar.adapter_workspace import WorkspaceExplorer, ExplorationBudget
+from lladar.exceptions import DatasetValidationError
 from lladar.runner import run_agent
 
 
@@ -104,17 +105,16 @@ def test_tools_enforce_paths_secrets_and_budget(tmp_path):
         explorer.list_files()
 
 
-def test_empty_dataset_needs_no_model_and_preserves_output_guard(tmp_path):
+def test_empty_dataset_is_rejected_before_model_execution(tmp_path):
     dataset = tmp_path / "empty.jsonl"
     dataset.write_text("")
     project = tmp_path / "project"
     project.mkdir()
     output = tmp_path / "answers.jsonl"
-    assert run_agent(dataset, output, project=project, runs_root=tmp_path / "runs",
-                     model="invalid-provider:must-not-be-called", verbose=False) == 0
-    assert output.read_text() == ""
-    with pytest.raises(FileExistsError):
-        run_agent(dataset, output, project=project)
+    with pytest.raises(DatasetValidationError, match="no records"):
+        run_agent(dataset, output, project=project, runs_root=tmp_path / "runs",
+                  model="invalid-provider:must-not-be-called", verbose=False)
+    assert not output.exists()
 
 
 def test_project_named_adapter_does_not_collide_with_evidence(tmp_path):

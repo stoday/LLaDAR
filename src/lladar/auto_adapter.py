@@ -156,7 +156,7 @@ def _stream_answer(events) -> str:
 class AutoAdapter:
     def __init__(self, workspace: Path, *, python: Path, env_file: str | Path | None,
                  model: str, timeout: float = 120, max_tool_calls: int = 100,
-                 verbose: bool = True, resume: bool = False,
+                 verbose: bool = True,
                  graphify: bool = True, graphify_python: str | Path | None = None,
                  service_url: str | None = None):
         if timeout <= 0 or max_tool_calls <= 0:
@@ -171,7 +171,7 @@ class AutoAdapter:
         self.service_url = validate_service_url(service_url) if service_url else None
         evidence_name = "adapter-evidence" if self.workspace.name.casefold() == "adapter" else "adapter"
         self.evidence = self.workspace.parent / evidence_name
-        self.evidence.mkdir(exist_ok=resume)
+        self.evidence.mkdir()
         self.explorer = WorkspaceExplorer(
             workspace, python_executable=str(self.python),
             environment=target_environment(self.python, env_file),
@@ -183,15 +183,6 @@ class AutoAdapter:
                              "controller_python": sys.executable,
                              "controller_prefix": sys.prefix,
                              "target_python": str(self.python), "verification": []}
-        if resume:
-            self.report = json.loads((self.evidence / "run.json").read_text(encoding="utf-8"))
-            if self.report.get("status") != "needs_confirmation":
-                raise ValueError("Only needs_confirmation runs may resume")
-            from .adapter_workspace import AuditEvent
-            self.explorer.audit_events = [AuditEvent(**row) for row in json.loads(
-                (self.evidence / "audit.json").read_text(encoding="utf-8"))]
-
-
     def _save(self) -> None:
         (self.evidence / "run.json").write_text(
             json.dumps(self.report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -39,6 +40,30 @@ class AuditEvent:
     arguments: dict[str, Any]
     summary: str
     result_fingerprint: str | None = None
+
+
+def _notebook_python_source(target: Path) -> str:
+    """Export notebook cell sources as Python-style text without executing them."""
+    notebook = json.loads(target.read_text(encoding="utf-8"))
+    cells = notebook.get("cells") if isinstance(notebook, dict) else None
+    if not isinstance(cells, list):
+        raise ValueError("Notebook has no cells")
+    sections = ["# Notebook cell sources; saved outputs omitted\n"]
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, dict):
+            continue
+        source = cell.get("source", [])
+        if isinstance(source, list) and all(isinstance(line, str) for line in source):
+            source = "".join(source)
+        if not isinstance(source, str) or not source:
+            continue
+        cell_type = cell.get("cell_type")
+        if cell_type == "code":
+            sections.append(f"\n# %% [code cell {index}]\n{source}\n")
+        elif cell_type == "markdown":
+            comments = "\n".join("# " + line for line in source.splitlines())
+            sections.append(f"\n# %% [markdown cell {index}]\n{comments}\n")
+    return "".join(sections)
 
 
 class WorkspaceExplorer:
@@ -194,21 +219,50 @@ class WorkspaceExplorer:
                      f"{len(matches)} contextual matches")
         return matches
     def preview_file(self, path: str, limit: int = 8000) -> str:
-        """Read a bounded prefix of a source file, including single-line JSON."""
+        """Read a bounded prefix, or notebook cell sources without saved outputs."""
         self._check_budget()
         if not 1 <= limit <= 10000:
             raise ValueError("Preview limit must be between 1 and 10000")
         target = self._resolve(path)
         if not target.is_file() or not self._visible(target):
             raise ValueError(f"Not a readable workspace file: {path}")
-        with target.open("r", encoding="utf-8", errors="replace") as stream:
-            content = stream.read(limit)
+        if target.suffix.casefold() == ".ipynb":
+            content = _notebook_python_source(target)
+            if len(content) > limit:
+                marker = "\n[Preview truncated]"
+                content = content[:limit - len(marker)] + marker
+        else:
+            with target.open("r", encoding="utf-8", errors="replace") as stream:
+                content = stream.read(limit)
         if self._read_characters + len(content) > self.budget.max_read_characters:
             raise RuntimeError("Exploration source-reading budget exhausted")
         self._read_characters += len(content)
         self._record("preview_file", {"path": path, "limit": limit},
                      f"{len(content)} characters", content)
         return content
+
+    def read_notebook_code(self, path: str, offset: int = 0,
+                           limit: int = 20000) -> dict[str, Any]:
+        """Read a bounded page of notebook code and commented markdown."""
+        self._check_budget()
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20000:
+            raise ValueError("Notebook offset or limit is invalid")
+        target = self._resolve(path)
+        if target.suffix.casefold() != ".ipynb" or not target.is_file() or not self._visible(target):
+            raise ValueError(f"Not a readable notebook: {path}")
+        converted = _notebook_python_source(target)
+        if offset > len(converted):
+            raise ValueError("Notebook offset is past the end")
+        page = converted[offset:offset + limit]
+        if self._read_characters + len(page) > self.budget.max_read_characters:
+            raise RuntimeError("Exploration source-reading budget exhausted")
+        self._read_characters += len(page)
+        next_offset = offset + len(page) if offset + len(page) < len(converted) else None
+        self._record("read_notebook_code", {"path": path, "offset": offset,
+                                            "limit": limit},
+                     f"{len(page)} of {len(converted)} characters", page)
+        return {"source": page, "offset": offset, "next_offset": next_offset,
+                "total_characters": len(converted)}
     def write_harness(self, filename: str, content: str) -> str:
         self._check_budget()
         if not filename.endswith(".py") or Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):

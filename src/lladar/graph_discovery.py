@@ -9,7 +9,7 @@ import shutil
 import subprocess
 
 from .interfaces import write_json
-from .run_context import inventory
+from .project_inventory import inventory
 
 
 WORKER = r'''

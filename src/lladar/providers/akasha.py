@@ -16,11 +16,13 @@ class AkashaProvider:
         agent_factory: Callable[..., Any] | None = None,
         max_input_tokens: int | None = None,
         max_output_tokens: int | None = None,
+        verbose: bool = False,
     ) -> None:
         self.env_file = env_file
         self._agent_factory = agent_factory
         self.max_input_tokens = max_input_tokens
         self.max_output_tokens = max_output_tokens
+        self.verbose = verbose
 
     def generate_structured(
         self,
@@ -58,7 +60,7 @@ class AkashaProvider:
             max_input_tokens=profile.max_input_tokens,
             max_output_tokens=profile.max_output_tokens,
             temperature=temperature,
-            verbose=False,
+            verbose=self.verbose,
             keep_logs=False,
         )
         try:

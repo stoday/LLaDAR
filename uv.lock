@@ -1779,6 +1779,8 @@ version = "0.6.0"
 source = { editable = "." }
 dependencies = [
     { name = "akasha-terminal" },
+    { name = "pypdf" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
@@ -1789,7 +1791,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "akasha-terminal", extras = ["light"], specifier = ">=1.4" },
+    { name = "pypdf", specifier = ">=4,<7" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
+    { name = "requests", specifier = ">=2.31,<3" },
 ]
 provides-extras = ["test"]
 

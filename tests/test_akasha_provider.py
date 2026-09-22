@@ -100,3 +100,24 @@ def test_unknown_model_uses_conservative_token_budget():
 
     assert captured["max_input_tokens"] == 16_384
     assert captured["max_output_tokens"] == 8_192
+
+
+def test_akasha_provider_forwards_verbose_to_the_agent():
+    captured = {}
+
+    class FakeAgent:
+        def __call__(self, prompt):
+            return json.dumps(VALID_PAIR, ensure_ascii=False)
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return FakeAgent()
+
+    provider = AkashaProvider(agent_factory=factory, verbose=True)
+    provider.generate_structured(
+        "generate a pair",
+        model="gemini:gemini-2.5-flash",
+        temperature=0.0,
+    )
+
+    assert captured["verbose"] is True
