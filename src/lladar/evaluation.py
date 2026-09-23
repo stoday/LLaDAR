@@ -7,9 +7,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .exceptions import EvaluationError
+from .exceptions import EvaluationError, ProviderError
 from .providers import AkashaProvider, LLMProvider, generate_structured
 from .records import read_records
+from .validation_retry import run_validated
 
 
 DEFAULT_EVALUATION_MODEL = "gemini:gemini-2.5-flash"
@@ -18,6 +19,9 @@ DEFAULT_EVALUATION_PROMPT = (
     "answers and actual responses. Include correctness when it is meaningful."
 )
 _KINDS = {"boolean", "categorical", "numeric"}
+_RETRYABLE_EVALUATION_ERRORS = (
+    ProviderError, EvaluationError, TypeError, KeyError, ValueError,
+)
 
 
 def evaluate(
@@ -50,13 +54,17 @@ def evaluate(
     active_provider = provider or AkashaProvider(env_file=str(env_file))
     if eligible:
         try:
-            raw_plan = generate_structured(
-                active_provider,
+            plan = run_validated(
                 _plan_prompt(eligible, resolved_prompt),
-                model=model,
-                temperature=0.0,
+                lambda active_prompt: generate_structured(
+                    active_provider,
+                    active_prompt,
+                    model=model,
+                    temperature=0.0,
+                ),
+                _validate_plan,
+                retry_on=_RETRYABLE_EVALUATION_ERRORS,
             )
-            plan = _validate_plan(raw_plan)
         except Exception as error:
             raise EvaluationError(f"evaluator could not produce a valid plan: {error}") from error
     else:
@@ -80,13 +88,17 @@ def evaluate(
             item.update(status="missing_response", values={}, reason="The target Agent returned no response.")
         else:
             try:
-                raw = generate_structured(
-                    active_provider,
+                judgment = run_validated(
                     _judgment_prompt(record, plan, resolved_prompt),
-                    model=model,
-                    temperature=0.0,
+                    lambda active_prompt: generate_structured(
+                        active_provider,
+                        active_prompt,
+                        model=model,
+                        temperature=0.0,
+                    ),
+                    lambda value: _validate_judgment(value, plan),
+                    retry_on=_RETRYABLE_EVALUATION_ERRORS,
                 )
-                judgment = _validate_judgment(raw, plan)
                 item.update(status="evaluated", **judgment)
             except Exception as error:
                 if strict:

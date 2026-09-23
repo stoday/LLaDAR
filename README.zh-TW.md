@@ -42,9 +42,6 @@ lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 ```
 
-也可以用 `--entrypoint` 指定進入點。它會從 `LLADAR_QUESTION` 收到問題，並將最終
-回應輸出到 stdout。
-
 自動評估：
 
 ```bash

@@ -1,6 +1,6 @@
 # LLaDAR 自動 adapter：從探知介面到執行
 
-`lladar run-agent DATASET --project PATH` 的目的是以待測專案**既有的公開流程**回答資料集問題。沒有提供 `--entrypoint` 時，LLaDAR 不要求專案預先符合某個函式名稱或回傳型別；它在受管理的專案副本中探索出入口，產生一個獨立 Python adapter，先重播驗證，再用它執行整份資料集。
+`lladar run-agent DATASET --project PATH` 的目的是以待測專案**既有的公開流程**回答資料集問題。LLaDAR 不要求專案預先符合某個函式名稱或回傳型別；它在受管理的專案副本中探索出入口，產生一個獨立 Python adapter，先重播驗證，再用它執行整份資料集。
 
 這份文件說明 adapter 的資料流、產物與手動重播界線。它不是答案品質的保證；`verified` 只表示 adapter 在驗證 probes 中可以重播。
 
@@ -68,7 +68,7 @@ LLaDAR 驗證此計畫後，會以原子寫入保存為：
 - `write_harness`：寫一個獨立 Python 檔
 - `run_harness`：在新專案副本中執行、觀察失敗並修正整合問題
 
-`write_harness` 只允許在複本內寫入簡單檔名的 Python 檔：
+`write_harness` 只允許在複本內寫入簡單檔名且語法可編譯的 Python 檔；語法錯誤不會覆蓋上一個可用版本：
 
 ```text
 .lladar/harnesses/<adapter-name>.py
@@ -106,6 +106,12 @@ adapter 從標準輸入讀取一個 JSON 物件：
 4. 檢查 adapter、service helper 與待測專案程式碼在執行期間沒有被更改。
 5. 所有 probes 成功才把狀態標為 `verified`。
 6. 對正式資料集的每一題，再各建立新的副本與程序執行 adapter，並只寫入輸出 JSONL 的 `actual_response`。
+
+任何生成、協定、程序、HTTP、逾時或答案觀察驗證失敗，都會進入最多 50 次的通用修正迴圈。每次修正使用新的 coding agent，並重新提供固定 I/O 協定、完整的 `harness`／`explanation`／`blockers` proposal 格式、最後一個送交獨立驗證的 adapter 候選、外層修正歷史、所有驗證失敗的去重目錄與完整時間線，以及 `write_harness` 等工具層錯誤。相同錯誤文字只在目錄保存一次，時間線仍保留每次發生的位置，避免大量重複訊息擠掉其他舊錯誤。Agent 依這些證據自行判斷目標專案的修法；LLaDAR 不會把特定錯誤對應到硬編碼修補。
+
+`run_harness` 的 `message` 參數是工具呼叫時使用的純文字 probe；真正啟動 adapter 時，LLaDAR 一律將它包成第 4 節的 JSON stdin。每次 coding-agent 回合都有獨立的 `--max-tool-calls` 預算，稽核紀錄則跨回合保留。
+
+若 adapter 程序已完成但後續協定驗證失敗，`run_harness` 會在 `verification.diagnostic` 附上 adapter 的 stderr 尾端；已知憑證值會先遮罩，provider debug metadata 也不會傳回。這讓 agent 能觀察目標程式的真實 stdout/stderr 診斷，不必根據同一個表面錯誤反覆猜測。
 
 常見證據位於：
 
@@ -150,7 +156,7 @@ finally {
 
 ## 程式位置
 
-- `src/lladar/runner.py`：建立專案副本；未提供 `--entrypoint` 時呼叫 `AutoAdapter.prepare()`。
+- `src/lladar/runner.py`：建立專案副本並呼叫 `AutoAdapter.prepare()`。
 - `src/lladar/auto_adapter.py`：兩階段 agent、介面選擇、adapter proposal、probe 驗證與每題執行。
 - `src/lladar/interfaces.py`：驗證與原子保存 `interfaces.json`。
 - `src/lladar/adapter_workspace.py`：限制 `write_harness` 只能寫入受管理的 `.lladar/harnesses/*.py`。

@@ -45,9 +45,6 @@ adapter for its real public workflow:
 lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 ```
 
-An explicit entrypoint may be supplied with `--entrypoint`. It receives the
-question in `LLADAR_QUESTION` and must print the final response to stdout.
-
 Evaluate automatically:
 
 ```bash

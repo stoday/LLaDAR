@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
-import subprocess
 import sys
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -19,13 +17,8 @@ from .records import read_records, write_records
 Answerer = Callable[[str], str]
 
 
-class AdapterController:
-    def adapt(self, workspace: Path, entrypoint: Path) -> None:
-        raise NotImplementedError
-
-
 class SandboxTools:
-    """Root-confined tools exposed to the explicit-entrypoint adapter."""
+    """Root-confined read-only tools used for project inspection."""
 
     def __init__(self, workspace: Path):
         self.workspace = workspace.resolve()
@@ -62,67 +55,18 @@ class SandboxTools:
                 matches.append(str(path.relative_to(self.workspace)))
         return sorted(matches)
 
-    def replace_text(self, relative_path: str, old: str, new: str) -> None:
-        path = self._path(relative_path)
-        content = self.read_file(relative_path)
-        if content.count(old) != 1:
-            raise ValueError("replacement text must match exactly once")
-        path.write_text(content.replace(old, new), encoding="utf-8", newline="\n")
-
-
-class AkashaAdapterController(AdapterController):
-    def __init__(self, *, model: str = "gemini:gemini-2.5-flash", env_file: str | Path = ".env"):
-        self.model = model
-        self.env_file = str(env_file)
-
-    def adapt(self, workspace: Path, entrypoint: Path) -> None:
-        import akasha
-
-        tools = SandboxTools(workspace)
-        agent = akasha.agents(
-            model=self.model,
-            env_file=self.env_file,
-            tools=[
-                akasha.create_tool("List a workspace directory.", tools.list_directory, "list_directory"),
-                akasha.create_tool("Read a UTF-8 workspace file.", tools.read_file, "read_file"),
-                akasha.create_tool("Search workspace text files.", tools.search, "search_files"),
-                akasha.create_tool("Replace one exact text span.", tools.replace_text, "replace_text"),
-            ],
-            stream=False,
-            thinking=False,
-            verbose=False,
-            keep_logs=False,
-        )
-        agent(
-            "Adapt the copied project so its entrypoint answers the question in "
-            "LLADAR_QUESTION. Inspect the project and make the smallest change. "
-            "Do not fake answers or change the target provider. Entrypoint: "
-            + str(entrypoint.relative_to(workspace))
-        )
-        if "LLADAR_QUESTION" not in entrypoint.read_text(encoding="utf-8"):
-            raise RuntimeError("adapter did not prove LLADAR_QUESTION injection")
-
 
 def resolve_project_python(project: str | Path) -> Path:
     root = Path(project).resolve()
-    for candidate in (root / ".venv" / "Scripts" / "python.exe", root / ".venv" / "bin" / "python"):
+    for candidate in (
+        root / ".venv" / "Scripts" / "python.exe",
+        root / ".venv" / "bin" / "python",
+    ):
         if candidate.is_file():
             return candidate
     raise ValueError(
         "No target .venv found. Create the project's environment or supply --target-python."
     )
-
-
-def resolve_project_entrypoint(project: str | Path, entrypoint: str | Path) -> Path:
-    root = Path(project).resolve()
-    supplied = Path(entrypoint)
-    working_candidate = supplied.resolve()
-    absolute = working_candidate if supplied.is_absolute() or working_candidate.is_relative_to(root) else (root / supplied).resolve()
-    if not absolute.is_relative_to(root):
-        raise ValueError(f"entrypoint is outside project: {entrypoint}")
-    if not absolute.is_file():
-        raise FileNotFoundError(f"entrypoint not found: {entrypoint}")
-    return absolute.relative_to(root)
 
 
 @contextmanager
@@ -157,8 +101,6 @@ def run_agent(
     *,
     answer: Answerer | None = None,
     project: str | Path | None = None,
-    entrypoint: str | Path | None = None,
-    adapter: AdapterController | None = None,
     env_file: str | Path | None = None,
     force: bool = False,
     verbose: bool = True,
@@ -188,55 +130,50 @@ def run_agent(
     selected = records if max_cases is None else records[:max_cases]
     output_path = Path(output)
     run_path = output_path.with_name(output_path.name + ".run.json")
-    for path in (output_path, run_path):
-        if path.exists() and not force:
-            raise FileExistsError(f"output already exists: {path}")
+    for candidate in (output_path, run_path):
+        if candidate.exists() and not force:
+            raise FileExistsError(f"output already exists: {candidate}")
 
     reporter = ProgressReporter(verbose)
     reporter.configuration(
-        {"dataset": dataset, "project": project, "entrypoint": entrypoint,
-         "records": len(selected), "output": output}
-    )
-    relative_entrypoint = (
-        resolve_project_entrypoint(project, entrypoint)
-        if project is not None and entrypoint is not None else None
+        {"dataset": dataset, "project": project, "records": len(selected), "output": output}
     )
     target_python_path = Path(sys.executable)
     if project is not None:
-        target_python_path = Path(target_python).resolve() if target_python else resolve_project_python(project)
+        target_python_path = (
+            Path(target_python).resolve() if target_python else resolve_project_python(project)
+        )
         from .target_environment import validate_target_python
 
         validate_target_python(target_python_path)
 
-    context = copy_project(project, runs_root=runs_root) if project is not None else _empty_context()
+    context = (
+        copy_project(project, runs_root=runs_root)
+        if project is not None
+        else _empty_context()
+    )
     completed = 0
     errors: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     with context as workspace:
         automatic = None
-        adapted_entrypoint = None
         if project is not None and selected:
-            if entrypoint is None:
-                from .auto_adapter import AutoAdapter
+            from .auto_adapter import AutoAdapter
 
-                automatic = AutoAdapter(
-                    workspace,
-                    python=target_python_path,
-                    env_file=env_file,
-                    model=model,
-                    timeout=timeout,
-                    max_tool_calls=max_tool_calls,
-                    verbose=verbose,
-                    graphify=graphify,
-                    graphify_python=graphify_python,
-                    service_url=service_url,
-                )
-                probes = list(dict.fromkeys(record["question"] for record in selected))[:2]
-                automatic.prepare(probes, interactive=interactive, intent=intent)
-            else:
-                adapted_entrypoint = workspace / relative_entrypoint  # type: ignore[operator]
-                if "LLADAR_QUESTION" not in adapted_entrypoint.read_text(encoding="utf-8"):
-                    (adapter or _require_adapter()).adapt(workspace, adapted_entrypoint)
+            automatic = AutoAdapter(
+                workspace,
+                python=target_python_path,
+                env_file=env_file,
+                model=model,
+                timeout=timeout,
+                max_tool_calls=max_tool_calls,
+                verbose=verbose,
+                graphify=graphify,
+                graphify_python=graphify_python,
+                service_url=service_url,
+            )
+            probes = list(dict.fromkeys(record["question"] for record in selected))[:2]
+            automatic.prepare(probes, interactive=interactive, intent=intent)
 
         for index, record in enumerate(selected, 1):
             result = dict(record)
@@ -246,15 +183,10 @@ def run_agent(
                 elif automatic is not None:
                     response = automatic.answer(record["question"], f"record-{index}")
                 else:
-                    response = _run_entrypoint(
-                        adapted_entrypoint,
-                        workspace,
-                        record["question"],
-                        python_executable=target_python_path,
-                        env_file=env_file,
-                        timeout=timeout,
-                    )
-                result["actual_response"] = response if isinstance(response, str) else str(response)
+                    raise RuntimeError("automatic adapter was not prepared")
+                result["actual_response"] = (
+                    response if isinstance(response, str) else str(response)
+                )
                 completed += 1
                 status = "ok"
             except Exception as error:
@@ -279,12 +211,14 @@ def run_agent(
         "errors": errors,
         "target": {
             "project": str(Path(project).resolve()) if project is not None else None,
-            "entrypoint": str(relative_entrypoint) if relative_entrypoint else None,
             "adapter_model": model if project is not None else None,
         },
     }
     run_path.parent.mkdir(parents=True, exist_ok=True)
-    run_path.write_text(json.dumps(run_record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    run_path.write_text(
+        json.dumps(run_record, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     reporter.done(completed, metric="completed")
     return completed
 
@@ -292,40 +226,3 @@ def run_agent(
 @contextmanager
 def _empty_context():
     yield None
-
-
-def _require_adapter() -> AdapterController:
-    raise ValueError("an adapter controller is required for explicit project mode")
-
-
-def _run_entrypoint(
-    entrypoint: Path | None,
-    workspace: Path,
-    question: str,
-    *,
-    python_executable: Path,
-    env_file: str | Path | None,
-    timeout: float,
-) -> str:
-    if entrypoint is None:
-        raise ValueError("entrypoint is required for explicit project mode")
-    from .target_environment import target_environment
-
-    environment = target_environment(python_executable, env_file)
-    environment["LLADAR_QUESTION"] = question
-    completed = subprocess.run(
-        [str(python_executable), str(entrypoint)],
-        cwd=workspace,
-        env=environment,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=timeout,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or f"exit code {completed.returncode}")
-    response = completed.stdout.strip()
-    if not response:
-        raise RuntimeError("agent produced no stdout answer")
-    return response

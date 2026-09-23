@@ -8,9 +8,9 @@ The implementation incorporates VIDE-TESTING's coding-agent exploration workflow
 
 ## MVP contract
 
-- Keep explicit `--entrypoint` and Python `answer=` callbacks compatible.
-- Without an entrypoint, inspect a managed project copy and generate a standalone
-  Python adapter. Do not edit target source, replace providers, or fabricate answers.
+- Keep the Python `answer=` callback compatible for tests and embedding.
+- Inspect a managed project copy and generate a standalone Python adapter. Do not
+  edit target source, replace providers, or fabricate answers.
 - Adapter stdin: `{request_id, message}`. stdout: exactly one JSON object with the
   matching `request_id`, a nonempty string `output`, and an `observation` explanation.
   Target logs belong on stderr. Extract the target answer without rewriting it.

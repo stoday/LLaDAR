@@ -12,12 +12,14 @@ from .exceptions import LladarError, ProviderError
 from .interfaces import NeedsConfirmation
 from .providers import LLMProvider
 from .reporting import DEFAULT_REPORT_MODEL, create_report
-from .runner import AdapterController, AkashaAdapterController, run_agent
+from .runner import run_agent
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
     def _get_help_string(self, action: argparse.Action) -> str:
-        if action.default is None and action.help is not None:
+        if action.help is not None and (
+            action.default is None or "(default:" in action.help
+        ):
             return action.help
         return super()._get_help_string(action)
 
@@ -87,25 +89,76 @@ def build_parser() -> argparse.ArgumentParser:
     runner = commands.add_parser(
         "run-agent",
         help="Fill actual_response by running a target Agent.",
+        description=(
+            "Inspect a target Agent project, generate and verify an adapter, then "
+            "fill actual_response in a new JSONL file."
+        ),
         formatter_class=_HelpFormatter,
     )
-    runner.add_argument("dataset", metavar="DATASET")
-    runner.add_argument("--project", default=".", metavar="PATH")
-    runner.add_argument("--entrypoint", metavar="PATH")
-    runner.add_argument("--output", default="responses.jsonl", metavar="PATH")
-    runner.add_argument("--max-cases", type=int, metavar="N")
-    runner.add_argument("--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL")
-    runner.add_argument("--env-file", default=".env", metavar="PATH")
-    runner.add_argument("--target-python", metavar="PATH")
-    runner.add_argument("--timeout", type=float, default=120)
-    runner.add_argument("--max-tool-calls", type=int, default=100)
-    runner.add_argument("--intent", default="")
-    runner.add_argument("--graphify", action=argparse.BooleanOptionalAction, default=True)
-    runner.add_argument("--graphify-python", metavar="PATH")
-    runner.add_argument("--service-url", metavar="URL")
-    runner.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=None)
-    runner.add_argument("--force", action="store_true")
-    runner.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
+    runner.add_argument(
+        "dataset", metavar="DATASET",
+        help="Input test-dataset JSONL whose actual_response values are null.",
+    )
+    runner.add_argument(
+        "--project", default=".", metavar="PATH",
+        help="Target Agent project directory to inspect and copy into the isolated run workspace.",
+    )
+    runner.add_argument(
+        "--output", default="responses.jsonl", metavar="PATH",
+        help="Destination responses JSONL; also writes PATH.run.json beside it.",
+    )
+    runner.add_argument(
+        "--max-cases", type=int, metavar="N",
+        help="Run only the first N input records (default: all records).",
+    )
+    runner.add_argument(
+        "--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL",
+        help="Coding Agent model used for interface discovery and adapter generation/repair.",
+    )
+    runner.add_argument(
+        "--env-file", default=".env", metavar="PATH",
+        help="Environment file for the coding model provider and target process; existing environment variables win.",
+    )
+    runner.add_argument(
+        "--target-python", metavar="PATH",
+        help="Target project's Python executable (default: discover PROJECT/.venv automatically).",
+    )
+    runner.add_argument(
+        "--timeout", type=float, default=120, metavar="SECONDS",
+        help="Timeout in seconds for each adapter or tool subprocess.",
+    )
+    runner.add_argument(
+        "--max-tool-calls", type=int, default=100, metavar="N",
+        help="Maximum tool calls per discovery or adapter-repair agent turn.",
+    )
+    runner.add_argument(
+        "--intent", default="", metavar="TEXT",
+        help="Optional guidance naming the feature or user workflow to test (default: none).",
+    )
+    runner.add_argument(
+        "--graphify", action=argparse.BooleanOptionalAction, default=True,
+        help="Build an optional static code graph before source exploration; use --no-graphify to disable (default: enabled).",
+    )
+    runner.add_argument(
+        "--graphify-python", metavar="PATH",
+        help="Python executable containing graphifyy (default: discover an existing uv tool environment automatically).",
+    )
+    runner.add_argument(
+        "--service-url", metavar="URL",
+        help="Existing test-service base URL that the generated adapter may call (default: none).",
+    )
+    runner.add_argument(
+        "--interactive", action=argparse.BooleanOptionalAction, default=None,
+        help="Prompt to choose among ambiguous public interfaces; use --no-interactive to disable (default: enabled only on a TTY).",
+    )
+    runner.add_argument(
+        "--force", action="store_true",
+        help="Replace an existing responses file and its .run.json sidecar (default: disabled).",
+    )
+    runner.add_argument(
+        "--verbose", action=argparse.BooleanOptionalAction, default=True,
+        help="Show LLaDAR progress and coding-agent traces; use --no-verbose to hide them (default: enabled).",
+    )
 
     evaluation = commands.add_parser(
         "eval",
@@ -139,7 +192,6 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     provider: LLMProvider | None = None,
-    adapter_controller: AdapterController | None = None,
     runs_root: str | Path | None = None,
 ) -> int:
     for stream in (sys.stdout, sys.stderr):
@@ -176,10 +228,6 @@ def main(
                 args.dataset,
                 args.output,
                 project=args.project,
-                entrypoint=args.entrypoint,
-                adapter=adapter_controller or AkashaAdapterController(
-                    model=args.model, env_file=args.env_file
-                ),
                 env_file=args.env_file,
                 force=args.force,
                 verbose=args.verbose,

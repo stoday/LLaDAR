@@ -58,9 +58,8 @@ skipped; skipped candidates are progress/log information, not dataset records.
 ## Target execution
 
 `run-agent` accepts the three-field JSONL dataset and either a test callback in
-the Python interface or a copied target project in the CLI. Existing automatic
-adapter discovery and explicit `LLADAR_QUESTION` entrypoints remain useful
-implementation details behind this interface.
+the Python interface or a copied target project in the CLI. Automatic adapter discovery is the project execution implementation behind this
+interface; the Python-only `answer=` callback remains available for tests and embedding.
 
 The command writes:
 

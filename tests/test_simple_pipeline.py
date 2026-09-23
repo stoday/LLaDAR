@@ -9,7 +9,7 @@ import pytest
 from lladar.api import create_test_dataset
 from lladar.cli import build_parser, main
 from lladar.evaluation import evaluate
-from lladar.exceptions import DatasetValidationError
+from lladar.exceptions import DatasetValidationError, ProviderError
 from lladar.records import read_records, validate_record
 from lladar.reporting import create_report
 from lladar.runner import run_agent
@@ -24,7 +24,10 @@ class SequenceProvider:
         self.prompts.append(prompt)
         if not self.responses:
             raise AssertionError("unexpected provider call")
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def write_jsonl(path: Path, records: list[dict]) -> None:
@@ -106,6 +109,32 @@ def test_test_dataset_help_exposes_defaults():
     assert "(default: selected model profile)" in compact_help
     assert "(default: none)" in compact_help
 
+def test_run_agent_help_explains_options_and_defaults():
+    parser = build_parser()
+    commands = parser._subparsers._group_actions[0].choices
+    help_text = commands["run-agent"].format_help()
+    compact_help = re.sub(r"\s+", " ", help_text)
+
+    assert "Inspect a target Agent project" in compact_help
+    assert "Input test-dataset JSONL" in compact_help
+    assert "(default: .)" in compact_help
+    assert "(default: responses.jsonl)" in compact_help
+    assert "PATH.run.json" in compact_help
+    assert "(default: all records)" in compact_help
+    assert "(default: gemini:gemini-2.5-flash)" in compact_help
+    assert "(default: .env)" in compact_help
+    assert "(default: discover PROJECT/.venv automatically)" in compact_help
+    assert "(default: 120)" in compact_help
+    assert "(default: 100)" in compact_help
+    assert "feature or user workflow to test (default: none)" in compact_help
+    assert "--no-graphify" in compact_help
+    assert "(default: enabled)" in compact_help
+    assert "discover an existing uv tool environment automatically" in compact_help
+    assert "test-service base URL" in compact_help
+    assert "(default: enabled only on a TTY)" in compact_help
+    assert "(default: disabled)" in compact_help
+    assert "coding-agent traces" in compact_help
+
 def test_run_agent_only_fills_actual_response_and_records_errors(tmp_path: Path):
     dataset = tmp_path / "dataset.jsonl"
     output = tmp_path / "responses.jsonl"
@@ -131,6 +160,7 @@ def test_run_agent_only_fills_actual_response_and_records_errors(tmp_path: Path)
     assert sidecar["completed"] == 1
     assert sidecar["failed"] == 1
     assert "score" not in sidecar
+    assert "entrypoint" not in sidecar["target"]
 
 
 def test_eval_agent_judges_and_python_aggregates(tmp_path: Path):
@@ -251,7 +281,116 @@ def test_cli_surface_has_only_four_workflows():
     assert set(commands) == {"create", "run-agent", "eval", "report"}
     create_commands = commands["create"]._subparsers._group_actions[0].choices
     assert set(create_commands) == {"test-dataset"}
+    run_agent_options = {action.dest for action in commands["run-agent"]._actions}
+    assert "entrypoint" not in run_agent_options
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run-agent", "dataset.jsonl", "--entrypoint", "main.py"])
     with pytest.raises(SystemExit):
         parser.parse_args(["experiment", "run"])
     with pytest.raises(SystemExit):
         parser.parse_args(["skill", "install"])
+
+
+def test_dataset_retry_receives_all_prior_validation_failures(tmp_path: Path):
+    knowledge = tmp_path / "knowledge.md"
+    knowledge.write_text("Taipei is the capital of Taiwan.", encoding="utf-8")
+    provider = SequenceProvider(
+        {"question": "Capital?"},
+        {"question": "Capital?", "expected_answer": ""},
+        {"question": "Capital?", "expected_answer": "Taipei"},
+    )
+
+    records = create_test_dataset(
+        knowledge,
+        chunk_size=1000,
+        provider=provider,
+        verbose=False,
+    )
+
+    assert records[0]["expected_answer"] == "Taipei"
+    assert "generation must contain exactly question and expected_answer" in provider.prompts[1]
+    assert "generation must contain exactly question and expected_answer" in provider.prompts[2]
+    assert "expected_answer must be a non-empty string" in provider.prompts[2]
+
+
+def test_eval_retries_invalid_plan_and_judgment_with_history(tmp_path: Path):
+    responses = tmp_path / "responses.jsonl"
+    output = tmp_path / "evaluation.json"
+    write_jsonl(
+        responses,
+        [{"question": "Capital?", "expected_answer": "Taipei", "actual_response": "Taipei"}],
+    )
+    plan = {
+        "title": "Correctness",
+        "approach": "Compare answers.",
+        "dimensions": [
+            {"name": "correct", "description": "Semantic correctness", "kind": "boolean"}
+        ],
+        "limitations": [],
+    }
+    provider = SequenceProvider(
+        {"title": "incomplete"},
+        plan,
+        {"values": {"correct": "yes"}, "reason": "Invalid type."},
+        {"values": {"correct": True}, "reason": "Matches."},
+    )
+
+    result = evaluate(responses, output=output, provider=provider)
+
+    assert result["summary"]["evaluated"] == 1
+    assert "plan must contain exactly" in provider.prompts[1]
+    assert "correct must be boolean or null" in provider.prompts[3]
+    assert '"name": "correct"' in provider.prompts[3]
+
+
+def test_report_retries_provider_and_validation_errors_with_full_history(tmp_path: Path):
+    evaluation = tmp_path / "evaluation.json"
+    evaluation.write_text(
+        json.dumps(
+            {
+                "source": "responses.jsonl",
+                "evaluation_prompt": "Assess correctness.",
+                "evaluator_model": "test-model",
+                "plan": {
+                    "title": "Correctness",
+                    "approach": "Compare answers.",
+                    "dimensions": [
+                        {"name": "correct", "description": "Correct answer", "kind": "boolean"}
+                    ],
+                    "limitations": [],
+                },
+                "summary": {
+                    "total": 1,
+                    "evaluated": 1,
+                    "missing_response": 0,
+                    "judge_error": 0,
+                    "coverage": 1.0,
+                },
+                "aggregates": {
+                    "correct": {
+                        "kind": "boolean",
+                        "description": "Correct answer",
+                        "count": 1,
+                        "missing": 0,
+                        "true": 1,
+                        "false": 0,
+                        "true_rate": 1.0,
+                    }
+                },
+                "items": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    provider = SequenceProvider(
+        ProviderError("temporary provider failure"),
+        {"overview": "1 result", "findings": "Grounded.", "limitations": "Limited."},
+        {"overview": "Evidence summary.", "findings": "Grounded.", "limitations": "Limited."},
+    )
+    report = tmp_path / "report.md"
+
+    assert create_report(evaluation, report, provider=provider) == report
+    assert "temporary provider failure" in provider.prompts[1]
+    assert "temporary provider failure" in provider.prompts[2]
+    assert "unverified number" in provider.prompts[2]
+    assert "FACTS_JSON" in provider.prompts[2]

@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from .chunking import KnowledgeChunk, chunk_text, fallback_chunks, semantic_chunk_text
-from .exceptions import DatasetValidationError, KnowledgeLoadError
+from .exceptions import DatasetValidationError, KnowledgeLoadError, ProviderError
 from .loaders import KnowledgeInput, load_knowledge
 from .model_profiles import resolve_model_profile
 from .progress import ProgressReporter
 from .prompts import build_question_prompt
 from .providers import AkashaProvider, LLMProvider, generate_structured
 from .records import validate_record, write_records
+from .validation_retry import run_validated
 
 
 DEFAULT_DATASET_MODEL = "gemini:gemini-3.7-flash"
@@ -111,45 +112,43 @@ def create_test_dataset(
     for candidate_number, (source_path, chunk) in enumerate(candidates, 1):
         if count and len(records) >= count:
             break
-        last_error: Exception | None = None
-        for attempt in range(1, 4):
-            try:
-                generated = generate_structured(
-                    active_provider,
-                    build_question_prompt(chunk.text, guidance=prompt or ""),
-                    model=model,
-                    temperature=temperature,
-                )
-                if set(generated) != {"question", "expected_answer"}:
-                    raise DatasetValidationError(
-                        "generation must contain exactly question and expected_answer"
-                    )
-                record = validate_record(
-                    {
-                        "question": generated["question"],
-                        "expected_answer": generated["expected_answer"],
-                        "actual_response": None,
-                    }
-                )
-                identity = (
-                    _normalize(record["question"]),
-                    _normalize(record["expected_answer"]),
-                )
-                if identity not in seen:
-                    seen.add(identity)
-                    records.append(record)
-                break
-            except (DatasetValidationError, TypeError, KeyError, ValueError) as error:
-                last_error = error
-                reporter.emit(
-                    "RETRY",
-                    f"source={source_path} candidate={candidate_number} attempt={attempt}/3",
-                )
-        else:
+        def generate_record(active_prompt: str) -> dict[str, Any]:
+            return generate_structured(
+                active_provider,
+                active_prompt,
+                model=model,
+                temperature=temperature,
+            )
+
+        def record_failure(failure: dict[str, Any]) -> None:
+            reporter.emit(
+                "RETRY",
+                f"source={source_path} candidate={candidate_number} "
+                f"attempt={failure['attempt']}/3 error={failure['error_type']}",
+            )
+
+        try:
+            record = run_validated(
+                build_question_prompt(chunk.text, guidance=prompt or ""),
+                generate_record,
+                _validate_generated_record,
+                attempts=3,
+                retry_on=(ProviderError, DatasetValidationError, TypeError, KeyError, ValueError),
+                on_failure=record_failure,
+            )
+        except (ProviderError, DatasetValidationError, TypeError, KeyError, ValueError) as error:
             reporter.emit(
                 "WARN",
-                f"source={source_path} candidate={candidate_number} skipped error={type(last_error).__name__}",
+                f"source={source_path} candidate={candidate_number} skipped error={type(error).__name__}",
             )
+        else:
+            identity = (
+                _normalize(record["question"]),
+                _normalize(record["expected_answer"]),
+            )
+            if identity not in seen:
+                seen.add(identity)
+                records.append(record)
         reporter.group(candidate_number, len(candidates), f"generated={len(records)}")
 
     if not records:
@@ -159,6 +158,20 @@ def create_test_dataset(
         write_records(records, output, overwrite=force)
     reporter.done(len(records))
     return records
+
+
+def _validate_generated_record(generated: Any) -> dict[str, Any]:
+    if not isinstance(generated, dict) or set(generated) != {"question", "expected_answer"}:
+        raise DatasetValidationError(
+            "generation must contain exactly question and expected_answer"
+        )
+    return validate_record(
+        {
+            "question": generated["question"],
+            "expected_answer": generated["expected_answer"],
+            "actual_response": None,
+        }
+    )
 
 
 def _normalize(value: str) -> str:

@@ -92,6 +92,11 @@ class WorkspaceExplorer:
             raise RuntimeError("Exploration tool-call budget exhausted")
         self._tool_calls += 1
 
+    def start_agent_turn(self) -> None:
+        """Start a fresh bounded tool budget without discarding audit evidence."""
+        self._tool_calls = 0
+        self._read_characters = 0
+
     def _record(
         self,
         tool: str,
@@ -267,6 +272,16 @@ class WorkspaceExplorer:
         self._check_budget()
         if not filename.endswith(".py") or Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
             raise ValueError("Harness path must be a simple filename")
+        try:
+            compile(content, filename, "exec")
+        except SyntaxError as error:
+            location = f"line {error.lineno}"
+            if error.offset is not None:
+                location += f", column {error.offset}"
+            raise ValueError(
+                "Harness must be valid Python before it can replace the current version: "
+                f"{error.msg} ({location})"
+            ) from error
         directory = self.root / ".lladar" / "harnesses"
         directory = self._resolve(directory)
         directory.mkdir(parents=True, exist_ok=True)

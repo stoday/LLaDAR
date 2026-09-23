@@ -5,8 +5,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .exceptions import EvaluationError
+from .exceptions import EvaluationError, ProviderError
 from .providers import AkashaProvider, LLMProvider, generate_structured
+from .validation_retry import run_validated
 
 
 DEFAULT_REPORT_MODEL = "gemini:gemini-3.7-flash"
@@ -40,13 +41,17 @@ def create_report(
     }
     active_provider = provider or AkashaProvider(env_file=str(env_file))
     try:
-        narrative = generate_structured(
-            active_provider,
+        narrative = run_validated(
             _report_prompt(facts),
-            model=model,
-            temperature=0.0,
+            lambda active_prompt: generate_structured(
+                active_provider,
+                active_prompt,
+                model=model,
+                temperature=0.0,
+            ),
+            _validate_narrative,
+            retry_on=(ProviderError, EvaluationError, TypeError, KeyError, ValueError),
         )
-        narrative = _validate_narrative(narrative)
     except Exception as error:
         raise EvaluationError(f"report Agent failed: {type(error).__name__}: {error}") from error
 
