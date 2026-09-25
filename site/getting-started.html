@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Install LLaDAR and run the complete demo evaluation."><title>Get started — LLaDAR</title>
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header><div class="wrap top"><a class="brand" href="index.html">LLaDAR</a><div class="lang"><a href="index.html" aria-current="page">English</a><a href="zh-TW/getting-started.html" lang="zh-Hant">繁體中文</a></div></div><div class="wrap hero compact"><div class="eyebrow">Get started</div><h1>Run one complete evaluation</h1><p class="lead">Use the included support demo Agent to see the full workflow before evaluating your own project.</p></div></header>
+  <nav class="toc" aria-label="Documentation"><div class="wrap"><a href="index.html">Overview</a><a href="getting-started.html" aria-current="page">Get started</a><a href="guides/create-dataset.html">Create test data</a><a href="guides/run-agent.html">Run an Agent</a><a href="guides/evaluate.html">Evaluate answers</a><a href="guides/report.html">Create a report</a><a href="reference/cli.html">Command reference</a><a href="examples/support-demo-agent.html">Demo Agent</a></div></nav>
+  <main id="main" class="wrap">
+    <section><h2>Before you begin</h2><ul><li>Python 3.11 or 3.12.</li><li>Credentials for the LLaDAR model provider, in <code>.env</code> or the process environment.</li><li>A clone of this repository for the included demo Agent.</li></ul><p>The demo Agent itself needs only Python. Dataset generation, evaluation, and reporting use your configured provider.</p></section>
+    <section><h2>1. Install LLaDAR and obtain the demo</h2><pre><code>git clone https://github.com/stoday/LLaDAR.git
+cd LLaDAR
+python -m pip install -e .</code></pre></section>
+    <section><h2>2. Create questions from the support policy</h2><pre><code>lladar create test-dataset --knowledge examples/support-demo-agent/knowledge.md --output demo-dataset.jsonl</code></pre><p>This creates questions and expected answers based on the policy.</p></section>
+    <section><h2>3. Run the demo Agent</h2><pre><code>lladar run-agent demo-dataset.jsonl --project examples/support-demo-agent --no-interactive --output demo-responses.jsonl</code></pre><p>LLaDAR finds the demo Agent's public entry point, checks that it can use it, and records the responses.</p></section>
+    <section><h2>4. Evaluate answers and create a report</h2><pre><code>lladar eval demo-responses.jsonl --output demo-evaluation.json
+lladar report demo-evaluation.json --output demo-report.md</code></pre></section>
+    <section><h2>What success looks like</h2><div class="table-wrap"><table><thead><tr><th>File</th><th>What it shows</th></tr></thead><tbody><tr><td><code>demo-dataset.jsonl</code></td><td>The questions and expected answers.</td></tr><tr><td><code>demo-responses.jsonl</code></td><td>The Agent's answer for each question.</td></tr><tr><td><code>demo-responses.jsonl.run.json</code></td><td>How LLaDAR reached the Agent and whether the replay worked.</td></tr><tr><td><code>demo-evaluation.json</code> and <code>demo-report.md</code></td><td>Per-question judgments and a readable summary.</td></tr></tbody></table></div><div class="note"><strong>Important:</strong> a successful replay proves that the Agent entry point was exercised. Use the saved evaluation and report to assess answer quality.</div></section>
+    <nav class="page-nav"><a href="guides/create-dataset.html">Next: create a dataset →</a></nav>
+  </main>
+  <footer><div class="wrap">LLaDAR documentation</div></footer>
+</body>
+</html>

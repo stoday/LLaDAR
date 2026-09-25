@@ -57,9 +57,31 @@ skipped; skipped candidates are progress/log information, not dataset records.
 
 ## Target execution
 
-`run-agent` accepts the three-field JSONL dataset and either a test callback in
-the Python interface or a copied target project in the CLI. Automatic adapter discovery is the project execution implementation behind this
-interface; the Python-only `answer=` callback remains available for tests and embedding.
+`run-agent` accepts the three-field JSONL dataset and one target source: a copied
+target project, a browser-captured question workflow selected by `--page-url`,
+or the Python-only `answer=` callback for tests and embedding. Automatic adapter
+discovery remains the project execution implementation; `--service-url` retains
+its project-mode meaning and is not a bare-URL contract-discovery mechanism.
+
+The [browser-capture PRD](PRD-browser-captured-api-evaluation.zh-TW.md) specifies
+manual login, calibration, request confirmation, and response extraction. Its
+latest 2026-09-25 direction is **direct model extraction as the only browser
+answer-extraction path**, replacing generated Python and built-in answer rules,
+not retaining them as options or fallbacks. This specification revision does
+not claim that the implementation migration or live acceptance is complete.
+The model receives only the separately approved response material for the
+current request and returns the final text, not code or an extraction DSL.
+It receives no tools, credentials, `expected_answer`, or evaluation results;
+it must not answer the question itself, summarize, translate, or correct the
+target's response. Fixed host code still handles transport, request identity,
+completion, size limits, and result shape, but does not select answer fields.
+Independent local reference checks and fidelity tests remain required; a valid
+model output is not proof of faithful extraction or answer correctness.
+Each response requires model extraction, with explicit transfer consent and
+bounded calls, time, and tokens. Prior synthetic-evidence consent does not
+authorize sending real response content or replenish exhausted model budgets.
+Extraction failures remain separate from answer quality; the three-field
+contract, project-mode adapters, and later `eval`/`report` stages are unchanged.
 
 The command writes:
 
@@ -70,15 +92,14 @@ It does not evaluate correctness or alter the expected answer.
 
 ## Evaluation
 
-`eval` consumes one completed three-field JSONL file. It supports:
-
-- automatic mode, where the evaluator Agent proposes an evaluation plan from
-  the records;
-- guided mode, where `--prompt` or `--prompt-file` supplies the evaluation goal.
+`eval` consumes one completed three-field JSONL file and its sibling trials
+sidecar when present. It uses one bundled or local `--skill DIRECTORY`; there
+is no prompt or prompt-file mode.
 
 The evaluator first returns a frozen plan containing named boolean,
 categorical, or numeric dimensions. The same plan is then used for every
-eligible record. Each judgment returns dimension values and a rationale.
+completed trial. Each judgment returns dimension values and a rationale. Every
+plan includes a boolean `correct` dimension so Python can report stability.
 
 The evaluator Agent interprets language and extracts structured values. Python
 computes counts, denominators, rates, distributions, mean, median, minimum, and
@@ -86,9 +107,9 @@ maximum. The Agent must not be trusted to calculate or restate aggregate
 numbers. Missing responses and failed judgments are excluded from metrics and
 reported explicitly.
 
-The evaluation JSON contains the resolved prompt, evaluator model, frozen plan,
-per-record judgments, aggregate results, coverage, and errors. Existing output
-is protected unless `--force` is explicit.
+The evaluation JSON contains skill provenance, evaluator model, frozen plan,
+per-trial judgments, aggregate results, per-record stability, coverage, and
+errors. Existing output is protected unless `--force` is explicit.
 
 ## Reporting
 
@@ -99,20 +120,20 @@ may not invent or recalculate numbers.
 
 The report includes:
 
-- evaluation goal and inferred method;
+- evaluation skill and frozen method;
 - evaluator identity;
-- total, evaluated, missing-response, and judge-error counts;
+- record, scheduled-trial, evaluated, execution-error, and judge-error counts;
 - coverage and every computed dimension;
 - limitations;
-- an auditable appendix containing each question, expected answer, actual
-  response, structured judgment, and rationale.
+- a stability table and an auditable appendix containing every trial's question,
+  expected answer, actual response, structured judgment, and rationale.
 
 ## Safety and determinism
 
 - Inputs are treated as untrusted data, not evaluator instructions.
 - Source and output files are not silently overwritten.
 - Arithmetic is deterministic and independently testable.
-- The frozen plan, resolved prompt, model, and individual judgments are saved.
+- The frozen plan, skill provenance, model, and individual judgments are saved.
 - A report is never presented as successful when no records were evaluated.
 - Live provider validation is distinct from fake-provider contract tests.
 

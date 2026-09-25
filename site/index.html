@@ -3,21 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Create questions, run an Agent, evaluate responses, and render a report with LLaDAR.">
-  <title>LLaDAR user guide</title>
+  <meta name="description" content="LLaDAR documentation for automated Agent evaluation.">
+  <title>LLaDAR documentation</title>
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-<header><div class="wrap top"><a class="brand" href="./">LLaDAR</a><div class="lang"><a href="./" aria-current="page">English</a><a href="zh-TW/" lang="zh-Hant">繁體中文</a></div></div><div class="wrap hero"><div class="eyebrow">User guide</div><h1>A simple Agent evaluation pipeline</h1><p class="lead">Question, expected answer, actual response—then Agent-assisted evaluation and a reproducible report.</p></div></header>
-<nav class="toc"><div class="wrap"><a href="#format">Format</a><a href="#create">Create</a><a href="#run">Run</a><a href="#eval">Evaluate</a><a href="#report">Report</a></div></nav>
-<main id="main" class="wrap">
-<section id="format"><h2>One three-field record</h2><pre><code>{"question":"What is Taiwan's capital?","expected_answer":"Taipei","actual_response":null}</code></pre><p>Every JSONL row has exactly these fields. There are no schema versions or compatibility modes.</p></section>
-<section id="create"><h2>1. Create a dataset</h2><pre><code>lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl</code></pre><p>The model creates one source-grounded question and expected answer per accepted chunk.</p></section>
-<section id="run"><h2>2. Run the target Agent</h2><pre><code>lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl</code></pre><p>The runner fills only <code>actual_response</code>. It records execution failures in <code>responses.jsonl.run.json</code> and does not score answers.</p></section>
-<section id="eval"><h2>3. Evaluate</h2><pre><code>lladar eval responses.jsonl --prompt "Assess correctness and completeness." --output evaluation.json</code></pre><p>The evaluator Agent freezes useful dimensions and judges each completed response. Python calculates all counts, distributions, rates, and descriptive statistics.</p></section>
-<section id="report"><h2>4. Report</h2><pre><code>lladar report evaluation.json --output report.md</code></pre><p>The report combines deterministic tables, an evidence-bounded interpretation, limitations, and a record-level appendix.</p></section>
-</main>
-<footer><div class="wrap">LLaDAR</div></footer>
+  <a class="skip" href="#main">Skip to content</a>
+  <header>
+    <div class="wrap top"><a class="brand" href="index.html">LLaDAR</a><div class="lang"><a href="index.html" aria-current="page">English</a><a href="zh-TW/index.html" lang="zh-Hant">繁體中文</a></div></div>
+    <div class="wrap hero"><div class="eyebrow">Agent evaluation documentation</div><h1>Test a real Agent, automatically and with evidence</h1><p class="lead">LLaDAR creates test questions from your knowledge, sends them to an existing Agent, checks the answers, and writes a report. Each stage can use a custom local Skill.</p><p><a class="button" href="getting-started.html">Start with the demo Agent</a></p></div>
+  </header>
+  <nav class="toc" aria-label="Documentation"><div class="wrap"><a href="index.html" aria-current="page">Overview</a><a href="getting-started.html">Get started</a><a href="guides/create-dataset.html">Create test data</a><a href="guides/run-agent.html">Run an Agent</a><a href="guides/evaluate.html">Evaluate answers</a><a href="guides/report.html">Create a report</a><a href="reference/cli.html">Command reference</a><a href="examples/support-demo-agent.html">Demo Agent</a></div></nav>
+  <main id="main" class="wrap">
+    <section><h2>What problem does LLaDAR solve?</h2><p>Trying one question in a chat window is hard to repeat or review. LLaDAR connects the source material, test question, Agent response, evaluation result, and report, so you can see what an existing Agent actually did.</p></section>
+    <section><h2>One evaluation, four stages</h2><div class="card-grid">
+      <article class="card"><h3>Create test data</h3><p>Turn approved knowledge into questions and expected answers.</p><a href="guides/create-dataset.html">Dataset guide</a></article>
+      <article class="card"><h3>Run the target Agent</h3><p>Find a public way to use the Agent, then save its responses.</p><a href="guides/run-agent.html">Run-agent guide</a></article>
+      <article class="card"><h3>Evaluate answers</h3><p>Compare each response with what was expected, then calculate the results.</p><a href="guides/evaluate.html">Evaluation guide</a></article>
+      <article class="card"><h3>Report findings</h3><p>Turn the saved results into a readable report with limitations and details.</p><a href="guides/report.html">Reporting guide</a></article>
+    </div></section>
+    <section><h2>Use your own method when needed</h2><p>After the provider and target Agent are configured, LLaDAR can run the whole workflow automatically. A local directory containing <code>SKILL.md</code> can tailor how questions are generated, answers are judged, or results are summarized.</p><div class="note"><strong>Before you start:</strong> the Agent needs a runnable public workflow, and model-assisted stages need configured provider credentials.</div></section>
+    <section><h2>Choose a learning path</h2><div class="path-grid">
+      <article><h3>New to LLaDAR</h3><p>Run the included support demo Agent from start to finish.</p><a href="getting-started.html">Get started</a></article>
+      <article><h3>Evaluate your project</h3><p>Use the run-agent guide for a project or controlled test service you already have.</p><a href="guides/run-agent.html">Test an existing Agent</a></article>
+      <article><h3>Change the method</h3><p>Use local Skills to choose records, judge answers, or format a report.</p><a href="guides/create-dataset.html#custom-skill">Learn about Skills</a></article>
+    </div></section>
+    <section><h2>What is saved?</h2><p>The workflow saves the generated dataset, responses, execution records, evaluation result, and Markdown report. A successful replay shows that LLaDAR reached the selected Agent entry point; it does not by itself prove that every answer is correct.</p></section>
+  </main>
+  <footer><div class="wrap">LLaDAR documentation</div></footer>
 </body>
 </html>

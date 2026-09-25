@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>評估回答 | LLaDAR</title>
+  <meta name="description" content="逐題檢查 Agent 的回答，並統計結果。">
+  <link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a class="active" href="evaluate.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../guides/evaluate.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html">建立測試資料</a><a href="run-agent.html">執行 Agent</a><a href="evaluate.html" aria-current="page">評估回答</a><a href="report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">使用指南</p><h1>評估 Agent 的回答</h1><p class="lead">先看每一題的回答是否符合預期，再把所有題目的結果整理成清楚的統計。</p></section>
+    <section>
+      <h2>這一步在做什麼？</h2>
+      <p>這個步驟會把每題的「預期答案」和「Agent 實際回答」放在一起檢查。你可以指定要檢查的重點，例如回答是否正確、有沒有遺漏重要限制，或有沒有說出文件不支持的內容。</p>
+      <pre><code>lladar eval --dataset artifacts/dataset.json --run artifacts/run.json --output artifacts/evaluation.json</code></pre>
+    </section>
+    <section>
+      <h2>為什麼要分成「逐題判斷」和「最後統計」？</h2>
+      <p>逐題判斷需要看文字內容；最後統計只需要把通過和未通過的題數加總。因此，LLaDAR 可以用評估流程處理每一題，然後由 Python 負責算總數和比例。這樣即使再次產生報告，統計方式也不會跟著改變。</p>
+    </section>
+    <section>
+      <h2>想檢查自己在意的規則？</h2>
+      <p>加入自己的 <code>SKILL.md</code>，可以定義評估時要特別看什麼。例如客服 Agent 的測試可以要求：退款時限必須正確、不能承諾政策中沒有的例外、資訊不足時要請使用者補充資料。</p>
+    </section>
+    <section>
+      <h2>如何閱讀結果？</h2>
+      <p>先看 <code>evaluation.json</code> 的每一題，確認判斷理由是否合理；再看總計，了解常在哪些類型的問題失敗。不要只看通過率：少數很重要的規則答錯，也可能需要優先修正。</p>
+    </section>
+    <section class="note"><h2>範例</h2><p>在<a href="../examples/support-demo-agent.html">客服 Agent 範例</a>中，評估會檢查 Agent 是否依照客服政策回答退貨、出貨與退款問題。</p></section>
+    <nav class="page-nav"><a href="run-agent.html">← 執行 Agent</a><a href="report.html">下一步：產生報告 →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

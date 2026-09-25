@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Create readable LLaDAR evaluation reports."><title>Create a report — LLaDAR</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header><div class="wrap top"><a class="brand" href="../index.html">LLaDAR</a><div class="lang"><a href="../index.html" aria-current="page">English</a><a href="../zh-TW/guides/report.html" lang="zh-Hant">繁體中文</a></div></div><div class="wrap hero compact"><div class="eyebrow">Guide</div><h1>Create an evaluation report</h1><p class="lead">Turn the saved evaluation results into a report that readers can check.</p></div></header>
+  <nav class="toc" aria-label="Documentation"><div class="wrap"><a href="../index.html">Overview</a><a href="../getting-started.html">Get started</a><a href="create-dataset.html">Create test data</a><a href="run-agent.html">Run an Agent</a><a href="evaluate.html">Evaluate answers</a><a href="report.html" aria-current="page">Create a report</a><a href="../reference/cli.html">Command reference</a><a href="../examples/support-demo-agent.html">Demo Agent</a></div></nav>
+  <main id="main" class="wrap">
+    <section><h2>Basic command</h2><pre><code>lladar report evaluation.json --output report.md</code></pre><p><code>--evaluation</code> points to the previous evaluation output. <code>--output</code> names the Markdown report to create.</p></section>
+    <section><h2>What the report includes</h2><ul><li>What was tested and the overall result.</li><li>Per-question judgments and their reasons.</li><li>How the totals were calculated from the saved results.</li><li>The scope and limits of this run.</li></ul></section>
+    <section><h2>Use it to improve the Agent</h2><p>Do not treat the report as only a score. Group failed questions: is the source material unclear, did the Agent ignore a rule, or did the test miss an important real-world situation? Improve the relevant part, then run the same workflow again.</p></section>
+    <section><h2>Use a custom report Skill</h2><p>A <code>SKILL.md</code> can request your team's sections, tone, or review fields. The individual results and calculated totals remain available so readers can trace a conclusion back to the evidence.</p><pre><code>lladar report evaluation.json --skill skills/compliance-summary --output report.md</code></pre></section>
+    <nav class="page-nav"><a href="evaluate.html">← Evaluate answers</a><a href="../examples/support-demo-agent.html">Next: inspect the demo Agent →</a></nav>
+  </main>
+  <footer><div class="wrap">LLaDAR documentation</div></footer>
+</body>
+</html>

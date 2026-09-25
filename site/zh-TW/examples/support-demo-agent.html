@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>客服 Agent 範例 | LLaDAR</title>
+  <meta name="description" content="用一個可執行的客服 Agent 示範完整 LLaDAR 流程。">
+  <link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">使用指南</a><a class="active" href="support-demo-agent.html">範例</a><a class="language" href="../../examples/support-demo-agent.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">建立測試資料</a><a href="../guides/run-agent.html">執行 Agent</a><a href="../guides/evaluate.html">評估回答</a><a href="../guides/report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="support-demo-agent.html" aria-current="page">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">範例</p><h1>客服 Agent：把政策測成一套自動化檢查</h1><p class="lead">這個範例假設你有一個客服 Agent，想確認它會不會依退貨、出貨和退款政策回答。它提供一個可立即執行的小型 Agent，示範完整流程。</p></section>
+    <section>
+      <h2>範例裡有什麼？</h2>
+      <table><thead><tr><th>位置</th><th>用途</th></tr></thead><tbody>
+        <tr><td><code>examples/support-demo-agent/knowledge.md</code></td><td>客服政策，也是用來產生題目的依據。</td></tr>
+        <tr><td><code>examples/support-demo-agent/engine.py</code></td><td>範例 Agent 的內部判斷邏輯。</td></tr>
+        <tr><td><code>examples/support-demo-agent/server.py</code></td><td>讓其他程式能把問題送給 Agent 的 HTTP 服務。</td></tr>
+      </tbody></table>
+      <p>範例 Agent 不需要額外套件；但產生題目和評估時，LLaDAR provider 必須已經設定好。</p>
+    </section>
+    <section>
+      <h2>Agent 對外提供的方式</h2>
+      <p>服務啟動後，其他程式可以用 <code>POST /api/chat</code> 傳送問題。請求內容是 <code>{"input":{"text":"我要申請退款"}}</code>，回覆內容是 <code>{"data":{"answer":"..."}}</code>。<code>GET /health</code> 可用來確認服務是否已準備好。</p>
+      <p><code>engine.py</code> 是內部程式碼；實際使用者或其他程式會透過上面的 HTTP 入口與 Agent 溝通。</p>
+    </section>
+    <section>
+      <h2>做法一：讓 LLaDAR 直接讀取範例專案</h2>
+      <p>這是最適合第一次嘗試的做法。LLaDAR 會自行讀取專案、找出如何執行 Agent，先試跑確認後再回答所有題目。</p>
+      <pre><code>lladar create test-dataset --knowledge examples/support-demo-agent/knowledge.md --output artifacts/support-demo/dataset.json
+lladar run-agent --project examples/support-demo-agent --dataset artifacts/support-demo/dataset.json --output artifacts/support-demo/run.json --no-interactive
+lladar eval --dataset artifacts/support-demo/dataset.json --run artifacts/support-demo/run.json --output artifacts/support-demo/evaluation.json
+lladar report --evaluation artifacts/support-demo/evaluation.json --output artifacts/support-demo/report.md</code></pre>
+    </section>
+    <section>
+      <h2>做法二：先啟動服務，再指定服務網址</h2>
+      <p>這個做法適合你的 Agent 已經由團隊啟動成測試服務。先在一個終端機啟動範例服務：</p>
+      <pre><code>python examples/support-demo-agent/server.py --port 8765</code></pre>
+      <p>接著在另一個終端機執行測試：</p>
+      <pre><code>lladar run-agent --project examples/support-demo-agent --service-url http://127.0.0.1:8765 --dataset artifacts/support-demo/dataset.json --output artifacts/support-demo/run.json</code></pre>
+      <p>這種方式下，服務由你負責啟動和停止；LLaDAR 只會呼叫你指定的網址。</p>
+    </section>
+    <section>
+      <h2>成功代表什麼？</h2>
+      <p>成功不表示 Agent 的每句話都固定不變，而是你能在產物中看到完整過程：題目從哪份政策產生、問題確實送到 Agent、每題收到什麼回答、如何判斷，以及報告如何統計。這些檔案讓你可以重跑、檢查和改善。</p>
+    </section>
+    <nav class="page-nav"><a href="../guides/report.html">← 產生報告</a><a href="../getting-started.html">從開始使用跑一次 →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

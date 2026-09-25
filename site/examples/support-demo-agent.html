@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="The zero-dependency LLaDAR support demo Agent."><title>Support demo Agent — LLaDAR</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header><div class="wrap top"><a class="brand" href="../index.html">LLaDAR</a><div class="lang"><a href="../index.html" aria-current="page">English</a><a href="../zh-TW/examples/support-demo-agent.html" lang="zh-Hant">繁體中文</a></div></div><div class="wrap hero compact"><div class="eyebrow">Example target</div><h1>Support demo Agent</h1><p class="lead">A small, dependency-free Agent that lets you try the full LLaDAR workflow.</p></div></header>
+  <nav class="toc" aria-label="Documentation"><div class="wrap"><a href="../index.html">Overview</a><a href="../getting-started.html">Get started</a><a href="../guides/create-dataset.html">Create test data</a><a href="../guides/run-agent.html">Run an Agent</a><a href="../guides/evaluate.html">Evaluate answers</a><a href="../guides/report.html">Create a report</a><a href="../reference/cli.html">Command reference</a><a href="support-demo-agent.html" aria-current="page">Demo Agent</a></div></nav>
+  <main id="main" class="wrap">
+    <section><h2>What this example represents</h2><p>The Agent answers questions about a simple support plan: business-day email support, a one-business-day reply target, and an on-call process for urgent incidents. It uses only the Python standard library. It is an Agent to test, not a replacement for LLaDAR's configured model provider.</p></section>
+    <section><h2>Public contract</h2><p>The user-facing route is HTTP <code>POST /api/chat</code>. Send <code>{"input":{"text":"What is the standard reply target?"}}</code>; the response is <code>{"data":{"answer":"..."}}</code>. <code>GET /health</code> shows whether the service is ready.</p></section>
+    <section><h2>Let LLaDAR manage the project</h2><pre><code>lladar run-agent dataset.jsonl --project examples/support-demo-agent --no-interactive --output responses.jsonl</code></pre><p>LLaDAR inspects the project, checks the selected route, then uses it for the dataset.</p></section>
+    <section><h2>Use it as an existing test service</h2><p>Start the service in one terminal:</p><pre><code>python examples/support-demo-agent/server.py --host 127.0.0.1 --port 8000</code></pre><p>Then give LLaDAR that exact URL:</p><pre><code>lladar run-agent dataset.jsonl --project examples/support-demo-agent --service-url http://127.0.0.1:8000 --no-interactive --output responses.jsonl</code></pre><p>LLaDAR will not start or stop a service supplied through <code>--service-url</code>.</p></section>
+    <section><h2>How the example is verified</h2><p><code>tests/test_support_demo_agent.py</code> checks policy answers, <code>GET /health</code>, and the public <code>POST /api/chat</code> route without provider credentials. A full LLaDAR run additionally needs configured provider credentials.</p></section>
+    <nav class="page-nav"><a href="../getting-started.html">← Run the tutorial</a><a href="../guides/run-agent.html">Read run-agent details →</a></nav>
+  </main>
+  <footer><div class="wrap">LLaDAR documentation</div></footer>
+</body>
+</html>

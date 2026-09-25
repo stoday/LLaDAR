@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Create LLaDAR test datasets from approved knowledge."><title>Create a dataset — LLaDAR</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header><div class="wrap top"><a class="brand" href="../index.html">LLaDAR</a><div class="lang"><a href="../index.html" aria-current="page">English</a><a href="../zh-TW/guides/create-dataset.html" lang="zh-Hant">繁體中文</a></div></div><div class="wrap hero compact"><div class="eyebrow">Guide</div><h1>Create a test dataset</h1><p class="lead">Turn knowledge you approve into questions and expected answers that can test an Agent.</p></div></header>
+  <nav class="toc" aria-label="Documentation"><div class="wrap"><a href="../index.html">Overview</a><a href="../getting-started.html">Get started</a><a href="create-dataset.html" aria-current="page">Create test data</a><a href="run-agent.html">Run an Agent</a><a href="evaluate.html">Evaluate answers</a><a href="report.html">Create a report</a><a href="../reference/cli.html">Command reference</a><a href="../examples/support-demo-agent.html">Demo Agent</a></div></nav>
+  <main id="main" class="wrap">
+    <section><h2>What this step does</h2><p><code>lladar create test-dataset</code> reads knowledge files or directories and writes records with a question, expected answer, and an empty place for the Agent's later response.</p></section>
+    <section><h2>Basic command</h2><pre><code>lladar create test-dataset --knowledge KNOWLEDGE_PATH --output dataset.jsonl</code></pre><p>Repeat <code>--knowledge</code> to combine inputs. An output ending in <code>.jsonl</code> names the exact file; an output directory receives a new timestamped dataset.</p></section>
+    <section id="custom-skill"><h2>Use a custom local Skill</h2><p>Pass one <code>--skill DIRECTORY</code> to use your own generation method. The directory must contain <code>SKILL.md</code>. For example, a support team can require questions about returns, delivery, and refunds.</p><pre><code>lladar create test-dataset --knowledge policy/ --skill skills/support-qa --output dataset.jsonl</code></pre></section>
+    <section><h2>Inspect the result</h2><p>Read the dataset before testing an Agent. Its <code>.generation.json</code> sidecar records the sources, selected Skill, settings, and any skipped input.</p></section>
+    <nav class="page-nav"><a href="../getting-started.html">← Get started</a><a href="run-agent.html">Next: run an Agent →</a></nav>
+  </main>
+  <footer><div class="wrap">LLaDAR documentation</div></footer>
+</body>
+</html>
