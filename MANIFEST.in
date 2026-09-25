@@ -1,0 +1,2 @@
+include tests/fixture_extraction.py
+include scripts/verify_browser_package.py

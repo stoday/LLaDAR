@@ -39,6 +39,29 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
+  browser-test:
+    name: Browser capture (Playwright Chromium)
+    if: "!startsWith(github.ref, 'refs/tags/')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out commit or PR merge result
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[test]"
+
+      - name: Provision the matching Chromium revision
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run browser integration tests
+        run: python -m pytest -m browser
+
   live-vibe-testing:
     name: Live vibe-testing (Gemini)
     needs: test
@@ -160,6 +183,9 @@ jobs:
 
       - name: Build distributions
         run: python -m build
+
+      - name: Check browser extraction package boundaries
+        run: python scripts/verify_browser_package.py dist
 
       - name: Check distributions
         run: python -m twine check dist/*
