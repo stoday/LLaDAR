@@ -10,9 +10,10 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-  "akasha-terminal[light]>=1.4",
+  "akasha-terminal[light]>=1.8",
   "requests>=2.31,<3",
   "pypdf>=4,<7",
+  "playwright>=1.52,<2",
 ]
 
 classifiers = [
@@ -30,6 +31,12 @@ test = ["pytest>=8"]
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py"]
+
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q -m 'not browser'"
 testpaths = ["tests"]
+markers = [
+  "browser: tests that launch the explicitly provisioned Playwright Chromium browser",
+]

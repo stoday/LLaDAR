@@ -242,7 +242,7 @@ def _stream_answer(events) -> str:
 
 class AutoAdapter:
     def __init__(self, workspace: Path, *, python: Path, env_file: str | Path | None,
-                 model: str, timeout: float = 120, max_tool_calls: int = 100,
+                 model: str, timeout: float = 3600, max_tool_calls: int = 100,
                  verbose: bool = True,
                  graphify: bool = True, graphify_python: str | Path | None = None,
                  service_url: str | None = None):
@@ -528,8 +528,7 @@ class AutoAdapter:
         return result
 
     def prepare(self, probes: list[str], *, interactive: bool | None = None,
-                candidate_id: str | None = None, clarification: str | None = None,
-                intent: str = "") -> None:
+                candidate_id: str | None = None, clarification: str | None = None) -> None:
         def run_harness(path: str, message: str) -> str:
             self.explorer._check_budget()
             if message not in probes:
@@ -620,7 +619,6 @@ class AutoAdapter:
                     self.report["status"] = "discovering"
                     self._save()
                     discovery_prompt = (DISCOVERY_PROMPT + graph_context
-                                        + "\nUser intent: " + intent
                                         + "\nClarifications: "
                                         + json.dumps(history, ensure_ascii=False))
 
@@ -679,7 +677,6 @@ class AutoAdapter:
                               + json.dumps(selected, ensure_ascii=False)
                               + "\nYou MUST submit through this outer interface and preserve its full flow. "
                                 "Do not bypass it for an inner model/agent method. If unavailable, report a blocker."
-                              + "\nUser intent: " + intent
                               + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
                               + "\nProbe questions: " + json.dumps(probes, ensure_ascii=False))
             def new_coding_agent():
