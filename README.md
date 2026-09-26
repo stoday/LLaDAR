@@ -1,6 +1,6 @@
 # LLaDAR
 
-[English](README.md) | [繁體中文](README.zh-TW.md)
+[English](https://stoday.github.io/LLaDAR/) | [繁體中文](https://stoday.github.io/LLaDAR/zh-TW/)
 
 LLaDAR is a small Agent-evaluation pipeline with four workflows:
 
