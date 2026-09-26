@@ -60,7 +60,13 @@ class SandboxTools:
         return sorted(matches)
 
 
-def resolve_project_python(project: str | Path) -> Path:
+def resolve_project_python(
+    project: str | Path, target_python: str | Path | None = None
+) -> Path:
+    if target_python is not None:
+        # POSIX venv launchers are symlinks to the base interpreter. Keep the
+        # launcher path so Python can discover the adjacent pyvenv.cfg.
+        return Path(target_python).absolute()
     root = Path(project).resolve()
     for candidate in (
         root / ".venv" / "Scripts" / "python.exe",
@@ -173,9 +179,7 @@ def run_agent(
     )
     target_python_path = Path(sys.executable)
     if project is not None and schedule:
-        target_python_path = (
-            Path(target_python).resolve() if target_python else resolve_project_python(project)
-        )
+        target_python_path = resolve_project_python(project, target_python)
         from .target_environment import validate_target_python
 
         validate_target_python(target_python_path)
