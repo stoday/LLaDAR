@@ -1,0 +1,3 @@
+{"question": "入門方案的資料保留期限是多久？", "expected_answer": "入門方案的資料保留期限為 30 天。", "actual_response": null}
+{"question": "客服服務時段為何？", "expected_answer": "客服服務時段為週一至週五 09:00–18:00。", "actual_response": null}
+{"question": "企業方案的資料保留期限是多久？", "expected_answer": "企業方案的資料保留期限為 60 天。", "actual_response": null}
