@@ -128,7 +128,8 @@ def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path):
             selector({**plan, "candidates": [incomplete]})
         assert json.loads(data.read_text(encoding="utf-8"))["question"] == "fixture question"
 
-        adapter = options["runs_root"] / "run-1" / "adapter"
+        (options["runs_root"] / "strategy-5feceb66ffc8").mkdir(parents=True)
+        adapter = options["runs_root"] / "zz-adapter-run" / "adapter"
         adapter.mkdir(parents=True)
         write_json(adapter / "run.json", {
             "graph": {"status": "ready", "parser_inputs": ["server.js", "client.ts", "engine.py"],

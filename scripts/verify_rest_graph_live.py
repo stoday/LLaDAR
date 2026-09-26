@@ -45,8 +45,10 @@ def main():
                       env_file=args.env_file, model=args.model, runs_root=output / 'runs',
                       interactive=False, interface_selector=select_rest_interface)
     assert count == 1
-    run = next((output / 'runs').iterdir())
-    evidence = run / 'adapter'
+    evidence_directories = [path.parent for path in (output / 'runs').glob('*/adapter/run.json')]
+    assert len(evidence_directories) == 1, 'Expected exactly one adapter evidence directory'
+    evidence = evidence_directories[0]
+    run = evidence.parent
     report = json.loads((evidence / 'run.json').read_text(encoding='utf-8'))
     assert report['graph']['status'] == 'ready'
     assert {'server.js', 'client.ts', 'engine.py'} <= set(report['graph']['parser_inputs'])
