@@ -342,6 +342,10 @@ def main(
         return 130
     except Exception as error:
         if args.command == "run-agent" and args.page_url:
+            if isinstance(error, AssertionError) and (
+                browser_target_factory is not None or extraction_provider_factory is not None
+            ):
+                raise
             from .browser_target import browser_error_message
 
             message = browser_error_message(error)

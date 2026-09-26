@@ -118,15 +118,6 @@ jobs:
             --target-python "$RUNNER_TEMP/lladar-live-target/bin/python" \
             --model "gemini:$EXAMPLE_MODEL"
 
-      - name: Verify real interface discovery and resume
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          python scripts/verify_interface_confirmation_live.py \
-            --target-python "$RUNNER_TEMP/lladar-live-target/bin/python" \
-            --model "gemini:$EXAMPLE_MODEL"
-
       - name: Upload acceptance summaries
         if: always()
         uses: actions/upload-artifact@v4

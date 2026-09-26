@@ -55,6 +55,8 @@ def interactive_question_site(
     stop_streams = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
         def log_message(self, *_args):
             pass
 

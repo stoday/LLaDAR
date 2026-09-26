@@ -399,6 +399,22 @@ def test_browser_cli_redacts_native_browser_errors(tmp_path: Path, capsys, phase
     assert not output.exists()
 
 
+def test_injected_browser_fixture_assertion_is_not_redacted(tmp_path: Path):
+    source, output = tmp_path / "dataset.jsonl", tmp_path / "responses.jsonl"
+    make_dataset(source, count=1)
+
+    def browser_factory(**_options):
+        raise AssertionError("fixture DOM did not receive the expected answer")
+
+    with browser_cli_terminal(), pytest.raises(
+        AssertionError, match="fixture DOM did not receive the expected answer"
+    ):
+        main(
+            ["run-agent", str(source), "--page-url", "https://example.test/chat", "--output", str(output)],
+            browser_target_factory=browser_factory,
+        )
+
+
 @pytest.mark.parametrize(("error", "instruction"), [
     (RuntimeError("Playwright Chromium is unavailable; run: python -m playwright install chromium"),
      "python -m playwright install chromium"),
