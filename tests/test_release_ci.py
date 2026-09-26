@@ -1,4 +1,4 @@
-"""Release gating must reject skipped live tests and stale main results."""
+"""Release gating waits for active main CI and rejects incomplete evidence."""
 
 import importlib.util
 import json
@@ -10,7 +10,11 @@ import sys
 
 import pytest
 
-from scripts.verify_release_ci import require_successful_jobs, require_successful_run
+from scripts.verify_release_ci import (
+    require_successful_jobs,
+    require_successful_run,
+    wait_for_successful_run,
+)
 
 
 SHA = "a" * 40
@@ -31,6 +35,62 @@ def test_latest_main_run_for_exact_tagged_commit_must_pass():
         require_successful_run([run(1), run(2, status="in_progress", conclusion=None)], SHA)
     with pytest.raises(RuntimeError, match="No main push CI run"):
         require_successful_run([run(1, sha="b" * 40), run(2, branch="feature")], SHA)
+
+
+def test_release_waits_for_running_main_ci_to_pass():
+    responses = iter([
+        [run(1, status="in_progress", conclusion=None)],
+        [run(1)],
+    ])
+    current_time = [0.0]
+
+    def sleep(seconds):
+        current_time[0] += seconds
+
+    result = wait_for_successful_run(
+        lambda: next(responses),
+        SHA,
+        timeout_seconds=60,
+        poll_interval_seconds=15,
+        monotonic=lambda: current_time[0],
+        sleep=sleep,
+    )
+
+    assert result["id"] == 1
+    assert current_time == [15.0]
+
+
+def test_release_does_not_wait_for_failed_main_ci():
+    sleeps = []
+
+    with pytest.raises(RuntimeError, match="has not passed"):
+        wait_for_successful_run(
+            lambda: [run(1, conclusion="failure")],
+            SHA,
+            timeout_seconds=60,
+            sleep=sleeps.append,
+        )
+
+    assert sleeps == []
+
+
+def test_release_stops_waiting_after_timeout():
+    current_time = [0.0]
+
+    def sleep(seconds):
+        current_time[0] += seconds
+
+    with pytest.raises(RuntimeError, match=r"Timed out.*last state: in_progress"):
+        wait_for_successful_run(
+            lambda: [run(1, status="in_progress", conclusion=None)],
+            SHA,
+            timeout_seconds=10,
+            poll_interval_seconds=4,
+            monotonic=lambda: current_time[0],
+            sleep=sleep,
+        )
+
+    assert current_time == [10.0]
 
 
 def test_release_requires_two_python_versions_and_actual_live_success():
