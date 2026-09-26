@@ -4,7 +4,6 @@ import json
 from typing import Any, Protocol
 
 from ..exceptions import ProviderError
-from ..trace import TraceCall
 
 
 class LLMProvider(Protocol):
@@ -43,34 +42,13 @@ def generate_structured(
     *,
     model: str,
     temperature: float,
-    trace_call: TraceCall | None = None,
 ) -> dict[str, Any]:
-    try:
-        generate_text = getattr(provider, "generate_text", None)
-        if callable(generate_text):
-            raw_response = generate_text(prompt, model=model, temperature=temperature)
-            if trace_call is not None and isinstance(raw_response, str):
-                trace_call.response(raw_response)
-            value = parse_json_object(raw_response)
-        else:
-            value = provider.generate_structured(
-                prompt,
-                model=model,
-                temperature=temperature,
-            )
-            if trace_call is not None:
-                trace_call.response(
-                    json.dumps(value, ensure_ascii=False),
-                    capture="serialized_structured_value",
-                )
-        if trace_call is not None:
-            trace_call.parsed(value)
-        return value
-    except ProviderError as error:
-        if trace_call is not None:
-            trace_call.fail(
-                reason_code="provider_error",
-                reason=str(error),
-                retry=False,
-            )
-        raise
+    generate_text = getattr(provider, "generate_text", None)
+    if callable(generate_text):
+        raw_response = generate_text(prompt, model=model, temperature=temperature)
+        return parse_json_object(raw_response)
+    return provider.generate_structured(
+        prompt,
+        model=model,
+        temperature=temperature,
+    )

@@ -2,13 +2,26 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
+from functools import wraps
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+
+def recoverable_exploration(function):
+    """Return source-tool failures to the agent so it can choose another read tool."""
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (ValueError, RuntimeError, OSError) as error:
+            return f"TOOL_ERROR: {type(error).__name__}: {error}"
+    invoke.__name__ = function.__name__
+    return invoke
 
 IGNORED_DIRECTORIES = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
@@ -27,6 +40,30 @@ class AuditEvent:
     arguments: dict[str, Any]
     summary: str
     result_fingerprint: str | None = None
+
+
+def _notebook_python_source(target: Path) -> str:
+    """Export notebook cell sources as Python-style text without executing them."""
+    notebook = json.loads(target.read_text(encoding="utf-8"))
+    cells = notebook.get("cells") if isinstance(notebook, dict) else None
+    if not isinstance(cells, list):
+        raise ValueError("Notebook has no cells")
+    sections = ["# Notebook cell sources; saved outputs omitted\n"]
+    for index, cell in enumerate(cells):
+        if not isinstance(cell, dict):
+            continue
+        source = cell.get("source", [])
+        if isinstance(source, list) and all(isinstance(line, str) for line in source):
+            source = "".join(source)
+        if not isinstance(source, str) or not source:
+            continue
+        cell_type = cell.get("cell_type")
+        if cell_type == "code":
+            sections.append(f"\n# %% [code cell {index}]\n{source}\n")
+        elif cell_type == "markdown":
+            comments = "\n".join("# " + line for line in source.splitlines())
+            sections.append(f"\n# %% [markdown cell {index}]\n{comments}\n")
+    return "".join(sections)
 
 
 class WorkspaceExplorer:
@@ -54,6 +91,11 @@ class WorkspaceExplorer:
         if self._tool_calls >= self.budget.max_tool_calls:
             raise RuntimeError("Exploration tool-call budget exhausted")
         self._tool_calls += 1
+
+    def start_agent_turn(self) -> None:
+        """Start a fresh bounded tool budget without discarding audit evidence."""
+        self._tool_calls = 0
+        self._read_characters = 0
 
     def _record(
         self,
@@ -149,10 +191,97 @@ class WorkspaceExplorer:
         self._record("search_code", {"query": query, "pattern": pattern}, f"{len(matches)} matches")
         return matches
 
+    def search_context(self, query: str, pattern: str = "**/*.txt",
+                       limit: int = 10, before: int = 3,
+                       after: int = 12) -> list[dict[str, Any]]:
+        """Find bounded source excerpts around a method or scoring term."""
+        self._check_budget()
+        if (not query or Path(pattern).is_absolute() or ".." in Path(pattern).parts
+                or not 1 <= limit <= 20 or not 0 <= before <= 20
+                or not 0 <= after <= 30):
+            raise ValueError("Invalid contextual source search")
+        matches: list[dict[str, Any]] = []
+        for path in sorted(self.root.glob(pattern)):
+            if (not path.is_file() or not self._visible(path)
+                    or path.stat().st_size > 2_000_000):
+                continue
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            for index, line in enumerate(lines):
+                if query.casefold() not in line.casefold():
+                    continue
+                snippet = "\n".join(lines[max(0, index - before):index + after + 1])[:4000]
+                if self._read_characters + len(snippet) > self.budget.max_read_characters:
+                    raise RuntimeError("Exploration source-reading budget exhausted")
+                self._read_characters += len(snippet)
+                matches.append({"path": path.relative_to(self.root).as_posix(),
+                                "line": index + 1, "snippet": snippet})
+                if len(matches) >= limit:
+                    break
+            if len(matches) >= limit:
+                break
+        self._record("search_context", {"query": query, "pattern": pattern,
+                                        "limit": limit, "before": before, "after": after},
+                     f"{len(matches)} contextual matches")
+        return matches
+    def preview_file(self, path: str, limit: int = 8000) -> str:
+        """Read a bounded prefix, or notebook cell sources without saved outputs."""
+        self._check_budget()
+        if not 1 <= limit <= 10000:
+            raise ValueError("Preview limit must be between 1 and 10000")
+        target = self._resolve(path)
+        if not target.is_file() or not self._visible(target):
+            raise ValueError(f"Not a readable workspace file: {path}")
+        if target.suffix.casefold() == ".ipynb":
+            content = _notebook_python_source(target)
+            if len(content) > limit:
+                marker = "\n[Preview truncated]"
+                content = content[:limit - len(marker)] + marker
+        else:
+            with target.open("r", encoding="utf-8", errors="replace") as stream:
+                content = stream.read(limit)
+        if self._read_characters + len(content) > self.budget.max_read_characters:
+            raise RuntimeError("Exploration source-reading budget exhausted")
+        self._read_characters += len(content)
+        self._record("preview_file", {"path": path, "limit": limit},
+                     f"{len(content)} characters", content)
+        return content
+
+    def read_notebook_code(self, path: str, offset: int = 0,
+                           limit: int = 20000) -> dict[str, Any]:
+        """Read a bounded page of notebook code and commented markdown."""
+        self._check_budget()
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20000:
+            raise ValueError("Notebook offset or limit is invalid")
+        target = self._resolve(path)
+        if target.suffix.casefold() != ".ipynb" or not target.is_file() or not self._visible(target):
+            raise ValueError(f"Not a readable notebook: {path}")
+        converted = _notebook_python_source(target)
+        if offset > len(converted):
+            raise ValueError("Notebook offset is past the end")
+        page = converted[offset:offset + limit]
+        if self._read_characters + len(page) > self.budget.max_read_characters:
+            raise RuntimeError("Exploration source-reading budget exhausted")
+        self._read_characters += len(page)
+        next_offset = offset + len(page) if offset + len(page) < len(converted) else None
+        self._record("read_notebook_code", {"path": path, "offset": offset,
+                                            "limit": limit},
+                     f"{len(page)} of {len(converted)} characters", page)
+        return {"source": page, "offset": offset, "next_offset": next_offset,
+                "total_characters": len(converted)}
     def write_harness(self, filename: str, content: str) -> str:
         self._check_budget()
         if not filename.endswith(".py") or Path(filename).name != filename or not re.fullmatch(r"[A-Za-z0-9_.-]+", filename):
             raise ValueError("Harness path must be a simple filename")
+        try:
+            compile(content, filename, "exec")
+        except SyntaxError as error:
+            location = f"line {error.lineno}"
+            if error.offset is not None:
+                location += f", column {error.offset}"
+            raise ValueError(
+                "Harness must be valid Python before it can replace the current version: "
+                f"{error.msg} ({location})"
+            ) from error
         directory = self.root / ".lladar" / "harnesses"
         directory = self._resolve(directory)
         directory.mkdir(parents=True, exist_ok=True)

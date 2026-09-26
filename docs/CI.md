@@ -2,18 +2,25 @@
 
 The workflow `.github/workflows/release.yml` has three gates:
 
-1. `test`: Python 3.11 and 3.12 run the offline pytest suite on every branch push,
-   pull request, version-tag push, and manual workflow run.
+1. `test`: Python 3.11 and 3.12 run the offline pytest suite on every branch
+   push, pull request, and manual workflow run. Version-tag pushes skip this job.
 2. `live-vibe-testing`: after pytest passes, Python 3.12 runs the real Gemini
-   acceptance scripts below. A missing API key, API failure, invalid adapter,
-   missing trace, or failed assertion fails the job.
-3. `publish`: only a pushed version tag can publish. Both earlier jobs must pass,
-   the tagged commit must belong to `origin/main`, and its version must match
-   `pyproject.toml`. Existing `vX.Y` and `vX.Y.Z` tag support is unchanged.
+   acceptance scripts on same-repository PRs, `main` pushes, and manual runs.
+   Other branch pushes and tags skip paid API calls. A missing API key, API
+   failure, invalid adapter, missing trace, or failed assertion fails the job.
+3. `publish`: only a pushed version tag can publish. The tag must point to the
+   current `origin/main` commit, have a matching `pyproject.toml` version, and
+   have a completed, successful `main` push run of this workflow for the exact
+   commit. The release check also requires successful Python 3.11, Python 3.12,
+   and real Gemini jobs in that run; a skipped live job cannot authorize release.
+   Existing `vX.Y` and `vX.Y.Z` tag support is unchanged.
 
 Merging a PR into main creates a main push, so both offline and live tests run
-again on the merged commit. Updating a branch with an open PR runs both its push
-and PR workflows; each eligible live job uses paid API calls.
+again on the merged commit. Updating a branch with an open PR runs pytest on
+both its push and PR workflows, but only the PR runs the paid live check.
+Wait for the `main` workflow to pass before pushing a version tag. If the tag
+workflow starts too early, its release gate fails closed; rerun it after `main`
+passes. The tag does not repeat pytest or the paid Gemini check.
 
 ## Required GitHub configuration
 
@@ -34,21 +41,17 @@ code with a secret.
 
 ## What live acceptance checks
 
-Both scripts first import the required LangChain/Gemini APIs in the actual target
-Python and check Node availability. Discovery receives these measured runtime
-facts, so it need not infer installed API availability from model knowledge.
+The live script first imports the required LangChain/Gemini APIs in the actual
+target Python and checks Node availability. This is a fail-fast runtime preflight;
+interface discovery itself uses the checked-out project evidence.
 
 - `scripts/verify_rest_graph_live.py`: real Graphify AST extraction of Python,
   JavaScript and TypeScript inputs; LLM interface discovery and adapter creation;
-  the original Node HTTP API; real LangChain/Gemini/tool calls; two independent
-  adapter replays and three dataset sessions; final response formatting;
-  service shutdown; and unchanged fixture source. If discovery asks for confirmation,
-  the harness selects only the unique complete public `POST /api/chat` contract
-  with the expected server and health route; missing or ambiguous contracts fail.
-- `scripts/verify_interface_confirmation_live.py`: LLM discovery of two public
-  features; pause before calling the target; select the chat feature; resume in
-  a separate process; two independent replays and three dataset sessions with
-  complete initialization, knowledge, tool, model and postprocessing traces.
+  the original Node HTTP API; real LangChain/Gemini/tool calls; one independent
+  verification request and three trials of the selected dataset record; final
+  response formatting; service shutdown; and unchanged fixture source. The
+  fixture exposes one complete public `POST /api/chat` contract, which normal
+  discovery must select automatically. Missing or ambiguous contracts fail closed.
 
 The controller, target Python and Graphify use separate environments. Node is
 installed explicitly. The live job has a 30-minute time limit. Acceptance
@@ -65,10 +68,16 @@ Install LLaDAR in the controller environment, Node, an independent Graphify tool
 (`uv tool install graphifyy==0.9.61`), and a separate target Python environment
 with `langchain>=1,<2` and `langchain-google-genai>=4,<5`.
 
-Run either script with `--target-python PATH_TO_TARGET_PYTHON`. Credentials can
+Run the script with `--target-python PATH_TO_TARGET_PYTHON`. Credentials can
 come from the process environment, or from an explicit `--env-file PATH`.
 Use `--model gemini:MODEL_ID` for the controller and `EXAMPLE_MODEL=MODEL_ID` for
 the target when overriding the default locally. These commands call real APIs.
+
+```bash
+python scripts/verify_rest_graph_live.py \
+  --target-python PATH_TO_TARGET_PYTHON \
+  --model gemini:MODEL_ID
+```
 
 For WSL validation, keep the checkout and run artifacts on the native Linux
 filesystem, as GitHub Ubuntu runners do. A concurrent fixture trace-write replay
@@ -77,10 +86,9 @@ on native /tmp preserved all 640 records. Keep the strict trace assertions.
 
 ## Local validation of this workflow
 
-On 2026-09-19, Linux Python 3.12.13 / Node 22.20.0 / Graphify 0.9.61 passed
-both real Gemini acceptance scripts. Each verified two independent replays and
-three dataset sessions with complete execution traces. The offline suite passed
-178 tests. Actionlint, shell syntax and the missing-secret failure check passed.
-The local consolidated evidence is .lladar/ci-live-verification.json (ignored
-runtime output). These results do not claim a GitHub Actions run; the workflow
-still needs to be committed/pushed and GEMINI_API_KEY configured on GitHub.
+The offline suite checks that every `python scripts/*.py` workflow target exists,
+that the live entrypoint can load and show `--help`, and that its runner call uses
+the current public arguments and expected observation counts. Run it with
+`python -m pytest` before pushing. These checks do not call Gemini and do not
+replace the live job: only a successful GitHub `live-vibe-testing` job verifies
+the configured secret, current model and real external execution.

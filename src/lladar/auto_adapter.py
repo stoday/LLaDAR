@@ -15,11 +15,91 @@ import shutil
 import signal
 import subprocess
 import sys
+from typing import Callable
 import uuid
 
 from .adapter_workspace import ExplorationBudget, WorkspaceExplorer
 from .target_environment import target_environment
 from .interfaces import DISCOVERY_PROMPT, NeedsConfirmation, choose_interface, parse_object, validate_plan, validate_service_url, write_json
+from .validation_retry import run_validated
+
+
+MAX_ADAPTER_REPAIR_ATTEMPTS = 50
+
+
+ADAPTER_RUNTIME_PROTOCOL = {
+    "stdin": {
+        "request_id": "<same id to echo>",
+        "message": "<exact probe question>",
+    },
+    "stdout": {
+        "request_id": "<same id from stdin>",
+        "output": "<nonempty real answer string>",
+        "observation": "<nonempty description of where/how the answer was observed>",
+    },
+    "streams": "stdout contains exactly one JSON object; target logs go to stderr",
+}
+
+RUN_HARNESS_ARGUMENT_GUIDANCE = (
+    "The run_harness tool's message argument is a plain-text probe question. "
+    "LLaDAR does not pass that plain text directly to adapter stdin: it wraps the "
+    "question in the adapter_runtime_protocol JSON object before starting adapter.py."
+)
+
+
+def _redact_secrets(text: str, environment: dict[str, str]) -> str:
+    for key, value in environment.items():
+        if len(value) >= 8 and any(
+            word in key.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD")
+        ):
+            text = text.replace(value, "[REDACTED]")
+    return text
+
+
+def _runtime_diagnostic(stderr: str, environment: dict[str, str]) -> str:
+    diagnostic = stderr[-4000:].strip()
+    if any(
+        marker in diagnostic
+        for marker in ("thought_signatures", "response_metadata", "usage_metadata")
+    ):
+        return "[provider debug metadata omitted]"
+    return _redact_secrets(diagnostic, environment)
+
+
+def _harness_feedback(result: dict) -> dict:
+    """Return verification evidence together with the invariant wire contract."""
+    return {
+        "verification": result,
+        "adapter_runtime_protocol": ADAPTER_RUNTIME_PROTOCOL,
+        "run_harness_tool_argument": RUN_HARNESS_ARGUMENT_GUIDANCE,
+    }
+
+
+ADAPTER_PROTOCOL_PROMPT = """
+INVARIANT ADAPTER RUNTIME PROTOCOL (this never depends on the target project):
+- adapter.py reads exactly one JSON object from stdin with request_id and message.
+- adapter.py prints exactly one JSON object to stdout with the SAME request_id,
+  output (the real nonempty answer string), and observation (a nonempty string).
+- Send target logs and diagnostics to stderr; never mix them into stdout.
+- run_harness(message=...) takes a plain-text TOOL ARGUMENT only. LLaDAR wraps it
+  into the JSON stdin object above. Never make adapter.py read that tool argument
+  as raw stdin text.
+- When verification fails after the adapter ran, inspect verification.diagnostic;
+  it contains the adapter's redacted stderr when available.
+- If the adapter launches a Python target, use sys.executable rather than a bare
+  python command so it preserves the already-selected target environment.
+Only target submission and answer observation are project-specific. Diagnose those
+from source and runtime evidence; do not change this wire protocol.
+"""
+
+ADAPTER_PROPOSAL_PROMPT = """
+FINAL RESPONSE CONTRACT (required for every fresh coding or repair agent):
+Finish with JSON only: {"harness":".lladar/harnesses/adapter.py",
+"explanation":"submission and observation mechanism", "blockers":[]}.
+Use harness=null and a nonempty blockers list only when genuinely blocked. Do not
+return an interface candidate, discovery plan, Markdown commentary, or any other
+JSON shape as the final response. The runner independently verifies final code.
+"""
 
 
 CODING_PROMPT = """Inspect this unfamiliar, possibly multilingual project and write a standalone
@@ -27,11 +107,8 @@ adapter.py using write_harness. Discover how to submit a question AND observe th
 real agent's answer. Inspect README, source and configuration. Do not assume a
 function(message) interface or a direct return: initialization, async calls, CLI,
 local HTTP, job polling, files or database queries may be needed.
-
-The adapter reads one JSON object from stdin: {"request_id":"id","message":"question"}.
-Print exactly one JSON object to stdout with the same request_id, output (the real
-answer as a nonempty STRING), and observation (where/how the answer was obtained).
-Redirect all target logs to stderr. Extract text from the real result; never
+""" + ADAPTER_PROTOCOL_PROMPT + """
+Extract text from the real result; never
 summarize, judge, translate, improve, or replace the answer. Structured answers may
 be serialized as JSON text without changing their contents.
 Message content may be a list of content blocks instead of a string. Inspect its
@@ -59,12 +136,11 @@ previous conversations or absolute workspace paths. Derive paths from cwd;
 add cwd and cwd/src to sys.path if needed. Put all integration logic in one file.
 Run supplied probes with run_harness and repair protocol/execution errors only.
 Its message argument is the exact plain-text probe question, NOT a JSON request.
+When adapters start subprocesses, preserve correct and consistent stdin/stdout type
+and encoding semantics, then prove them with run_harness.
 An incorrect or clarifying answer is still an observed answer; never repair the
 target's reasoning. If integration is ambiguous or blocked, report it honestly.
 Keep concise Traditional Chinese progress updates about actions and evidence.
-Finish with JSON only: {"harness":".lladar/harnesses/adapter.py",
-"explanation":"submission and observation mechanism", "blockers":[]}.
-Use harness=null when blocked. The runner independently verifies your final code.
 
 For an HTTP service, use its EXISTING public API over real HTTP, never import and
 call a route function or inner agent as a shortcut. Never create a test-only route.
@@ -85,7 +161,18 @@ For selected service.mode=existing, use its exact authorized base_url, do not st
 or stop that service. Preserve authentication from supplied environment variables.
 If startup/auth/response requirements cannot be met, report blockers rather than
 using an internal function. Do not claim API testing covers omitted frontend logic.
-"""
+""" + ADAPTER_PROPOSAL_PROMPT
+
+
+REPAIR_PROMPT = """Repair the existing adapter after independent LLaDAR verification failed.
+You will receive the complete repair history, including the current failure.
+Diagnose from that evidence and the actual harness/source yourself: do not blindly
+repeat an earlier patch, special-case an error string, or regress a previously
+observed failure mode. Use write_harness to overwrite the adapter with a corrected
+version, then call run_harness with every supplied exact probe question before your
+final answer. Preserve the selected public interface, do not modify target source,
+do not change the target answer, and do not expose credentials.
+""" + ADAPTER_PROTOCOL_PROMPT + ADAPTER_PROPOSAL_PROMPT
 
 
 def _run_process(command: list[str], *, cwd: Path, request: str,
@@ -155,8 +242,8 @@ def _stream_answer(events) -> str:
 
 class AutoAdapter:
     def __init__(self, workspace: Path, *, python: Path, env_file: str | Path | None,
-                 model: str, timeout: float = 120, max_tool_calls: int = 100,
-                 verbose: bool = True, resume: bool = False,
+                 model: str, timeout: float = 3600, max_tool_calls: int = 100,
+                 verbose: bool = True,
                  graphify: bool = True, graphify_python: str | Path | None = None,
                  service_url: str | None = None):
         if timeout <= 0 or max_tool_calls <= 0:
@@ -171,7 +258,7 @@ class AutoAdapter:
         self.service_url = validate_service_url(service_url) if service_url else None
         evidence_name = "adapter-evidence" if self.workspace.name.casefold() == "adapter" else "adapter"
         self.evidence = self.workspace.parent / evidence_name
-        self.evidence.mkdir(exist_ok=resume)
+        self.evidence.mkdir()
         self.explorer = WorkspaceExplorer(
             workspace, python_executable=str(self.python),
             environment=target_environment(self.python, env_file),
@@ -182,16 +269,9 @@ class AutoAdapter:
         self.report: dict = {"status": "preparing", "model": model,
                              "controller_python": sys.executable,
                              "controller_prefix": sys.prefix,
-                             "target_python": str(self.python), "verification": []}
-        if resume:
-            self.report = json.loads((self.evidence / "run.json").read_text(encoding="utf-8"))
-            if self.report.get("status") != "needs_confirmation":
-                raise ValueError("Only needs_confirmation runs may resume")
-            from .adapter_workspace import AuditEvent
-            self.explorer.audit_events = [AuditEvent(**row) for row in json.loads(
-                (self.evidence / "audit.json").read_text(encoding="utf-8"))]
-
-
+                             "target_python": str(self.python), "verification": [],
+                             "max_repair_attempts": MAX_ADAPTER_REPAIR_ATTEMPTS,
+                             "repairs": [], "adapter_versions": []}
     def _save(self) -> None:
         (self.evidence / "run.json").write_text(
             json.dumps(self.report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -208,6 +288,156 @@ class AutoAdapter:
             raise ValueError("Adapter must be a Python file in .lladar/harnesses")
         return target
 
+    def _accept_proposal(self, proposal: dict) -> None:
+        self.report["proposal"] = proposal
+        if proposal.get("blockers") or not proposal.get("harness"):
+            raise RuntimeError(
+                f"Adapter discovery blocked: {proposal.get('blockers') or proposal.get('explanation')}"
+            )
+        self.source = self._path(proposal["harness"]).read_bytes()
+        digest = hashlib.sha256(self.source).hexdigest()
+        self.report["adapter_sha256"] = digest
+        versions = self.report.setdefault("adapter_versions", [])
+        index = len(versions) + 1
+        filename = f"adapter-{index:02d}.py"
+        (self.evidence / filename).write_bytes(self.source)
+        versions.append({"version": index, "path": filename, "sha256": digest})
+        (self.evidence / "adapter.py").write_bytes(self.source)
+
+    def _verification_failure(self, probes: list[str]) -> dict | None:
+        if self.source is None:
+            return {"phase": "verification", "error": "No adapter source was generated"}
+        failures = []
+        digest = hashlib.sha256(self.source).hexdigest()
+        for question in probes:
+            result = self.execute(self.source, question, phase="verification")
+            self.report["verification"].append(result)
+            if not result["ok"]:
+                failures.append({"question": question, "error": result["error"]})
+        if not failures:
+            return None
+        return {
+            "phase": "verification",
+            "adapter_sha256": digest,
+            "failures": failures,
+            "error": "; ".join(failure["error"] for failure in failures),
+        }
+
+    def _repair_history(self) -> list[dict]:
+        """Return a stable, complete record for the next autonomous repair turn."""
+        return [
+            {"attempt": repair["attempt"], "failure": repair["failure"]}
+            for repair in self.report["repairs"]
+        ]
+
+    def _harness_path_for_repair(self) -> Path:
+        proposal = self.report.get("proposal")
+        requested = proposal.get("harness") if isinstance(proposal, dict) else None
+        filename = Path(requested).name if isinstance(requested, str) else "adapter.py"
+        if not filename.endswith(".py"):
+            filename = "adapter.py"
+        return self.workspace / ".lladar" / "harnesses" / filename
+
+    def _restore_verification_candidate(self) -> None:
+        """Discard scratch edits so repair starts from the last independently replayed candidate."""
+        if self.source is None:
+            return
+        path = self._harness_path_for_repair()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.source)
+
+    def _repair_context(self) -> dict:
+        """Build complete, compact evidence for an independent repair turn."""
+        failure_catalog: dict[str, dict] = {}
+        timeline = []
+        observations = self.evidence / "observations.jsonl"
+        if observations.is_file():
+            for line in observations.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                event = {
+                    key: row[key]
+                    for key in ("phase", "ok", "adapter_sha256", "case_id", "exit_code")
+                    if key in row
+                }
+                error = row.get("error")
+                if isinstance(error, str):
+                    failure_id = hashlib.sha256(error.encode("utf-8")).hexdigest()[:12]
+                    entry = failure_catalog.setdefault(
+                        failure_id, {"error": error, "occurrences": 0}
+                    )
+                    entry["occurrences"] += 1
+                    event["failure_id"] = failure_id
+                timeline.append(event)
+
+        source = self.source
+        if source is None:
+            path = self._harness_path_for_repair()
+            if path.is_file():
+                source = path.read_bytes()
+        current = None
+        if source is not None:
+            current = {
+                "sha256": hashlib.sha256(source).hexdigest(),
+                "source": source.decode("utf-8", errors="replace"),
+            }
+        tool_failures = [
+            {
+                "sequence": event.sequence,
+                "tool": event.arguments.get("tool"),
+                "error": event.summary,
+            }
+            for event in self.explorer.audit_events
+            if event.tool == "tool_error"
+        ]
+        return {
+            "adapter_runtime_protocol": ADAPTER_RUNTIME_PROTOCOL,
+            "run_harness_tool_argument": RUN_HARNESS_ARGUMENT_GUIDANCE,
+            "current_adapter": current,
+            "repair_history": self._repair_history(),
+            "failure_catalog": failure_catalog,
+            "validation_timeline": timeline,
+            "tool_failure_timeline": tool_failures,
+        }
+
+    def _verify_with_repairs(
+        self,
+        probes: list[str],
+        repair: Callable[[dict, int], None],
+        initial_failure: dict | None = None,
+    ) -> None:
+        failure = initial_failure
+        repair_attempt = 0
+        while True:
+            if failure is None:
+                failure = self._verification_failure(probes)
+            if failure is None:
+                self.report["status"] = "verified"
+                return
+            if repair_attempt >= MAX_ADAPTER_REPAIR_ATTEMPTS:
+                raise RuntimeError(
+                    "Independent adapter verification did not pass after "
+                    f"{MAX_ADAPTER_REPAIR_ATTEMPTS} repair attempts: {failure['error']}"
+                )
+            repair_attempt += 1
+            self.report["status"] = "repairing"
+            self.report["repair_attempts"] = repair_attempt
+            self.report["repairs"].append({"attempt": repair_attempt, "failure": failure})
+            self._save()
+            try:
+                repair(failure, repair_attempt)
+            except Exception as error:
+                failure = {
+                    "phase": "repair",
+                    "error": f"{type(error).__name__}: {error}",
+                }
+            else:
+                failure = None
+
     def execute(self, source: bytes, question: str, *, phase: str, case_id: str | None = None) -> dict:
         from .runner import copy_project
 
@@ -215,6 +445,8 @@ class AutoAdapter:
         request = {"request_id": request_id, "message": question}
         result = {"request_id": request_id, "case_id": case_id, "phase": phase,
                   "ok": False}
+        environment = dict(self.explorer.environment)
+        completed: subprocess.CompletedProcess | None = None
         try:
             with copy_project(self.workspace, runs_root=self.evidence / "requests") as cwd:
                 result["workspace"] = str(cwd)
@@ -224,7 +456,6 @@ class AutoAdapter:
                 helper = cwd.parent / "lladar_service_runtime.py"
                 helper_source = Path(__file__).with_name("service_runtime.py").read_bytes()
                 helper.write_bytes(helper_source)
-                environment = dict(self.explorer.environment)
                 environment["LLADAR_REQUEST_ID"] = request_id
                 # Keep common temporary/cache writes separate between requests.
                 temp = cwd.parent / "tmp"
@@ -242,25 +473,30 @@ class AutoAdapter:
                 )
                 result["exit_code"] = completed.returncode
                 if completed.returncode:
-                    raise RuntimeError(f"Adapter exited {completed.returncode}: {completed.stderr[-4000:]}")
+                    diagnostic = _runtime_diagnostic(completed.stderr, environment)
+                    raise RuntimeError(f"Adapter exited {completed.returncode}: {diagnostic}")
                 try:
                     payload = json.loads(completed.stdout)
                 except ValueError as error:
-                    diagnostic = completed.stderr[-3000:]
-                    if any(marker in diagnostic for marker in
-                           ("thought_signatures", "response_metadata", "usage_metadata")):
-                        diagnostic = "[provider debug metadata omitted]"
                     raise ValueError(
                         f"Adapter stdout is not one JSON object ({len(completed.stdout)} characters). "
-                        f"Send logs to stderr and exit nonzero on failure. stderr: {diagnostic}"
+                        "Send logs to stderr and exit nonzero on failure."
                     ) from error
                 if not isinstance(payload, dict) or payload.get("request_id") != request_id:
                     raise ValueError("Adapter output is not correlated to this request")
-                if not isinstance(payload.get("output"), str) or not payload["output"].strip():
-                    raise ValueError("Adapter output must be a nonempty answer string; received "
-                                     + type(payload.get("output")).__name__
-                                     + ". Extract text content blocks without rewriting the answer.")
-                observable = payload["output"]
+                output = payload.get("output")
+                if not isinstance(output, str):
+                    raise ValueError(
+                        "Adapter output must be a string; received "
+                        + type(output).__name__
+                        + ". Extract text content blocks without rewriting the answer."
+                    )
+                if not output.strip():
+                    raise ValueError(
+                        "Adapter output must be nonempty; received an empty string. "
+                        "Inspect adapter stderr and the target's real result."
+                    )
+                observable = output
                 if isinstance(payload.get("observation"), str):
                     observable += payload["observation"]
                 if any(marker in observable for marker in
@@ -278,24 +514,28 @@ class AutoAdapter:
                     raise ValueError("Adapter changed target source during execution")
                 result.update(ok=True, output=payload["output"], observation=payload["observation"])
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
-            result["error"] = f"{type(error).__name__}: {error}"
-            for key, value in self.explorer.environment.items():
-                if len(value) >= 8 and any(word in key.upper() for word in ("KEY", "TOKEN", "SECRET", "PASSWORD")):
-                    result["error"] = result["error"].replace(value, "[REDACTED]")
+            result["error"] = _redact_secrets(
+                f"{type(error).__name__}: {error}", environment
+            )
+            if completed is not None:
+                diagnostic = _runtime_diagnostic(completed.stderr, environment)
+                if diagnostic:
+                    result["diagnostic"] = diagnostic
+                    if diagnostic not in result["error"]:
+                        result["error"] += "\nAdapter stderr:\n" + diagnostic
         with (self.evidence / "observations.jsonl").open("a", encoding="utf-8") as output:
             output.write(json.dumps(result, ensure_ascii=False) + "\n")
         return result
 
     def prepare(self, probes: list[str], *, interactive: bool | None = None,
-                candidate_id: str | None = None, clarification: str | None = None,
-                intent: str = "") -> None:
+                candidate_id: str | None = None, clarification: str | None = None) -> None:
         def run_harness(path: str, message: str) -> str:
             self.explorer._check_budget()
             if message not in probes:
                 raise ValueError("message must be one of the exact plain-text probe questions supplied")
             result = self.execute(self._path(path).read_bytes(), message, phase="exploration")
             self.explorer._record("run_harness", {"path": path}, "success" if result["ok"] else "failed")
-            return json.dumps(result, ensure_ascii=False)
+            return json.dumps(_harness_feedback(result), ensure_ascii=False)
 
         def list_files(pattern: str = "**/*") -> str:
             return json.dumps(self.explorer.list_files(pattern), ensure_ascii=False)
@@ -336,8 +576,6 @@ class AutoAdapter:
                 try:
                     return function(*args, **kwargs)
                 except (OSError, ValueError, RuntimeError) as error:
-                    if self.explorer._tool_calls >= self.explorer.budget.max_tool_calls:
-                        raise RuntimeError("Exploration tool-call budget exhausted") from error
                     self.explorer._record("tool_error", {"tool": function.__name__}, str(error))
                     return json.dumps({"error": str(error)}, ensure_ascii=False)
             return invoke
@@ -368,7 +606,7 @@ class AutoAdapter:
                          ("Search directed code graph and callers/callees. Confirm all leads in source.", query_graph),
                          ("Check only presence of a named environment variable or executable, without revealing values or executing target code.", check_runtime),
                          ("Write one standalone Python adapter.", write_harness),
-                         ("Execute adapter in a fresh copy; inspect and repair integration failures.", run_harness),
+                         ("Execute adapter in a fresh copy. Its message argument is plain text, but adapter stdin is the invariant JSON runtime protocol returned by this tool.", run_harness),
                      ]]
             plan_path = self.evidence / "interfaces.json"
             plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else None
@@ -380,25 +618,39 @@ class AutoAdapter:
                 if plan is None:
                     self.report["status"] = "discovering"
                     self._save()
-                    correction = ""
-                    for attempt in range(3):
+                    discovery_prompt = (DISCOVERY_PROMPT + graph_context
+                                        + "\nClarifications: "
+                                        + json.dumps(history, ensure_ascii=False))
+
+                    def generate_discovery(prompt: str) -> str:
+                        self.explorer.start_agent_turn()
                         with redirect_stdout(sys.stderr):
                             discovery = akasha.agents(
                                 model=self.model, env_file=self.env_file, tools=tools[:5],
                                 max_input_tokens=24000, max_output_tokens=8192,
                                 max_round=30, thinking=True, stream=True,
                                 verbose=self.verbose, keep_logs=False)
-                            response = _stream_answer(discovery(DISCOVERY_PROMPT + graph_context + "\nUser intent: " + intent
-                                                 + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
-                                                 + correction))
-                        try:
-                            plan = validate_plan(parse_object(str(response), "candidates"), self.explorer, service_url=self.service_url)
-                            break
-                        except ValueError as error:
-                            self.report.setdefault("discovery_errors", []).append(str(error))
-                            if attempt == 2:
-                                raise
-                            correction = "\nPrevious proposal failed validation: " + str(error) + "\nRead numbered source lines and correct the proposal."
+                            return _stream_answer(discovery(prompt))
+
+                    def validate_discovery(response: str) -> dict:
+                        return validate_plan(
+                            parse_object(str(response), "candidates"),
+                            self.explorer,
+                            service_url=self.service_url,
+                        )
+
+                    def record_discovery_failure(failure: dict) -> None:
+                        self.report.setdefault("discovery_errors", []).append(failure)
+                        self._save()
+
+                    plan = run_validated(
+                        discovery_prompt,
+                        generate_discovery,
+                        validate_discovery,
+                        attempts=3,
+                        retry_on=(OSError, ValueError, RuntimeError),
+                        on_failure=record_discovery_failure,
+                    )
                     write_json(plan_path, plan)
                     self.report.setdefault("discovery_history", []).append(plan)
                 else:
@@ -421,31 +673,48 @@ class AutoAdapter:
                 self._save()
                 break
             # The generation agent only runs after a public interface is selected.
-            with redirect_stdout(sys.stderr):
-                agent = akasha.agents(model=self.model, env_file=self.env_file, tools=tools,
-                                      max_input_tokens=24000, max_output_tokens=8192,
-                                      max_round=30, thinking=True, stream=True,
-                                      verbose=self.verbose, keep_logs=False)
-                response = _stream_answer(agent(CODING_PROMPT + "\nSELECTED PUBLIC INTERFACE: "
-                                 + json.dumps(selected, ensure_ascii=False)
-                                 + "\nYou MUST submit through this outer interface and preserve its full flow. "
-                                   "Do not bypass it for an inner model/agent method. If unavailable, report a blocker."
-                                 + "\nUser intent: " + intent
-                                 + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
-                                 + "\nProbe questions: " + json.dumps(probes, ensure_ascii=False)))
-            proposal = _json_object(str(response))
-            self.report["proposal"] = proposal
-            if proposal.get("blockers") or not proposal.get("harness"):
-                raise RuntimeError(f"Adapter discovery blocked: {proposal.get('blockers') or proposal.get('explanation')}")
-            self.source = self._path(proposal["harness"]).read_bytes()
-            (self.evidence / "adapter.py").write_bytes(self.source)
-            self.report["adapter_sha256"] = hashlib.sha256(self.source).hexdigest()
-            for question in probes:
-                result = self.execute(self.source, question, phase="verification")
-                self.report["verification"].append(result)
-                if not result["ok"]:
-                    raise RuntimeError(f"Independent adapter verification failed: {result['error']}")
-            self.report["status"] = "verified"
+            coding_context = ("\nSELECTED PUBLIC INTERFACE: "
+                              + json.dumps(selected, ensure_ascii=False)
+                              + "\nYou MUST submit through this outer interface and preserve its full flow. "
+                                "Do not bypass it for an inner model/agent method. If unavailable, report a blocker."
+                              + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
+                              + "\nProbe questions: " + json.dumps(probes, ensure_ascii=False))
+            def new_coding_agent():
+                self.explorer.start_agent_turn()
+                with redirect_stdout(sys.stderr):
+                    return akasha.agents(
+                        model=self.model, env_file=self.env_file, tools=tools,
+                        max_input_tokens=24000, max_output_tokens=8192,
+                        max_round=30, thinking=True, stream=True,
+                        verbose=self.verbose, keep_logs=False,
+                    )
+
+            initial_failure = None
+            try:
+                agent = new_coding_agent()
+                with redirect_stdout(sys.stderr):
+                    response = _stream_answer(agent(CODING_PROMPT + coding_context))
+                self._accept_proposal(_json_object(str(response)))
+            except (OSError, ValueError, RuntimeError) as error:
+                initial_failure = {
+                    "phase": "generation",
+                    "error": f"{type(error).__name__}: {error}",
+                }
+
+            def repair(failure: dict, attempt: int) -> None:
+                self._restore_verification_candidate()
+                context = self._repair_context()
+                agent = new_coding_agent()
+                with redirect_stdout(sys.stderr):
+                    response = _stream_answer(agent(
+                        REPAIR_PROMPT + coding_context
+                        + f"\nRepair attempt: {attempt}/{MAX_ADAPTER_REPAIR_ATTEMPTS}"
+                        + "\nComplete repair evidence: "
+                        + json.dumps(context, ensure_ascii=False)
+                    ))
+                self._accept_proposal(_json_object(str(response)))
+
+            self._verify_with_repairs(probes, repair, initial_failure)
         except NeedsConfirmation:
             self.report["status"] = "needs_confirmation"
             raise

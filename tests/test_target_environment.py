@@ -28,6 +28,13 @@ def test_actual_target_prefix_is_independent(isolated_target_python):
     assert Path(info["prefix"]).resolve() == isolated_target_python.parent.parent.resolve()
 
 
+def test_explicit_target_python_preserves_the_venv_launcher(tmp_path, isolated_target_python):
+    selected = resolve_project_python(tmp_path, isolated_target_python)
+
+    assert selected == isolated_target_python.absolute()
+    validate_target_python(selected)
+
+
 def test_system_site_packages_are_rejected(tmp_path):
     root = tmp_path / "shared-system-packages"
     venv.EnvBuilder(with_pip=False, system_site_packages=True).create(root)

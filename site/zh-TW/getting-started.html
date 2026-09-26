@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>開始使用 | LLaDAR</title>
+  <meta name="description" content="用範例客服 Agent 跑完 LLaDAR 的完整流程。">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="index.html">LLaDAR</a><nav aria-label="主要導覽"><a class="active" href="getting-started.html">開始使用</a><a href="guides/create-dataset.html">使用指南</a><a href="examples/support-demo-agent.html">範例</a><a class="language" href="../getting-started.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="index.html">綜覽</a><a href="getting-started.html" aria-current="page">開始使用</a><a href="guides/create-dataset.html">建立測試資料</a><a href="guides/run-agent.html">執行 Agent</a><a href="guides/evaluate.html">評估回答</a><a href="guides/report.html">產生報告</a><a href="reference/cli.html">命令參考</a><a href="examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">開始使用</p><h1>用範例客服 Agent 跑完一次完整測試</h1><p class="lead">這個範例會測試一個已存在的客服 Agent：從客服政策出題、讓 Agent 回答、檢查回答，到輸出報告。</p></section>
+
+    <section>
+      <h2>開始前</h2>
+      <ul>
+        <li>Python 3.10 以上。</li>
+        <li>已設定可用的 LLaDAR provider。它會用在產生題目和評估回答。</li>
+        <li>這個範例 Agent 只使用 Python 標準函式庫，不必另外安裝 Agent 的相依套件。</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>1. 安裝 LLaDAR</h2>
+      <p>先取得專案並以可編輯模式安裝。下面的指令要在你想放置專案的目錄執行。</p>
+      <pre><code>git clone https://github.com/stoday/LLaDAR.git
+cd LLaDAR
+python -m pip install -e .</code></pre>
+    </section>
+
+    <section>
+      <h2>2. 用客服政策建立題目</h2>
+      <p><code>knowledge.md</code> 是範例客服 Agent 應遵守的規則。這個指令會根據它建立測試資料，並寫入 <code>artifacts/support-demo/dataset.json</code>。</p>
+      <pre><code>lladar create test-dataset --knowledge examples/support-demo-agent/knowledge.md --output artifacts/support-demo/dataset.json</code></pre>
+      <p>想知道測試資料包含什麼，請看<a href="guides/create-dataset.html">建立測試資料指南</a>。</p>
+    </section>
+
+    <section>
+      <h2>3. 讓範例 Agent 回答題目</h2>
+      <p>LLaDAR 會讀取範例專案，找出如何把問題送給 Agent，先試跑確認，再執行所有題目。<code>--no-interactive</code> 表示使用已找到的做法直接執行，不在中途要求你選擇。</p>
+      <pre><code>lladar run-agent --project examples/support-demo-agent --dataset artifacts/support-demo/dataset.json --output artifacts/support-demo/run.json --no-interactive</code></pre>
+      <p>結果會寫入 <code>run.json</code>；LLaDAR 也會留下它如何執行 Agent 的紀錄。詳情請看<a href="guides/run-agent.html">執行 Agent 指南</a>。</p>
+    </section>
+
+    <section>
+      <h2>4. 檢查回答並產生報告</h2>
+      <p>先逐題比較預期答案和 Agent 的回答，再把結果寫成報告。</p>
+      <pre><code>lladar eval --dataset artifacts/support-demo/dataset.json --run artifacts/support-demo/run.json --output artifacts/support-demo/evaluation.json
+lladar report --evaluation artifacts/support-demo/evaluation.json --output artifacts/support-demo/report.md</code></pre>
+    </section>
+
+    <section>
+      <h2>跑完後會看到什麼？</h2>
+      <table><thead><tr><th>檔案</th><th>用途</th></tr></thead><tbody>
+        <tr><td><code>dataset.json</code></td><td>題目、預期答案，以及這次出題的記錄。</td></tr>
+        <tr><td><code>run.json</code></td><td>每一題送給 Agent 的內容和 Agent 的實際回答。</td></tr>
+        <tr><td><code>interfaces.json</code>、<code>audit.json</code></td><td>LLaDAR 找到的執行方式，以及試跑是否成功。</td></tr>
+        <tr><td><code>evaluation.json</code></td><td>每一題的檢查結果和總計。</td></tr>
+        <tr><td><code>report.md</code></td><td>方便人閱讀和分享的結果報告。</td></tr>
+      </tbody></table>
+      <p class="note">試跑成功只代表 LLaDAR 真的能透過 Agent 對外提供的入口送出問題；要知道回答好不好，請看後面的逐題評估和報告。</p>
+    </section>
+    <nav class="page-nav"><a href="index.html">← 工具介紹</a><a href="guides/create-dataset.html">下一步：建立測試資料 →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

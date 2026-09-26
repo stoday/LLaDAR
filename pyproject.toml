@@ -5,19 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "lladar"
 version = "0.6.0"
-description = "Generate and evaluate controlled question groups for LLM agents"
+description = "Create questions, run an Agent, evaluate responses, and render reports"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-  "akasha-terminal[light]>=1.4",
+  "akasha-terminal[light]>=1.8",
+  "requests>=2.31,<3",
+  "pypdf>=4,<7",
+  "playwright>=1.52,<2",
 ]
 
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
 ]
 
 [project.scripts]
@@ -30,11 +32,11 @@ test = ["pytest>=8"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-lladar = ["skill_assets/**/*"]
-
-[tool.setuptools.exclude-package-data]
-lladar = ["skill_assets/**/__pycache__/*", "skill_assets/**/*.pyc"]
+lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py"]
 
 [tool.pytest.ini_options]
-addopts = "-q"
+addopts = "-q -m 'not browser'"
 testpaths = ["tests"]
+markers = [
+  "browser: tests that launch the explicitly provisioned Playwright Chromium browser",
+]

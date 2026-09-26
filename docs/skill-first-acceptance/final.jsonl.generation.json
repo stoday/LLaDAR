@@ -1,0 +1,487 @@
+{
+  "schema_version": 1,
+  "status": "complete",
+  "skill": {
+    "name": "knowledge-point-qa",
+    "path": "<REPOSITORY>/skills/knowledge-point-qa",
+    "files": {
+      "SKILL.md": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+    }
+  },
+  "settings": {
+    "model": "gemini:gemini-2.5-flash",
+    "temperature": 0,
+    "count": 0,
+    "seed": 0,
+    "max_attempts": 3,
+    "read_page_chars": 8000,
+    "guidance_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "max_input_tokens": 32000,
+    "max_output_tokens": 4096
+  },
+  "sources": [
+    {
+      "id": "source_001",
+      "path": "<REPOSITORY>/tests/fixtures/skill_generation/knowledge.md",
+      "status": "complete",
+      "attempts": 1,
+      "errors": [],
+      "read_ranges": [
+        [
+          0,
+          85
+        ]
+      ],
+      "unread_ranges": [],
+      "unresolved_rejections": 0,
+      "sha256": "f2de413969ebc1c58b3f9ef2a24674dd38149db4db8c01dd2d65eafc711c5737"
+    }
+  ],
+  "knowledge_points": [
+    {
+      "id": "kp_000001",
+      "statement": "入門方案的資料保留期限為 30 天。",
+      "topic": "資料保留期限",
+      "evidence": [
+        {
+          "source_id": "source_001",
+          "read_id": "read_000001",
+          "quote": "入門方案的資料保留期限為 30 天。",
+          "start_char": 19,
+          "end_char": 37
+        }
+      ],
+      "status": "complete",
+      "attempts": 1,
+      "errors": []
+    },
+    {
+      "id": "kp_000002",
+      "statement": "企業方案的資料保留期限為 60 天。",
+      "topic": "資料保留期限",
+      "evidence": [
+        {
+          "source_id": "source_001",
+          "read_id": "read_000001",
+          "quote": "企業方案的資料保留期限為 60 天。",
+          "start_char": 39,
+          "end_char": 57
+        }
+      ],
+      "status": "complete",
+      "attempts": 1,
+      "errors": []
+    },
+    {
+      "id": "kp_000003",
+      "statement": "客服服務時段為週一至週五 09:00–18:00。",
+      "topic": "客服服務時段",
+      "evidence": [
+        {
+          "source_id": "source_001",
+          "read_id": "read_000001",
+          "quote": "客服服務時段為週一至週五 09:00–18:00。",
+          "start_char": 59,
+          "end_char": 84
+        }
+      ],
+      "status": "complete",
+      "attempts": 1,
+      "errors": []
+    }
+  ],
+  "qa": [
+    {
+      "id": "qa_000001",
+      "knowledge_point_id": "kp_000001",
+      "question": "入門方案的資料保留期限是多久？",
+      "expected_answer": "入門方案的資料保留期限為 30 天。",
+      "actual_response": null
+    },
+    {
+      "id": "qa_000003",
+      "knowledge_point_id": "kp_000003",
+      "question": "客服服務時段為何？",
+      "expected_answer": "客服服務時段為週一至週五 09:00–18:00。",
+      "actual_response": null
+    },
+    {
+      "id": "qa_000002",
+      "knowledge_point_id": "kp_000002",
+      "question": "企業方案的資料保留期限是多久？",
+      "expected_answer": "60 天",
+      "actual_response": null
+    }
+  ],
+  "reads": [
+    {
+      "read_id": "read_000001",
+      "source_id": "source_001",
+      "start_char": 0,
+      "end_char": 85,
+      "text": "# 星河服務說明（驗收用虛構資料）\n\n入門方案的資料保留期限為 30 天。\n\n企業方案的資料保留期限為 60 天。\n\n客服服務時段為週一至週五 09:00–18:00。\n",
+      "next_start": null
+    }
+  ],
+  "executions": [
+    {
+      "stage": "knowledge_points",
+      "source_id": "source_001",
+      "attempt": 1,
+      "loaded_skills": [
+        "knowledge-point-qa"
+      ],
+      "skill_files": {
+        "SKILL.md": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+      },
+      "tool_events": [
+        {
+          "tool": "load_skill",
+          "result": {
+            "name": "knowledge-point-qa",
+            "sha256": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+          }
+        },
+        {
+          "tool": "read_source",
+          "result": {
+            "read_id": "read_000001",
+            "source_id": "source_001",
+            "start_char": 0,
+            "end_char": 85,
+            "text": "# 星河服務說明（驗收用虛構資料）\n\n入門方案的資料保留期限為 30 天。\n\n企業方案的資料保留期限為 60 天。\n\n客服服務時段為週一至週五 09:00–18:00。\n",
+            "next_start": null
+          }
+        },
+        {
+          "tool": "submit_knowledge_points",
+          "result": {
+            "accepted": [
+              "kp_000001",
+              "kp_000002",
+              "kp_000003"
+            ],
+            "rejected": []
+          }
+        }
+      ],
+      "tool_names": [
+        "list_sources",
+        "load_skill",
+        "read_skill_resource",
+        "read_source",
+        "submit_knowledge_points"
+      ],
+      "tool_call_limit": 40,
+      "tool_calls": 3,
+      "max_round": 30,
+      "host_tool_events": [
+        {
+          "tool": "read_source",
+          "result": {
+            "read_id": "read_000001",
+            "source_id": "source_001",
+            "start_char": 0,
+            "end_char": 85,
+            "text": "# 星河服務說明（驗收用虛構資料）\n\n入門方案的資料保留期限為 30 天。\n\n企業方案的資料保留期限為 60 天。\n\n客服服務時段為週一至週五 09:00–18:00。\n",
+            "next_start": null
+          }
+        },
+        {
+          "tool": "submit_knowledge_points",
+          "result": {
+            "accepted": [
+              "kp_000001",
+              "kp_000002",
+              "kp_000003"
+            ],
+            "rejected": []
+          }
+        }
+      ]
+    },
+    {
+      "stage": "qa",
+      "knowledge_point_id": "kp_000001",
+      "attempt": 1,
+      "loaded_skills": [
+        "knowledge-point-qa"
+      ],
+      "skill_files": {
+        "SKILL.md": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+      },
+      "tool_events": [
+        {
+          "tool": "load_skill",
+          "result": {
+            "name": "knowledge-point-qa",
+            "sha256": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+          }
+        },
+        {
+          "tool": "read_knowledge_point",
+          "result": {
+            "id": "kp_000001",
+            "statement": "入門方案的資料保留期限為 30 天。",
+            "topic": "資料保留期限",
+            "evidence": [
+              {
+                "source_id": "source_001",
+                "read_id": "read_000001",
+                "quote": "入門方案的資料保留期限為 30 天。",
+                "start_char": 19,
+                "end_char": 37
+              }
+            ]
+          }
+        },
+        {
+          "tool": "submit_qa",
+          "result": {
+            "accepted": true
+          }
+        }
+      ],
+      "tool_names": [
+        "load_skill",
+        "read_knowledge_point",
+        "read_skill_resource",
+        "submit_qa"
+      ],
+      "tool_call_limit": 40,
+      "tool_calls": 3,
+      "max_round": 30,
+      "host_tool_events": [
+        {
+          "tool": "read_knowledge_point",
+          "result": {
+            "id": "kp_000001",
+            "statement": "入門方案的資料保留期限為 30 天。",
+            "topic": "資料保留期限",
+            "evidence": [
+              {
+                "source_id": "source_001",
+                "read_id": "read_000001",
+                "quote": "入門方案的資料保留期限為 30 天。",
+                "start_char": 19,
+                "end_char": 37
+              }
+            ]
+          }
+        },
+        {
+          "tool": "submit_qa",
+          "result": {
+            "accepted": true
+          }
+        }
+      ]
+    },
+    {
+      "stage": "qa",
+      "knowledge_point_id": "kp_000003",
+      "attempt": 1,
+      "loaded_skills": [
+        "knowledge-point-qa"
+      ],
+      "skill_files": {
+        "SKILL.md": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+      },
+      "tool_events": [
+        {
+          "tool": "load_skill",
+          "result": {
+            "name": "knowledge-point-qa",
+            "sha256": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+          }
+        },
+        {
+          "tool": "read_knowledge_point",
+          "result": {
+            "id": "kp_000003",
+            "statement": "客服服務時段為週一至週五 09:00–18:00。",
+            "topic": "客服服務時段",
+            "evidence": [
+              {
+                "source_id": "source_001",
+                "read_id": "read_000001",
+                "quote": "客服服務時段為週一至週五 09:00–18:00。",
+                "start_char": 59,
+                "end_char": 84
+              }
+            ]
+          }
+        },
+        {
+          "tool": "submit_qa",
+          "result": {
+            "accepted": true
+          }
+        }
+      ],
+      "tool_names": [
+        "load_skill",
+        "read_knowledge_point",
+        "read_skill_resource",
+        "submit_qa"
+      ],
+      "tool_call_limit": 40,
+      "tool_calls": 3,
+      "max_round": 30,
+      "host_tool_events": [
+        {
+          "tool": "read_knowledge_point",
+          "result": {
+            "id": "kp_000003",
+            "statement": "客服服務時段為週一至週五 09:00–18:00。",
+            "topic": "客服服務時段",
+            "evidence": [
+              {
+                "source_id": "source_001",
+                "read_id": "read_000001",
+                "quote": "客服服務時段為週一至週五 09:00–18:00。",
+                "start_char": 59,
+                "end_char": 84
+              }
+            ]
+          }
+        },
+        {
+          "tool": "submit_qa",
+          "result": {
+            "accepted": true
+          }
+        }
+      ]
+    },
+    {
+      "stage": "qa",
+      "knowledge_point_id": "kp_000002",
+      "attempt": 1,
+      "loaded_skills": [
+        "knowledge-point-qa"
+      ],
+      "skill_files": {
+        "SKILL.md": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+      },
+      "tool_events": [
+        {
+          "tool": "load_skill",
+          "result": {
+            "name": "knowledge-point-qa",
+            "sha256": "56753d5b30d721503176458a38df7d1b6bb4bc47b2652aef7ebf0a42f51b1fca"
+          }
+        },
+        {
+          "tool": "read_knowledge_point",
+          "result": {
+            "id": "kp_000002",
+            "statement": "企業方案的資料保留期限為 60 天。",
+            "topic": "資料保留期限",
+            "evidence": [
+              {
+                "source_id": "source_001",
+                "read_id": "read_000001",
+                "quote": "企業方案的資料保留期限為 60 天。",
+                "start_char": 39,
+                "end_char": 57
+              }
+            ]
+          }
+        },
+        {
+          "tool": "submit_qa",
+          "result": {
+            "accepted": true
+          }
+        }
+      ],
+      "tool_names": [
+        "load_skill",
+        "read_knowledge_point",
+        "read_skill_resource",
+        "submit_qa"
+      ],
+      "tool_call_limit": 40,
+      "tool_calls": 3,
+      "max_round": 30,
+      "host_tool_events": [
+        {
+          "tool": "read_knowledge_point",
+          "result": {
+            "id": "kp_000002",
+            "statement": "企業方案的資料保留期限為 60 天。",
+            "topic": "資料保留期限",
+            "evidence": [
+              {
+                "source_id": "source_001",
+                "read_id": "read_000001",
+                "quote": "企業方案的資料保留期限為 60 天。",
+                "start_char": 39,
+                "end_char": 57
+              }
+            ]
+          }
+        },
+        {
+          "tool": "submit_qa",
+          "result": {
+            "accepted": true
+          }
+        }
+      ]
+    }
+  ],
+  "dataset": {
+    "lines": [
+      {
+        "line": 1,
+        "qa_id": "qa_000001",
+        "qa_ids": [
+          "qa_000001"
+        ],
+        "knowledge_point_ids": [
+          "kp_000001"
+        ]
+      },
+      {
+        "line": 2,
+        "qa_id": "qa_000003",
+        "qa_ids": [
+          "qa_000003"
+        ],
+        "knowledge_point_ids": [
+          "kp_000003"
+        ]
+      },
+      {
+        "line": 3,
+        "qa_id": "qa_000002",
+        "qa_ids": [
+          "qa_000002"
+        ],
+        "knowledge_point_ids": [
+          "kp_000002"
+        ]
+      }
+    ],
+    "sha256": "e4b45c7cea0563744b3c57e662f13cdf2989e7727d45109aa766cfe2ae4cc047"
+  },
+  "stats": {
+    "point_candidates": 3,
+    "rejected_points": 0,
+    "deduplicated_points": 0,
+    "qa_candidates": 3,
+    "rejected_qa": 0,
+    "repeated_qa_submissions": 0,
+    "failed_sources": 0,
+    "failed_points": 0,
+    "valid_qa_points": 3,
+    "accepted_points": 3,
+    "attempted_points": 3,
+    "output_records": 3,
+    "output_points": 3,
+    "deduplicated_qa": 0,
+    "not_attempted_count_limit": 0
+  }
+}

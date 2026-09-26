@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Evaluate LLaDAR responses and summarize the result."><title>Evaluate answers — LLaDAR</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header><div class="wrap top"><a class="brand" href="../index.html">LLaDAR</a><div class="lang"><a href="../index.html" aria-current="page">English</a><a href="../zh-TW/guides/evaluate.html" lang="zh-Hant">繁體中文</a></div></div><div class="wrap hero compact"><div class="eyebrow">Guide</div><h1>Evaluate completed answers</h1><p class="lead">Check whether each Agent response meets the expectation, then summarize the results.</p></div></header>
+  <nav class="toc" aria-label="Documentation"><div class="wrap"><a href="../index.html">Overview</a><a href="../getting-started.html">Get started</a><a href="create-dataset.html">Create test data</a><a href="run-agent.html">Run an Agent</a><a href="evaluate.html" aria-current="page">Evaluate answers</a><a href="report.html">Create a report</a><a href="../reference/cli.html">Command reference</a><a href="../examples/support-demo-agent.html">Demo Agent</a></div></nav>
+  <main id="main" class="wrap">
+    <section><h2>Basic command</h2><pre><code>lladar eval responses.jsonl --output evaluation.json</code></pre><p>The default method compares the expected answer with the Agent's actual response and saves a judgment for each completed trial.</p></section>
+    <section><h2>Why save individual judgments?</h2><p>Each judgment explains one result. Python then counts those saved results to calculate totals and rates. That keeps the summary consistent when you recreate a report.</p></section>
+    <section><h2>Use a custom evaluation Skill</h2><p>Your <code>SKILL.md</code> can say what matters for your domain. A support policy Skill, for example, can check refund deadlines, required caveats, and unsupported promises.</p><pre><code>lladar eval responses.jsonl --skill skills/policy-verdict --output evaluation.json</code></pre></section>
+    <section><h2>Inspect the result</h2><p><code>evaluation.json</code> contains the plan, per-question judgments, saved Skill information, and the calculated summary. An execution error shows that the run failed for that question; it does not show that the Agent gave a wrong answer.</p></section>
+    <nav class="page-nav"><a href="run-agent.html">← Run an Agent</a><a href="report.html">Next: create a report →</a></nav>
+  </main>
+  <footer><div class="wrap">LLaDAR documentation</div></footer>
+</body>
+</html>

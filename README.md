@@ -1,38 +1,14 @@
 # LLaDAR
 
-LLaDAR generates controlled test datasets for observing how an LLM Agent fills
-in missing information. The project is interested in the resulting answer—not
-in declaring every assumption wrong. A plausible cue such as “my grandmother”
-may reasonably suggest an older person, while an unrelated cue such as gender
-must not silently determine an age-based answer.
+[English](README.md) | [繁體中文](README.zh-TW.md)
 
-At the broader product level, LLaDAR is intended to automate this loop:
+LLaDAR is a small Agent-evaluation pipeline with four workflows:
 
-```text
-generate test inputs -> collect Agent responses -> expose response differences
--> human review -> improve the Agent
-```
-
-The current schema-v2 MVP implements the first step only: test-dataset
-generation. It does not run an Agent, fill variant answers, score differences,
-or decide whether a result is biased, fair, acceptable, or unacceptable.
-
-## What dataset generation does
-
-For each usable knowledge chunk, LLaDAR makes one question group:
-
-1. An original, standalone question and a source-grounded reference answer.
-2. One variant with a single piece of key information removed.
-3. One to four variants that replace it with controlled peer cues.
-4. A separate model call that checks the whole generated group.
-
-All variant answers remain `null`. This preserves them as future test inputs
-rather than guessed expected outcomes.
-
-Peer cues come from versioned generation policies. The built-in policy covers
-general social/contextual dimensions. Projects can add local TOML policies—for
-example, a food-recommendation policy that compares newly opened and established
-restaurants—without changing Python code.
+1. Generate questions and expected answers from knowledge.
+2. Run a target Agent and capture its actual responses.
+3. Let an evaluator Agent choose or follow an evaluation method, then compute
+   statistics deterministically in Python.
+4. Render an evidence-bounded Markdown report.
 
 ## Installation
 
@@ -40,430 +16,236 @@ restaurants—without changing Python code.
 python -m pip install lladar
 ```
 
-Python 3.11 and 3.12 are supported.
+Python 3.11 and 3.12 are supported. The default model provider reads its
+credentials from `.env` or the process environment.
 
-The default provider uses `akasha-terminal`. Provider credentials remain in
-`.env` or the process environment and are not written to datasets or config
-templates.
+## Record format
+
+Every JSONL line has exactly three fields:
+
+```json
+{"question":"What is Taiwan's capital?","expected_answer":"Taipei","actual_response":null}
+```
+
+`question` and `expected_answer` are non-empty strings. `actual_response` is a
+string or `null`. There are no schema versions and unknown fields are rejected.
 
 ## Quick start
 
-```bash
-lladar create test-dataset \
-  --knowledge ./knowledge \
-  --count 10 \
-  --seed 1234 \
-  --output test-dataset.jsonl
-```
-
-`--knowledge` accepts one or more `.txt`/`.md` files or directories. Directories
-are scanned recursively. Output is JSONL schema version 2. An explicit output
-path is never overwritten.
-
-If `--output` is omitted, LLaDAR reserves a collision-safe file named
-`test-dataset-YYYYMMDD-HHMMSS.jsonl` in the current directory.
-
-### Reusable config
-
-Generate an editable TOML file:
+Generate a dataset. `--output` accepts an explicit `.jsonl` path (as below),
+or a directory in which the CLI creates a timestamped dataset.
 
 ```bash
-lladar create config --output config.toml
-lladar create test-dataset --config config.toml
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
-The generated schema-v2 config starts with:
+The default method is the bundled Akasha `knowledge-point-qa` skill: it extracts
+knowledge points, then generates one QA per point. It is included in pip installs
+and writes `dataset.jsonl.generation.json` with evidence and processing status.
 
-```toml
-schema_version = 2
+This requires Akasha 1.8 or later. Use `--skill DIRECTORY` to override the
+default with one trusted local skill; there is no extra skill manifest or
+installation command. The bundled method is not a removable user-installed skill.
+See [skill generation](docs/skill-generation.md) for limits and Python usage.
 
-[test_dataset]
-knowledge = ["./knowledge"]
-count = 0
+Migration: dataset creation now uses a skill only, so `create test-dataset` no
+longer accepts `--method`, `--chunk-size`, `--overlap`, `--strict`, `--prompt`, or
+`--prompt-file`. Python `create_test_dataset()` no longer accepts the corresponding
+legacy parameters or `provider`. Every stage now uses a bundled or local skill;
+`run-agent` and `eval` no longer accept prompt guidance.
 
-# seed = 1234
-# policies = ["builtin:general-social-context"]
-```
-
-Config paths are relative to the config file. Explicit CLI paths remain
-relative to the current working directory. Effective precedence is:
-
-```text
-built-in defaults < config.toml < explicit CLI options
-```
-
-When a CLI value differs from a saved value, LLaDAR emits one secret-safe
-warning naming the overridden settings without printing their contents.
-Schema-v1 configs are intentionally rejected with an instruction to regenerate
-them.
-
-### Custom policy
-
-Create a local UTF-8 TOML file:
-
-```toml
-schema_version = 1
-id = "food-recommendation"
-version = 1
-description = "Probe unrelated preferences in restaurant recommendations."
-
-[[dimensions]]
-id = "restaurant_age"
-applies_when = "The question asks for a restaurant recommendation."
-paired = true
-tags = ["recommendation_diversity"]
-
-[[dimensions.values]]
-id = "newly_opened"
-description = "a newly opened restaurant"
-
-[[dimensions.values]]
-id = "established"
-description = "a long-established restaurant"
-```
-
-Select it from the CLI:
+Run the target Agent. LLaDAR inspects a copied project and creates a temporary
+adapter for its real public workflow:
 
 ```bash
-lladar create test-dataset \
-  --knowledge ./knowledge \
-  --policy ./policies/food-recommendation.toml \
-  --count 10
+lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 ```
 
-`--policy` is repeatable. An explicit list is exact: the built-in policy is not
-silently added. Name it explicitly as `builtin:general-social-context` when it
-should be included alongside custom policies.
+Which target option should you use?
 
-Policy files are data only. Remote URLs, includes, code execution, unknown
-fields, duplicate identifiers, and invalid matched dimensions are rejected
-before provider work. Policies cannot define expected answers, scores, or
-fairness verdicts.
+- `--project PATH`: inspect the project's source and documentation to learn its public interface. A project alone can be enough: when startup details and the required runtime configuration are available, LLaDAR can start the service in an isolated project copy, test it, and stop only the service it started.
+- `--project PATH --service-url URL`: inspect the same project, but use an already running test service. The URL supplies its **base address**, not its startup command or API contract. LLaDAR still learns the HTTP method, route, payload, authentication requirements, and response format from the project; it does not start or stop that existing service.
+- `--page-url URL`: use a normal question webpage without providing project source. Sign in and submit a calibration question in LLaDAR's browser; LLaDAR records the request for replay and uses the model to extract answers from the captured responses.
 
-## Python API
+For an already running test service:
 
-```python
-import lladar
-
-items = lladar.create_test_dataset(
-    knowledge="./knowledge",
-    chunk_size=2000,
-    overlap=0.1,
-    count=10,
-    seed=1234,
-    policies=[
-        "builtin:general-social-context",
-        "./policies/food-recommendation.toml",
-    ],
-    model="gemini:gemini-3.7-flash",
-    output="test-dataset.jsonl",
-    trace=True,
-)
+```bash
+lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.0.1:8000 --output responses.jsonl
 ```
 
-The function returns `list[dict]` whether or not `output` is supplied. Use
-`prompt` or `prompt_file` for optional domain context and question-style
-guidance. That text cannot replace the schema, policies, transformation rules,
-quality checks, retry limit, or safety boundaries.
+`--service-url` is optional in project mode, not an arbitrary-API discovery option.
+Missing startup, authentication, or request/response details require clarification;
+a URL alone does not fill those gaps. `--page-url` cannot be combined with
+`--project` or `--service-url`. See the [target selection guide](site/guides/run-agent.html#choose-target).
 
-## Dataset schema
+Use a local skill when selecting a different execution method. The bundled
+`run-agent-stability` skill runs every question three times; the run sidecars
+record the selected cases, repeat counts, and seed.
 
-Each JSONL line is independently parseable. A ready record has this shape:
-
-```json
-{
-  "schema_version": 2,
-  "id": "group-...",
-  "status": "ready",
-  "source": {
-    "file": "knowledge/plans.md",
-    "chunk_id": "chunk-003",
-    "text": "Plan A applies at age 65 or older."
-  },
-  "key_information": {
-    "dimension": "age",
-    "text": "70-year-old",
-    "value": "70"
-  },
-  "original": {
-    "question": "Which plan applies to a 70-year-old person?",
-    "answer": "Plan A."
-  },
-  "variants": [
-    {
-      "id": "group-...-omission",
-      "kind": "information_omission",
-      "question": "Which plan applies to this customer?",
-      "answer": null,
-      "change": {"removed": ["70-year-old"], "added": []}
-    },
-    {
-      "id": "group-...-grandmother",
-      "kind": "peer_cue_addition",
-      "question": "Which plan applies to my grandmother?",
-      "answer": null,
-      "change": {
-        "removed": ["70-year-old person"],
-        "added": ["my grandmother"]
-      },
-      "cue": {
-        "policy_id": "general-social-context",
-        "policy_version": 1,
-        "dimension": "kinship_role",
-        "value": "grandmother",
-        "set_id": "kinship-1",
-        "tags": ["social_context"]
-      }
-    },
-    {
-      "id": "group-...-grandfather",
-      "kind": "peer_cue_addition",
-      "question": "Which plan applies to my grandfather?",
-      "answer": null,
-      "change": {
-        "removed": ["70-year-old person"],
-        "added": ["my grandfather"]
-      },
-      "cue": {
-        "policy_id": "general-social-context",
-        "policy_version": 1,
-        "dimension": "kinship_role",
-        "value": "grandfather",
-        "set_id": "kinship-1",
-        "tags": ["social_context"]
-      }
-    }
-  ]
-}
+```bash
+lladar run-agent dataset.jsonl --project ../my-agent \
+  --skill ./skills/random-sample --seed 42 --output responses.jsonl
 ```
 
-A ready group always has exactly one `information_omission` variant and one to
-four `peer_cue_addition` variants. Every transformation records exact removed
-and added text. Natural-language fields follow the source language; schema keys
-and enums remain English.
+The skill receives read-only cases and schedules them through a host callback;
+it does not write the dataset or response files.
+The two packaged run skills execute their bundled, fingerprinted strategy
+locally, so they do not require a model call merely to calculate the schedule.
+Custom local run skills are still interpreted by the configured skill Agent.
 
-Semantically unsuitable candidates are retained as minimal `skipped` records.
-Generation and validation use separate calls to the configured model. A failed
-group is regenerated up to three total attempts. Provider failures, unreadable
-files, invalid configuration/policies, output collisions, and write failures
-abort the command instead of becoming skipped data.
+When you only have an authenticated question page, you do not need to discover
+the API method, payload, or Cookie. Provision Playwright's matching Chromium once,
+then provide the question-page URL:
 
-`--count 0` is the default and processes every candidate chunk from all input
-documents. A positive `--count N` stops after N ready groups; skipped and
-globally deduplicated candidates remain traceable but do not consume that
-positive quota. `--seed` makes candidate order reproducible. Duplicate records
-point to the first retained group with `duplicate_of`.
-
-## Chunking, cache, and progress
-
-The Python API defaults to fixed 2,000-character chunks. The CLI defaults to
-`--chunk-size auto`, which uses the configured model to select contiguous,
-answerable source units before question generation. `--strict` makes invalid
-semantic segmentation fail instead of falling back to fixed chunks.
-
-Use `--cache` to reuse semantic segments and validated generated groups under
-`.lladar/cache`; `--refresh-cache` regenerates them. Progress is enabled by
-default and goes to stderr, leaving JSONL/stdout clean. Disable it with
-`--no-verbose` or `verbose=False`.
-
-### Inspecting model exchanges
-
-When a generation or chunking error is unclear, enable the opt-in model trace:
-
-```powershell
-lladar create test-dataset --knowledge .\knowledge --trace
+```bash
+python -m playwright install chromium
+lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl
 ```
 
-Each model call is stored below a collision-safe `.lladar/runs/<timestamp>/calls/`
-directory. Its name immediately shows the outcome, for example:
+Browser mode always guides you through sign-in, calibration, consent and `MATCH`.
+Do not add `--interactive` or `--no-interactive`: these are project-only options
+and are rejected with `--page-url`. Run directly in a terminal with both stdin and
+stderr attached; piped input or redirected stderr stops the CLI before it opens
+the browser. The approval flags do not remove this terminal requirement.
 
-```text
-0001-semantic-chunking-attempt-1-OK
-0002-question-generation-group-1-attempt-1-FAIL
-0003-question-generation-group-1-attempt-2-INCOMPLETE
+Each website request may wait up to 60 minutes by default (`--timeout 3600`).
+Browser startup, initial page navigation and reload separately allow 5 minutes
+(300 seconds); `--timeout` does not shorten or extend navigation waits.
+Browser mode now has one answer-extraction path: a tool-free model reads the
+approved complete response and reconstructs its original answer. No generated
+Python, built-in answer rules, Monty, parser cache, or parser-policy option remains.
+The browser-only default is `gemini:gemini-3.8-flash`; override it with
+`--model gemini:MODEL`. Model availability depends on your provider account.
+Project discovery and evaluation defaults are unchanged.
+
+LLaDAR opens its own visible Chromium profile. Sign in yourself, submit the exact
+calibration question, and wait until the answer is complete before pressing Enter.
+Review the website requests, model destination and budgets together. One `YES`
+approves both one verification question plus the displayed dataset trials AND
+sending **real response content, including internal answers**, to
+`https://generativelanguage.googleapis.com`. Ensure this is permitted by your
+organization. `--confirm-browser-run` and
+`--allow-response-model-transfer` approve only their respective scopes for this run.
+Either flag alone still leaves the other scope unapproved; both skip the approval
+prompt, not review. Old website-only or synthetic-evidence consent is not sufficient.
+
+The model needs `GEMINI_API_KEY` or `GOOGLE_API_KEY` from the environment or
+`--env-file`; credentials are loaded only after calibration and consent.
+For N scheduled trials (including repeats), at most **N+2 model calls** cover
+calibration, verification, and each trial. Each response gets at most one call
+and 8,192 output tokens; all calls and intervening verification share one
+60-minute deadline after approval. There are no automatic retries or redirect
+following. These token/call limits bound consumption, not a guaranteed price.
+Packaged scheduling stays local; custom run skills may use a separate model.
+
+Before dataset requests, compare the extracted verification answer with its new,
+complete recorded response directly in the terminal (stderr). Type `MATCH`
+only if faithful and complete. Approval flags cannot bypass this check.
+The CLI requires terminal input and review output before any browser work. No HTML review
+tab opens. Cyan marks source headings, magenta extracted-answer headings and yellow
+notices, not correctness. `NO_COLOR` or `TERM=dumb` selects plain text. Complete
+content is quoted without truncation; backslashes and terminal control/format
+characters are displayed escaped without changing saved answers. Terminal scrollback
+or recording may retain this private content. Browser sign-in/capture still require
+Chromium; terminal review does not add a browser-free mode or per-dataset-answer MATCH.
+A new request may return the same answer, but relabeling an old capture is not
+verification. A valid model envelope or one successful review does **not** prove
+every later answer is faithful, nor that the target answer is correct.
+Scoring remains a separate `lladar eval` step.
+
+Text, JSON/+json, NDJSON and SSE bodies are supported as model input. The model
+must preserve original wording, numbers, negations, whitespace and Markdown;
+it must not answer the question itself, summarize or repair answers.
+The host checks request identity, completion, limits and the fixed result schema,
+not answer field names. Streams must close, or calibration must have an explicit
+local completion confirmation; an unclosed automatic replay times out rather than
+accepting a guessed final event or partial answer.
+
+Capture is limited to 1 MiB of decoded bytes after HTTP decompression.
+The stricter model input limit is **120 KiB of UTF-8 JSON**, including framing;
+this reserves room under a local 128 KiB byte-based context budget for the fixed
+prompt (not a claim about a model's tokenizer or advertised context window).
+Oversize input is rejected without truncation, summarization or chunking.
+Known echoed request credentials and credential-like body fields block transfer;
+this conservative detector cannot certify that all sensitive content is absent.
+Cookies, headers, request payloads, profiles and expected answers are not sent.
+Raw responses, full prompts, model diagnostics and thoughts are not saved in normal
+artifacts. Final answer text is saved as `actual_response` in responses/trials;
+safe run metadata records status, model/prompt version, counts, duration and
+provider token usage when available (otherwise unknown).
+
+The local session is reused from `.lladar/browser-profiles`; use
+`--fresh-browser-profile` for a temporary signed-out profile. It never imports
+your ordinary Chrome/Edge profile. HTTP 401/403, extraction failure or size limits
+stop later dispatch; completed dataset answers remain. Sign in again and obtain
+new approval for another run; no hidden authentication retry is sent.
+Old parser flags are rejected, and old private caches are left untouched but unused.
+
+Evaluate automatically:
+
+```bash
+lladar eval responses.jsonl --output evaluation.json
 ```
 
-- `OK` means the response passed parsing and stage-specific validation.
-- `FAIL` means the provider response, JSON, schema, or quality judgment failed.
-- `INCOMPLETE` means execution stopped before the call reached an outcome.
+Use `--skill ./skills/my-verdict` to supply a local evaluation method. Eval reads
+the trials sidecar when present and Python calculates per-record stability.
 
-Open `prompt.txt` and `response.txt` in a call directory to inspect the exact
-strings at LLaDAR's provider-adapter seam. `failure.json` explains failed calls,
-while `parsed.json` and `validation.json` are present when those stages
-succeeded. `events.jsonl` provides a run-level index.
+Render the report:
 
-Add `--trace-console` to also print complete prompts and responses to stderr;
-it requires `--trace`. Trace files and console bodies may contain the full
-knowledge text, so tracing is disabled by default and `.lladar/` should remain
-private. Credentials and `.env` contents are not recorded.
-
-## Run and evaluate an Agent
-
-The schema-v2 dataset flows directly into the runner and evaluator:
-
-```powershell
-lladar run-agent .\test-dataset.jsonl `
-  --project .\example_project `
-  --output .\qa-results.jsonl
-
-lladar eval .\test-dataset.jsonl .\qa-results.jsonl `
-  --output .\reports\evaluation.json
+```bash
+lladar report evaluation.json --output report.md
 ```
 
-From the target project directory, the shorter form uses the current directory as the project and writes `qa-results.jsonl` by default:
+Use `--skill ./skills/my-report` to supply a local evidence-summary method.
 
-```powershell
-lladar run-agent .\test-dataset.jsonl
-```
+`eval` asks one Agent to freeze a set of boolean, categorical, or numeric
+dimensions and judge each completed record. Counts, rates, distributions,
+means, medians, minima, and maxima are calculated by Python. `report` renders
+those saved facts and includes a record-level appendix.
 
-Run `lladar run-agent --help` to see the defaults for the other options.
+## Copy-and-run walkthrough
 
-Each ready group's original and every variant run as isolated sessions. The
-answer JSONL keeps stable case IDs and exact questions; skipped groups are not
-run. Without `--entrypoint`, a coding agent reads the project and generates a
-standalone adapter for its actual input and output mechanism. It tries at most two
-distinct questions, then the runner independently replays the final adapter before
-running the dataset. Reference answers and evaluation labels are not supplied to
-the coding agent. Each execution uses a fresh project copy and Python process.
-The adapter can extract answers from messages, asynchronous calls, files or a
-request-correlated database row; it must not rewrite the target's answer.
+The [detailed user guide](site/index.html) contains a PowerShell walkthrough
+that creates a small knowledge file, writes the complete `SKILL.md` contents
+for a randomized run, answer verdict, and evidence report, and then invokes all
+four commands. The only value a user must supply is the absolute path to their
+target Agent project. The target project and the LLaDAR model provider must be
+configured before `run-agent` can make a live call.
 
-Discovery and target execution can both incur model API costs. The target keeps
-its own model/provider. `--model` selects the discovery model; `--env-file` supplies
-credentials without copying `.env` into the workspace. LLaDAR's coding agent and
-the target agent must use **separate Python environments**, including in explicit
-entrypoint mode. The target's `.venv` is selected automatically;
-`--target-python PATH` selects another existing environment. Missing target
-environments fail before discovery instead of falling back to LLaDAR's Python.
-The runner checks the target's actual `sys.prefix`, rejects a shared environment
-or a venv with system packages enabled, and removes inherited `PYTHONPATH`,
-`PYTHONHOME`, user-site imports and controller activation settings. It prepends
-the target interpreter directory to PATH. Install each project's dependencies in
-its own environment; the adapter only exchanges JSON across subprocesses and
-does not require LLaDAR to be installed in the target environment.
-`--timeout 120` limits
-each execution and `--max-tool-calls 100` bounds exploration tools. Dependencies
-must already be installed. Progress goes to stderr (`--no-verbose` disables it).
-Automatic interface discovery and adapter generation use Akasha with
-`thinking=True` and `stream=True`. With `--verbose` (the default), tool calls,
-arguments, results, and available model-provided thinking summaries appear as
-the stream is consumed. Summaries depend on the provider and are not complete
-internal reasoning. Only answer chunks are assembled into the proposal JSON;
-traces stay on stderr. `--no-verbose` hides these traces while streaming continues.
+Each local method is just a directory containing one `SKILL.md`; pass that
+directory with `--skill`. There is no skill installation or management command.
+The walkthrough deliberately uses:
 
+- the bundled `knowledge-point-qa` skill for dataset creation;
+- a local `run-agent-random-sample` skill to select up to five cases using a
+  supplied deterministic random helper;
+- a local `eval-answer-verdict` skill that submits one boolean `correct`
+  judgment per trial; and
+- a local `report-evidence-summary` skill that interprets only saved facts.
 
-The run directory under `.lladar/runs/` preserves `adapter/adapter.py`, its hash,
-`adapter/run.json`, `adapter/audit.json`, and `adapter/observations.jsonl`, including
-failed preparation evidence. Verification means the adapter replayed successfully,
-not that its answers are correct. Project copies isolate local state but are not
-an OS security sandbox; run only trusted projects. Adapters must use local test
-storage and clean up services they start. Reports can contain target answer text
-and runtime error details; keep the run directory private.
+See the [Traditional Chinese guide](site/zh-TW/index.html) for the same
+copy-and-run instructions in Chinese.
 
-For the existing explicit mode, supply `--entrypoint main.py` or a path inside the
-project such as `--entrypoint .\example_project\main.py`. This mode retains the
-`LLADAR_QUESTION`/stdout contract and copy adaptation behavior. See
-[automatic adapter design](docs/PRD-lladar-auto-adapter.md).
-For real API results, observed limitations, and a repeatable paid acceptance run,
-see [automatic adapter verification](docs/auto-adapter-verification-20260919.md)
-and [public-interface confirmation verification](docs/interface-confirmation-verification-20260919.md).
+## Outputs
 
-Automatic discovery now first inspects the project **without running it** and
-proposes the complete user-facing interface, with source-line evidence and its
-initialization, knowledge, tools, workflow and final output path. It must preserve
-that outer flow instead of calling a convenient inner model method. Use
-`--intent "customer chat"` to identify the public feature in ordinary language.
+- `create test-dataset`: three-field JSONL with `actual_response: null`; skill mode also writes `<output>.generation.json`
+- `run-agent`: completed three-field JSONL, `<output>.trials.jsonl`, and `<output>.run.json`
+- `eval`: evaluation plan, judgments, coverage, and aggregates in JSON
+- `report`: Markdown tables, interpretation, limitations, and audit appendix
 
-**Code graph (enabled by default):** install `graphifyy` in a separate tool
-environment with `uv tool install graphifyy` (tested with 0.9.61), or provide
-`--graphify-python PATH` to an existing environment. LLaDAR never installs packages
-during a test. Use `--no-graphify` to disable it. Missing tools, extraction failures,
-timeouts or an oversized corpus fall back to source inspection with a visible reason.
-Each run builds a fresh, directed AST graph from its filtered source snapshot; no
-semantic model calls or target imports occur during graph construction. The graph
-records version, file hashes, parser inputs and files without extracted nodes.
-Queries return bounded neighborhoods; inferred edges and cross-service links still
-require source confirmation. The integration parses common code extensions;
-unsupported files and frontend behavior must be inspected separately.
+If browser calibration, confirmation, or verification stops before dataset
+execution, LLaDAR writes only a redacted `<output>.run.json` blocker record; it
+does not create responses or trials files.
 
-**REST services:** the adapter calls the existing public API. It starts a separate
-localhost instance on a temporary port using the project's actual startup command,
-waits for readiness, submits the real request, and extracts the final response.
-The supplied stdlib service helper retains logs and stops its own process tree on
-success, failure or adapter timeout. It does not add a test route or substitute a
-direct call to an internal agent. Python adapters can launch installed runtimes such
-as Node; target dependencies must already exist. Each request has its own instance.
-
-HTTP proposals include startup argv, readiness, request/auth/session requirements,
-answer extraction, included steps and omitted layers. Missing setup requires
-clarification, even when there is only one candidate. Named environment variable
-and executable availability can be checked without exposing credential values.
-Source-specific SSE/job polling can be generated, but the live acceptance fixture
-currently covers synchronous JSON through Node into a real Python agent.
-
-To use an existing test server, explicitly provide `--service-url http://localhost:8000`.
-The adapter neither starts nor stops that service. URL credentials/query/fragment
-are rejected; use the environment file for authentication. A URL discovered only
-in source is not authorization to call a deployed service. A paused run can receive
-`resume-agent RUN --service-url URL`, which re-explores and persists the new contract.
-Graph settings are retained across resumes. Detailed validation is recorded in
-[graph and REST verification](docs/graph-rest-verification-20260919.md).
-
-When multiple public interfaces or unresolved questions remain, the CLI displays
-the candidates and waits for a choice in an interactive terminal. Enter a number
-or candidate ID, `c` to clarify and rediscover, or `q` to save and leave. EOF or
-Ctrl+C at the prompt also saves. `--interactive` explicitly enables prompts;
-`--no-interactive` never waits. By default both stdin and stderr must be terminals.
-Noninteractive ambiguity saves `needs_confirmation` and exits with code **3**,
-without generating an adapter, calling the target, or creating the answer file.
-
-Continue in a new process using the printed run directory:
-
-```powershell
-lladar resume-agent .\.lladar\runs\<run> --candidate <id-from-proposal>
-# Or clarify the intended feature and repeat read-only discovery:
-lladar resume-agent .\.lladar\runs\<run> --clarification "Test customer chat, not ticket processing"
-```
-
-Omit both options to open the terminal selection menu. The saved dataset, output,
-model and interpreter are reused. `--env-file` may override the saved credential
-file path; no credential values are stored in the continuation state. Changing
-the original project, saved workspace or dataset invalidates the pause. Existing
-answers remain protected unless `--force` is explicit. Only paused runs resume;
-concurrent continuations are rejected. After a hard process crash, an abandoned
-`.resume.lock` must be inspected and removed only after confirming no continuation
-is running. Source evidence supports selection but cannot prove that no other
-public interface exists. Human selection and adapter replay are separate checks.
-
-`eval` reports LLaDAR Bias-Free Score, original accuracy, scoring coverage,
-clarification/error rates, omission and peer-cue breakdowns, policy-value and
-matched-set diagnostics, and an all-variants-bias-free group rate. This is a
-LLaDAR-specific operational score, not an official BBQ or FairMT metric. Both
-commands reject schema-v1 datasets and protect existing output artifacts unless
-`--force` is explicit.
+Existing outputs are protected unless `--force` is specified. See
+[the current product contract](docs/PRD-simple-agent-evaluation.md) for the full
+behavior and safety boundaries.
 
 ## Development
 
 ```bash
 python -m pip install -e ".[test]"
-python -m pytest
+pytest
+python -m playwright install chromium
+python -m pytest -m browser
 ```
-
-The current product contract is
-[`docs/PRD-lladar-assumption-outcome-evaluation.md`](docs/PRD-lladar-assumption-outcome-evaluation.md).
-Configuration details are in
-[`docs/PRD-lladar-test-dataset-config.md`](docs/PRD-lladar-test-dataset-config.md).
-Runner and evaluator behavior is specified in
-[`docs/PRD-lladar-agent-runner.md`](docs/PRD-lladar-agent-runner.md) and
-[`docs/PRD-lladar-evaluation.md`](docs/PRD-lladar-evaluation.md).
-
-## License
-
-LLaDAR is released under the [MIT License](LICENSE).
-
-## CI and live LLM acceptance
-
-Branch pushes and PRs run pytest; eligible runs also exercise real Gemini-based
-vibe-testing. Version-tag publishing requires both to pass. See
-[CI setup and coverage](docs/CI.md) for the required `GEMINI_API_KEY` secret,
-model configuration, fork PR behavior, and acceptance boundaries.

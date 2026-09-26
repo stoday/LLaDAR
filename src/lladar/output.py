@@ -20,10 +20,8 @@ def write_dataset(
         content = "".join(
             json.dumps(item, ensure_ascii=False) + "\n" for item in dataset
         )
-    elif format == "json":
-        content = json.dumps(dataset, ensure_ascii=False, indent=2) + "\n"
     else:
-        raise ValueError("format must be 'jsonl' or 'json'")
+        raise ValueError("format must be 'jsonl'")
     reservation_owned = False
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
