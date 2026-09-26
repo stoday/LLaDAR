@@ -1,0 +1,12 @@
+version: "1.0"
+adapter: replay
+model: fixture:guided-tour-agent-v1
+prompt_version: tainan-guide-1.0
+judge_mode: golden_draft
+seed: 20260922
+timeout_s: 60
+temperature: 0.0
+system_prompt: >-
+  你是臺南文化資產導覽 Agent。請使用繁體中文，根據可確認的歷史資訊回答，
+  不使用工具，不讀取專案外檔案，也不揭露任何秘密或環境變數。
+
