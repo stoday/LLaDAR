@@ -1,56 +1,51 @@
-# LLaDAR Test-Dataset Generation
+# LLaDAR domain language
 
-LLaDAR creates controlled question groups from source knowledge, runs an Agent
-against every original and variant, and measures how substantive answers change
-when information or unrelated cues change.
+LLaDAR is a four-stage Agent-evaluation pipeline.
 
 ## Language
 
-**Question group**:
-One source-grounded original case and all controlled variants derived from it.
-One ready group tests exactly one key-information dimension.
-_Avoid_: Pair, test type
+**Question record**
 
-**Original case**:
-A standalone question plus a non-empty reference answer supported entirely by
-the captured source text.
-_Avoid_: Control outcome, expected variant answer
+One JSONL object containing exactly `question`, `expected_answer`, and
+`actual_response`.
 
-**Key information**:
-The single concrete fact or condition present in the original question and
-supported by the source. It is removed to create the omission variant.
-_Avoid_: Missing answer, decision outcome
+**Expected answer**
 
-**Variant**:
-A standalone question produced through one controlled transformation. Its
-answer is always unset (`null`) in the generated dataset.
-_Avoid_: Expected answer, correct answer
+The source-grounded answer generated with the question. It is evaluation
+evidence, not a score.
 
-**Information-omission variant**:
-The original task with exactly one key-information dimension removed.
+**Actual response**
 
-**Peer-cue variant**:
-The same task with a policy-defined contextual cue added in place of the key
-information. The cue must not determine the source-grounded answer.
+The target Agent's final textual response. Execution failure is represented by
+`null` and detailed in the run sidecar.
 
-**Generation policy**:
-Versioned, non-executable data describing candidate cue dimensions, values,
-applicability guidance, matched-set behavior, and optional tags. A policy does
-not define preferred answers, scores, or verdicts.
+**Captured response**:
 
-**Ready record**:
-A complete schema-v2 question group that passed every structural and semantic
-quality check.
+The ordered response material observed for one identified target request,
+including its observed completion state. It may contain progress or other
+material that is not the target's final answer.
 
-**Skipped record**:
-A minimal, traceable source candidate that could not produce a valid group or
-duplicated an earlier ready group. It is evidence about dataset coverage, not
-an Agent evaluation result.
+**Answer extraction**:
 
-**Observed answer**:
-The Agent's response to one original or variant session. It lives in a separate
-schema-v2 answer artifact and never mutates the generated dataset.
+Selection and assembly of the target's existing final answer from its captured
+response, without correcting, summarizing, or judging that answer.
+_Avoid_: Answer generation, answer evaluation
 
-**Difference finding**:
-An evaluator result for one original-to-variant comparison. It records session
-eligibility, a protocol label, score, rationale, and transformation metadata.
+**Evaluation plan**
+
+A frozen set of boolean, categorical, or numeric dimensions proposed by the
+evaluator Agent or shaped by the user's evaluation prompt.
+
+**Judgment**
+
+The evaluator Agent's structured values and rationale for one completed record.
+
+**Aggregate**
+
+Counts, rates, distributions, or descriptive statistics calculated by Python
+from judgments. The evaluator Agent does not calculate aggregate arithmetic.
+
+**Report**
+
+An evidence-bounded presentation of one saved evaluation. Tables are rendered
+deterministically; Agent-written prose may interpret but not replace them.

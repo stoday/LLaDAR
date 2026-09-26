@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 import re
 import sys
@@ -11,7 +12,7 @@ from urllib.parse import urlsplit
 class NeedsConfirmation(RuntimeError):
     def __init__(self, run: Path):
         self.run = run
-        super().__init__(f"需要確認測試入口。狀態已保存：{run}\n續跑：lladar resume-agent \"{run}\"")
+        super().__init__(f"需要確認測試入口；請加上 --interactive 重新執行。探索證據：{run}")
 
 
 DISCOVERY_PROMPT = """Read this project's source and documentation using ONLY the
@@ -153,8 +154,13 @@ def _display(value: object) -> str:
 
 
 def choose_interface(plan: dict, *, interactive: bool | None,
-                     candidate_id: str | None = None) -> tuple[str, str]:
+                     candidate_id: str | None = None,
+                     selector: Callable[[dict], str] | None = None) -> tuple[str, str]:
     candidates = [c for c in plan["candidates"] if c["public_boundary"]]
+    if selector is not None:
+        if candidate_id is not None:
+            raise ValueError("Provide either candidate_id or selector, not both")
+        candidate_id = selector(plan)
     if candidate_id is not None:
         if candidate_id not in {c["id"] for c in candidates}:
             raise ValueError("Candidate ID is not an evidenced public interface")

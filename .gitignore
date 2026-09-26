@@ -8,6 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+linux-venv
 
 # Environment variables
 .env
@@ -33,12 +34,16 @@ logs
 
 # dataset
 *.jsonl
+!docs/skill-first-acceptance/*.jsonl
 
 # Skills lock file
 skills-lock.json
 
-# Example project
-example_project
-
 # akasha
 akasha-repo
+
+# .lladar-
+.lladar-*
+
+# for testing
+.pytest-*

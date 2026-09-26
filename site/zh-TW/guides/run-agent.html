@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>執行 Agent | LLaDAR</title>
+  <meta name="description" content="把測試題自動送給專案中的 Agent 或既有服務。">
+  <link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a class="active" href="run-agent.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../guides/run-agent.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html">建立測試資料</a><a href="run-agent.html" aria-current="page">執行 Agent</a><a href="evaluate.html">評估回答</a><a href="report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">使用指南</p><h1>讓 Agent 回答測試題</h1><p class="lead">把一組測試題交給既有 Agent，並把每一題的實際回答存下來，供後面檢查。</p></section>
+    <section id="choose-target">
+      <h2>該選專案、服務 URL，還是網頁 URL？</h2>
+      <p>三種方式都會取得 Agent 回答並填入 <code>actual_response</code>，差別在於 LLaDAR 如何知道「問題要怎麼送」。</p>
+      <div class="table-wrap"><table><thead><tr><th>你手上有什麼？</th><th>使用參數</th><th>執行方式</th></tr></thead><tbody>
+        <tr><td>專案原始碼與足夠的執行環境設定</td><td><code>--project PATH</code></td><td>檢查對外流程；有需要時在隔離的專案副本中啟動服務。</td></tr>
+        <tr><td>專案原始碼，以及已啟動的測試服務</td><td><code>--project PATH --service-url URL</code></td><td>從專案理解 API 契約，呼叫指定基底位址的服務，不啟動或關閉它。</td></tr>
+        <tr><td>正常問答網頁，沒有專案原始碼</td><td><code>--page-url URL</code></td><td>在瀏覽器登入、校正，錄製請求供重播，再由模型抽取答案。</td></tr>
+      </tbody></table></div>
+      <p><code>--project</code> 告訴 LLaDAR 去哪裡理解「怎麼呼叫 Agent」；<code>--service-url</code> 補充「這次呼叫哪個已啟動的服務」。後者是選用參數，不是啟動指令，也不能取代 API 契約。</p>
+      <p><code>--page-url</code> 不能與 <code>--project</code> 或 <code>--service-url</code> 合用。未指定專案或網頁時，預設以目前目錄（<code>.</code>）作為專案。參數名稱是 <code>--service-url</code>，不是 <code>--service-api</code>。</p>
+    </section>
+    <section>
+      <h2>專案模式會做什麼？</h2>
+      <ol>
+        <li>複製你的專案到工作區，避免在測試時修改原始碼。</li>
+        <li>找出使用者平常如何把問題送給 Agent，例如命令列程式或 API。</li>
+        <li>先試跑一題；可行後再讓 Agent 回答全部題目。</li>
+        <li>存下每一題的回答，以及它採用哪種執行方式。</li>
+      </ol>
+      <p>「對外入口」指的是使用者或其他程式原本就會使用的方式，不是只看到某個內部 Python 函式就直接呼叫。LLaDAR 找到程式碼線索後仍會先試跑；試跑成功才會採用。</p>
+    </section>
+    <section>
+      <h2>方式一：由 LLaDAR 處理本機專案</h2>
+      <p>只有專案也可能足夠。LLaDAR 會檢查 README、啟動腳本與對外介面定義；必要的 runtime、依賴與設定完整時，可以在隔離的專案副本中啟動原本的服務，等待就緒後測試，最後只關閉自己啟動的服務。這種情況不必提供 <code>--service-url</code>。</p>
+      <pre><code>lladar run-agent artifacts/dataset.jsonl --project path/to/agent-project --output artifacts/responses.jsonl</code></pre>
+      <p>若缺少啟動、驗證或請求／回應資訊，LLaDAR 會要求補充，不會憑空猜測。有多個合理對外入口時，互動模式可讓你選擇；只有在入口明確時才使用 <code>--no-interactive</code>，它不是保存先前選擇的功能。</p>
+    </section>
+    <section>
+      <h2>方式二：使用已經在跑的測試服務</h2>
+      <p>如果團隊已經有一個專門用來測試的 Agent 服務，可以明確提供它的基底位址（base URL）。LLaDAR 使用該位址搭配從專案找到的 API 路徑，不會啟動或關閉該既有服務。仍需專案程式碼來理解 HTTP 方法、路徑、Payload、驗證需求與回應格式。</p>
+      <pre><code>lladar run-agent artifacts/dataset.jsonl --project path/to/agent-project --service-url http://127.0.0.1:8000 --output artifacts/responses.jsonl</code></pre>
+      <p>例如專案定義 <code>POST /ask</code> 並以 JSON 傳入問題，<code>http://127.0.0.1:8000</code> 只補上服務位址，不會描述 <code>/ask</code> 或 JSON 的欄位。單獨提供任意 API URL，並不會自動知道這些契約。</p>
+      <p><code>--service-url</code> 必須是 HTTP 或 HTTPS 網址，不能含帳密、query 或 fragment。若服務需要驗證，請在執行前自行設定必要的環境變數。</p>
+    </section>
+    <section>
+      <h2>方式三：提供問答頁面，再自行登入</h2>
+      <p>適合你知道正常使用的問答網頁，卻不知道 API method、payload 或 Cookie 的情況，不必提供專案原始碼。仍需錄製請求來知道如何送題；模型負責從回應抽取答案，不是推測請求契約。第一次使用先執行 <code>python -m playwright install chromium</code>，再執行：</p>
+      <pre><code>lladar run-agent artifacts/dataset.jsonl --page-url https://example.test/chat --output artifacts/responses.jsonl</code></pre>
+      <p>指定 <code>--page-url</code> 就固定進入登入、校正、授權與 <code>MATCH</code> 引導流程，不必選擇互動模式。不要加 <code>--interactive</code> 或 <code>--no-interactive</code>，這兩個專案專用旗標在網站模式會被拒絕。請直接在 stdin、stderr 都連接終端的環境執行；管線輸入或重新導向 stderr 會在開瀏覽器前停止，即使提供兩個核准旗標也一樣。</p>
+      <p>瀏覽器回應直接交給無工具權限的模型抽取，預設為 <code>gemini:gemini-3.8-flash</code>。不再生成 Python，也不保留內建答案規則、Monty 或解析器快取。從環境或 <code>--env-file</code> 提供 <code>GEMINI_API_KEY</code>／<code>GOOGLE_API_KEY</code>，校正及同意後才初始化。</p>
+      <ol><li>在 LLaDAR 專用視窗自行登入，原樣送出校正題。</li><li>等答案完成才按 Enter；一次看完網站請求、模型目的地及預算，輸入一次 <code>YES</code>，同時核准網站請求及將真實回應內容（包含內部答案）送到 <code>https://generativelanguage.googleapis.com</code>。請先確認組織允許外傳。</li><li>直接在 terminal（stderr）比較新驗證題的抽取全文與完整錄製回應，忠實且完整才輸入 <code>MATCH</code>，之後才開始資料集。</li></ol>
+      <p>不再開 HTML 核對頁。青色標題為來源、紫色為抽取答案、黃色為提醒，不代表正確性。<code>NO_COLOR</code> 或 <code>TERM=dumb</code> 改為純文字。全文逐行引用、不截斷；反斜線及控制／格式字元可見轉義，不改動保存的答案。終端捲動紀錄或錄影可能留存私密內容；拒絕將核對輸出重新導向檔案或管線。登入與擷取仍需要 Chromium；不是無瀏覽器模式，也不新增正式題目的逐題 MATCH。</p>
+      <p><code>--confirm-browser-run</code> 與 <code>--allow-response-model-transfer</code> 分別核准本次兩個範圍，不能跳過獨立核對或 CLI 的終端要求。合法輸出格式或一次核對通過，不保證後續抽取忠實，也不代表答案正確，評分仍另行執行。</p>
+      <p>瀏覽器啟動、首次導頁及重新導頁各自最多等 5 分鐘（300 秒），獨立於 <code>--timeout</code>。網站回答仍預設等 60 分鐘（<code>--timeout 3600</code>）；自動重播另受整輪剩餘期限約束。</p>
+      <p>N 次排程試跑（包含重複題）最多使用 N+2 次模型呼叫：校正、驗證及各次試跑。每次最多 8,192 輸出 tokens，所有呼叫與中間驗證共用同意後的 60 分鐘。不自動重試、跟隨重新導向、快取答案或暗中重送網站問題。供應商有提供才記錄用量，缺值為未知；可能產生費用。</p>
+      <p>文字、JSON／+json、NDJSON、GraphQL-over-HTTP JSON 與 SSE 都交給模型。擷取上限為解壓後 1 MiB；模型輸入另限含封裝的 120 KiB UTF-8 JSON，在本機 128 KiB 位元組預算內保留固定 prompt 空間，並非 tokenizer 保證。不截斷、不摘要、不自動分段。宿主不選答案欄位或終止事件；自動串流若一直不關閉，會逾時停止，不接受半截答案。</p>
+      <p>模型不接收憑證、request headers／body、profile 或標準答案。回應若含已知憑證或疑似憑證欄位會阻擋傳輸，但偵測無法保證找出所有私密內容。一般產物不保存原始串流、完整 prompt、模型診斷或思考內容；最終文字仍以 <code>actual_response</code> 存入 responses／trials，安全 sidecar 記錄模型及 prompt 版本、次數、用量和狀態。</p>
+      <p>沿用專用的 <code>.lladar/browser-profiles</code>，或以 <code>--fresh-browser-profile</code> 使用暫時未登入 profile；不複製日常 Chrome／Edge。401/403 或抽取失敗會停止後續送題，保留已完成答案；需重新登入並取得新同意，不自動重試。舊解析器旗標拒絕使用，既有私密快取不讀取也不刪除。</p>
+      <p><code>--page-url</code> 不能與 <code>--project</code> 或 <code>--service-url</code> 合用。若你也有專案原始碼，可回到<a href="#choose-target">目標選擇表</a>判斷適合的方式。</p>
+    </section>
+    <section>
+      <h2>跑完後要看哪些檔案？</h2>
+      <table><thead><tr><th>檔案</th><th>你可以從中確認什麼？</th></tr></thead><tbody>
+        <tr><td><code>artifacts/responses.jsonl</code></td><td>每題問題與 <code>actual_response</code> 中的實際回答。</td></tr>
+        <tr><td><code>artifacts/responses.jsonl.trials.jsonl</code></td><td>排程題目、重複試跑與各次回答。</td></tr>
+        <tr><td><code>artifacts/responses.jsonl.run.json</code></td><td>執行狀態、採用的入口與執行證據。</td></tr>
+      </tbody></table>
+      <p>這些檔案能證明「測試確實有送到某個入口」，但不代表回答內容一定正確；內容品質要由下一步評估。</p>
+      <p>若瀏覽器模式在校正、確認或驗證階段停止，只會留下遮罩後的 <code>.run.json</code> blocker evidence，不會建立 responses 或 trials。</p>
+    </section>
+    <section class="note"><h2>範例</h2><p><a href="../examples/support-demo-agent.html">客服 Agent 範例</a>示範兩種方式：直接交給 LLaDAR 讀取範例專案，或先啟動範例服務後以 <code>--service-url</code> 指定它。</p></section>
+    <nav class="page-nav"><a href="create-dataset.html">← 建立測試資料</a><a href="evaluate.html">下一步：評估回答 →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

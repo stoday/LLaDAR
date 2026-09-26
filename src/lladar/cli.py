@@ -1,682 +1,291 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from typing import Callable, Any
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from .api import DEFAULT_DATASET_MODEL, DEFAULT_MODEL, create_test_dataset
-from .configuration import load_test_dataset_config, validate_test_dataset_input_paths
-from .evaluation import DEFAULT_EVALUATION_MODEL, DEFAULT_EVALUATION_PROMPT, evaluate
+from .api import DEFAULT_DATASET_MODEL, create_test_dataset
+from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
-from .providers import LLMProvider
-from .progress import ProgressReporter
-from .runner import AkashaAdapterController, AdapterController, run_agent
 from .interfaces import NeedsConfirmation
-from .skill import SkillError, install_skill, list_skills, uninstall_skill
+from .reporting import DEFAULT_REPORT_MODEL, create_report
+from .runner import run_agent
 
 
-_CONFIG_TEMPLATE = """schema_version = 2
-
-[test_dataset]
-# Replace this example with one or more .txt/.md files or directories.
-knowledge = ["./knowledge"]
-count = 0
-
-# Optional domain and question-style guidance. Set at most one.
-# prompt = "Prefer concise questions for restaurant recommendations."
-# prompt_file = "./dataset-prompt.md"
-
-# Optional selection and generation settings.
-# chunk_size = "auto"
-# overlap = 0.1
-# seed = 1234
-# policies = ["builtin:general-social-context"]
-# model = "gemini:gemini-3.7-flash"
-
-# Optional model-profile overrides.
-# max_input_tokens = 1048576
-# max_output_tokens = 65536
-# auto_window_ratio = 0.8
-
-# Optional paths and runtime behavior.
-# output = "./test-dataset.jsonl"
-# env_file = ".env"
-# verbose = true
-# trace = false
-# trace_console = false
-# trace_root = ".lladar/runs"
-# strict = false
-# cache = false
-# cache_dir = ".lladar/cache"
-# refresh_cache = false
-"""
-
-_DATASET_OPTION_FLAGS = {
-    "knowledge": ("--knowledge",),
-    "prompt": ("--prompt",),
-    "prompt_file": ("--prompt-file",),
-    "chunk_size": ("--chunk-size",),
-    "overlap": ("--overlap",),
-    "count": ("--count",),
-    "seed": ("--seed",),
-    "policies": ("--policy",),
-    "model": ("--model",),
-    "max_input_tokens": ("--max-input-tokens",),
-    "max_output_tokens": ("--max-output-tokens",),
-    "auto_window_ratio": ("--auto-window-ratio",),
-    "verbose": ("--verbose", "--no-verbose"),
-    "trace": ("--trace", "--no-trace"),
-    "trace_console": ("--trace-console", "--no-trace-console"),
-    "trace_root": ("--trace-root",),
-    "output": ("--output",),
-    "env_file": ("--env-file",),
-    "strict": ("--strict", "--no-strict"),
-    "cache": ("--cache", "--no-cache"),
-    "cache_dir": ("--cache-dir",),
-    "refresh_cache": ("--refresh-cache", "--no-refresh-cache"),
-}
-
-
-def _option_is_explicit(argv: Sequence[str], flags: tuple[str, ...]) -> bool:
-    return any(
-        token == flag or token.startswith(f"{flag}=")
-        for token in argv
-        for flag in flags
-    )
-
-
-def _merge_dataset_config(
-    args: argparse.Namespace,
-    settings: dict[str, object],
-    argv: Sequence[str],
-) -> None:
-    prompt_is_explicit = _option_is_explicit(
-        argv, _DATASET_OPTION_FLAGS["prompt"] + _DATASET_OPTION_FLAGS["prompt_file"]
-    )
-    for key, value in settings.items():
-        if key in ("prompt", "prompt_file") and prompt_is_explicit:
-            continue
-        flags = _DATASET_OPTION_FLAGS.get(key)
-        if flags is not None and not _option_is_explicit(argv, flags):
-            setattr(args, key, value)
-
-
-def _comparison_value(key: str, value: object) -> object:
-    if key == "knowledge":
-        return tuple(Path(item).resolve() for item in value)  # type: ignore[arg-type]
-    if key in ("prompt_file", "output", "env_file", "cache_dir", "trace_root"):
-        return Path(value).resolve()  # type: ignore[arg-type]
-    if key == "policies":
-        return tuple(
-            item if str(item).startswith("builtin:") else Path(item).resolve()
-            for item in value  # type: ignore[union-attr]
-        )
-    return value
-
-
-def _overridden_config_keys(
-    args: argparse.Namespace,
-    settings: dict[str, object],
-    argv: Sequence[str],
-) -> list[str]:
-    overridden: list[str] = []
-    prompt_flags = _DATASET_OPTION_FLAGS["prompt"] + _DATASET_OPTION_FLAGS["prompt_file"]
-    if _option_is_explicit(argv, prompt_flags) and (
-        "prompt" in settings or "prompt_file" in settings
-    ):
-        cli_key = "prompt_file" if _option_is_explicit(
-            argv, _DATASET_OPTION_FLAGS["prompt_file"]
-        ) else "prompt"
-        config_key = "prompt_file" if "prompt_file" in settings else "prompt"
-        if cli_key != config_key or _comparison_value(
-            cli_key, getattr(args, cli_key)
-        ) != _comparison_value(config_key, settings[config_key]):
-            overridden.append("prompt selector")
-
-    for key, config_value in settings.items():
-        if key in ("prompt", "prompt_file"):
-            continue
-        flags = _DATASET_OPTION_FLAGS.get(key)
-        if flags is None or not _option_is_explicit(argv, flags):
-            continue
-        if _comparison_value(key, getattr(args, key)) != _comparison_value(
-            key, config_value
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    def _get_help_string(self, action: argparse.Action) -> str:
+        if action.help is not None and (
+            action.default is None or "(default:" in action.help
         ):
-            overridden.append(key)
-    return overridden
+            return action.help
+        return super()._get_help_string(action)
 
 
-def _warn_about_overrides(config_path: str | Path, keys: Sequence[str]) -> None:
-    if not keys:
-        return
-    reporter = ProgressReporter(enabled=True)
-    reporter.emit(
-        "WARN",
-        f"command-line options override {Path(config_path).name} settings:",
-    )
-    for key in keys:
-        print(f"       {key}", file=sys.stderr, flush=True)
+class _SingleSkill(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        if getattr(namespace, self.dest, None) is not None:
+            raise argparse.ArgumentError(self, "only one local skill is supported")
+        setattr(namespace, self.dest, values)
 
 
-def _parse_chunk_size(value: str) -> int | str:
-    if value == "auto":
-        return value
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            'chunk size must be a positive integer or "auto"'
-        ) from error
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError(
-            'chunk size must be a positive integer or "auto"'
-        )
-    return parsed
+_DEFAULT_DATASET_OUTPUT_DISPLAY = "."
+_DATASET_FILENAME_DISPLAY = "test-dataset-YYYYMMDD-HHMMSS.jsonl"
 
 
-def _positive_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("value must be a positive integer") from error
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("value must be a positive integer")
-    return parsed
+def _timestamped_dataset_output(directory: Path) -> Path:
+    """Choose a new timestamped dataset file in ``directory``."""
+    stem = datetime.now().astimezone().strftime("test-dataset-%Y%m%d-%H%M%S")
+    suffix = 1
+    output = directory / f"{stem}.jsonl"
+    while output.exists():
+        output = directory / f"{stem}-{suffix}.jsonl"
+        suffix += 1
+    return output
 
 
-def _window_ratio(value: str) -> float:
-    try:
-        parsed = float(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(
-            "value must satisfy 0 < value <= 1"
-        ) from error
-    if not 0 < parsed <= 1:
-        raise argparse.ArgumentTypeError("value must satisfy 0 < value <= 1")
-    return parsed
-
-
-def _non_negative_int(value: str) -> int:
-    try:
-        parsed = int(value)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("must be a non-negative integer") from error
-    if parsed < 0:
-        raise argparse.ArgumentTypeError("must be a non-negative integer")
-    return parsed
-
-
-def _reserve_default_dataset_output(
-    *,
-    directory: Path | None = None,
-    timestamp: datetime | None = None,
-) -> Path:
-    root = directory or Path.cwd()
-    stem = f"test-dataset-{(timestamp or datetime.now()).strftime('%Y%m%d-%H%M%S')}"
-    suffix = 0
-    while True:
-        name = f"{stem}{'' if suffix == 0 else f'-{suffix}'}.jsonl"
-        path = root / name
-        try:
-            with path.open("x", encoding="utf-8"):
-                pass
-        except FileExistsError:
-            suffix += 1
-            continue
+def _resolve_dataset_output(destination: str | Path) -> Path:
+    """Resolve a CLI destination as a directory or an explicit JSONL file."""
+    path = Path(destination)
+    if path.is_file() or path.suffix.lower() == ".jsonl":
         return path
-
-
-def _discard_empty_reservation(path: Path | None) -> None:
-    if path is None:
-        return
-    try:
-        if path.exists() and path.stat().st_size == 0:
-            path.unlink()
-    except OSError:
-        pass
-
-class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
-    def __init__(self, prog: str) -> None:
-        super().__init__(prog, max_help_position=32, width=100)
+    path.mkdir(parents=True, exist_ok=True)
+    return _timestamped_dataset_output(path)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lladar",
-        description="Generate controlled datasets for inspecting implicit assumptions in LLM agents.",
+        description="Generate questions, run a target Agent, evaluate responses, and report results.",
         formatter_class=_HelpFormatter,
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
-    create = commands.add_parser(
-        "create",
-        help="Create a LLaDAR artifact.",
-        description="Create a LLaDAR artifact.",
-        formatter_class=_HelpFormatter,
-    )
-    create_commands = create.add_subparsers(
-        dest="create_command",
-        required=True,
-        metavar="ARTIFACT",
-    )
-    config = create_commands.add_parser(
-        "config",
-        help="Generate an editable test-dataset configuration template.",
-        description="Generate an editable test-dataset configuration template.",
-        formatter_class=_HelpFormatter,
-    )
-    config.add_argument(
-        "--output",
-        default="config.toml",
-        metavar="PATH",
-        help=(
-            "Template destination. Existing files are not overwritten. "
-            "Default: config.toml."
-        ),
-    )
-    config.add_argument(
-        "--force",
-        action="store_true",
-        help="Replace an existing configuration file.",
-    )
+
+    create = commands.add_parser("create", help="Create an artifact.", formatter_class=_HelpFormatter)
+    create_commands = create.add_subparsers(dest="create_command", required=True, metavar="ARTIFACT")
     dataset = create_commands.add_parser(
         "test-dataset",
-        help="Generate controlled source-grounded question groups.",
-        description=(
-            "Generate schema-v2 original questions, information omissions, and "
-            "policy-driven peer-cue variants from .txt and .md knowledge sources."
-        ),
-        epilog="""Examples:
-  lladar create test-dataset --knowledge ./knowledge
-  lladar create test-dataset --config config.toml
-  lladar create test-dataset --knowledge guide.md --chunk-size auto --strict
-  lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
-  lladar create test-dataset --knowledge guide.md --chunk-size auto --max-output-tokens 32768""",
+        help="Generate question and expected-answer records from knowledge.",
         formatter_class=_HelpFormatter,
     )
-    dataset.add_argument(
-        "--knowledge",
-        nargs="+",
-        metavar="PATH",
-        help=(
-            "Files or directories containing knowledge documents. Directories are "
-            "searched recursively for .txt and .md files; multiple paths are allowed. "
-            "Required from either --knowledge or --config."
-        ),
-    )
-    guidance = dataset.add_mutually_exclusive_group()
-    guidance.add_argument(
-        "--prompt",
-        metavar="GUIDANCE",
-        help=(
-            "Optional inline domain context or question-style guidance. Core schema "
-            "and validation rules cannot be overridden."
-        ),
-    )
-    guidance.add_argument(
-        "--prompt-file",
-        metavar="PATH",
-        help=(
-            "UTF-8 file containing domain context or question-style guidance. "
-            "Cannot be combined with --prompt."
-        ),
-    )
-    dataset.add_argument(
-        "--chunk-size",
-        type=_parse_chunk_size,
-        default="auto",
-        metavar="N|auto",
-        help=(
-            "Positive character count for fixed chunks, or 'auto' for Semantic "
-            "chunking with the language model. Default: auto."
-        ),
-    )
-    dataset.add_argument(
-        "--overlap",
-        type=float,
-        default=0.1,
-        metavar="RATIO",
-        help=(
-            "Fraction of each fixed chunk repeated in the next chunk (0 <= value < 1). "
-            "Ignored when --chunk-size auto is used. Default: 0.1."
-        ),
-    )
-    dataset.add_argument(
-        "--config",
-        metavar="PATH",
-        help=(
-            "TOML file containing test-dataset settings. Command-line options "
-            "override config values."
-        ),
-    )
-    dataset.add_argument(
-        "--count",
-        type=_non_negative_int,
-        default=0,
-        metavar="N",
-        help=(
-            "Maximum number of ready question groups. Use 0 to process every "
-            "candidate chunk without a limit. Skipped and duplicate candidates "
-            "do not consume a positive quota. Default: 0."
-        ),
-    )
-    dataset.add_argument(
-        "--seed",
-        type=int,
-        metavar="N",
-        help="Optional seed for reproducible candidate ordering.",
-    )
-    dataset.add_argument(
-        "--policy",
-        action="append",
-        dest="policies",
-        metavar="POLICY",
-        help=(
-            "Exact generation-policy selection. Repeat for multiple policies. Use "
-            "builtin:general-social-context or a local TOML path."
-        ),
-    )
-    dataset.add_argument(
-        "--model",
-        default=DEFAULT_DATASET_MODEL,
-        metavar="MODEL",
-        help=(
-            "Akasha model identifier used for semantic chunking and question generation. "
-            f"Default: {DEFAULT_DATASET_MODEL}."
-        ),
-    )
-    dataset.add_argument(
-        "--max-input-tokens",
-        type=_positive_int,
-        metavar="N",
-        help=(
-            "Override the model profile's input-token budget for the built-in Akasha "
-            "provider. Default: selected model profile."
-        ),
-    )
-    dataset.add_argument(
-        "--max-output-tokens",
-        type=_positive_int,
-        metavar="N",
-        help=(
-            "Override the model profile's output-token budget. Auto chunking also uses "
-            "this value to size semantic windows. Default: selected model profile."
-        ),
-    )
-    dataset.add_argument(
-        "--auto-window-ratio",
-        type=_window_ratio,
-        metavar="RATIO",
-        help=(
-            "Fraction of max output tokens used as the approximate auto-window character "
-            "budget (0 < value <= 1). Default: selected model profile (currently 0.8)."
-        ),
-    )
-    dataset.add_argument(
-        "--verbose",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Show timestamped, colored effective configuration, progress, elapsed time, "
-            "and best-effort ETA on stderr. Use --no-verbose to disable it. Default: enabled."
-        ),
-    )
-    dataset.add_argument(
-        "--output",
-        metavar="PATH",
-        help=(
-            "Destination JSONL file. Existing files are never overwritten. If omitted, "
-            "creates test-dataset-YYYYMMDD-HHMMSS.jsonl in the current directory."
-        ),
-    )
-    dataset.add_argument(
-        "--trace",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Save complete model prompts, raw responses, parsed JSON, and validation "
-            "results below --trace-root. Contains sensitive content. Default: disabled."
-        ),
-    )
-    dataset.add_argument(
-        "--trace-console",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Also print complete traced prompts and raw responses to stderr. Requires --trace."
-        ),
-    )
-    dataset.add_argument(
-        "--trace-root",
-        default=".lladar/runs",
-        metavar="PATH",
-        help="Parent directory for collision-free model trace runs. Default: .lladar/runs.",
-    )
-    dataset.add_argument(
-        "--env-file",
-        default=".env",
-        metavar="PATH",
-        help="Environment file used by Akasha for provider credentials. Default: .env.",
-    )
-    dataset.add_argument(
-        "--strict",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Fail when semantic chunking remains invalid after retries instead of "
-            "falling back to fixed chunks."
-        ),
-    )
-    dataset.add_argument(
-        "--cache",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Reuse semantic chunks and generated groups from the cache, and save new "
-            "successful results."
-        ),
-    )
-    dataset.add_argument(
-        "--cache-dir",
-        default=".lladar/cache",
-        metavar="PATH",
-        help="Directory for semantic-segment and generated-group cache files. Default: .lladar/cache.",
-    )
-    dataset.add_argument(
-        "--refresh-cache",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "Regenerate entries even when cache files exist; refreshed results are saved "
-            "when --cache is enabled."
-        ),
-    )
-    evaluation = commands.add_parser(
-        "eval",
-        help="Evaluate schema-v2 agent answers with the LLaDAR BFS protocol.",
-        description="Join schema-v2 observed answers by stable case ID and write a differential report.",
-        formatter_class=_HelpFormatter,
-    )
-    evaluation.add_argument("dataset", metavar="DATASET", help="Schema-v2 test dataset JSONL.")
-    evaluation.add_argument("answers", metavar="ANSWERS", help="Schema-v2 observed-answer JSONL.")
-    evaluation.add_argument(
-        "--prompt",
-        default=DEFAULT_EVALUATION_PROMPT,
-        help="Optional additional judge guidance; core protocol rules cannot be overridden.",
-    )
-    evaluation.add_argument("--output", default="evaluation-report.json", metavar="PATH")
-    evaluation.add_argument("--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL")
-    evaluation.add_argument("--env-file", default=".env", metavar="PATH")
-    evaluation.add_argument("--strict", action="store_true", help="Fail on alignment or judge errors.")
-    evaluation.add_argument(
-        "--force",
-        action="store_true",
-        help="Allow overwriting existing report artifacts.",
-    )
-    evaluation.add_argument(
-        "--include-raw-answers",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Include answer text in the report. Default: enabled.",
-    )
+    dataset.add_argument("--knowledge", action="append", required=True, metavar="PATH",
+                         help="Knowledge file or directory; repeat for multiple inputs.")
+    dataset.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
+                         help="Use a local method directory containing SKILL.md instead of bundled knowledge-point-qa; only one is supported.")
+    dataset.add_argument("--output", default=".", metavar="DIRECTORY",
+                         help=f"Directory for the generated dataset; the CLI chooses {_DATASET_FILENAME_DISPLAY} (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
+    dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; zero means all candidates.")
+    dataset.add_argument("--seed", type=int, default=0,
+                         help="Deterministic candidate shuffle seed.")
+    dataset.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
+                         help="Model used for dataset generation.")
+    dataset.add_argument("--env-file", default=".env", metavar="PATH",
+                         help="Environment file supplied to the model provider.")
+    dataset.add_argument("--temperature", type=float, default=0.0,
+                         help="Model sampling temperature.")
+    dataset.add_argument("--max-input-tokens", type=int, metavar="N",
+                         help="Override the selected model profile input budget (default: selected model profile).")
+    dataset.add_argument("--max-output-tokens", type=int, metavar="N",
+                         help="Override the selected model profile output budget (default: selected model profile).")
+    dataset.add_argument("--auto-window-ratio", type=float, metavar="RATIO",
+                         help="Override the selected model profile automatic-window ratio (default: selected model profile).")
+    dataset.add_argument("--force", action="store_true",
+                         help="Allow replacement of an existing output file.")
+    dataset.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True,
+                         help="Show LLaDAR progress and the dataset-generation Akasha trace.")
+
     runner = commands.add_parser(
         "run-agent",
-        help="Run a project agent against a schema-v2 LLaDAR test dataset.",
+        help="Fill actual_response by running a target Agent.",
         description=(
-            "Discover project input/output with a coding agent, verify a generated adapter, "
-            "and produce id-keyed answers. Only DATASET is required when run from "
-            "the target project directory. Supply --entrypoint for the legacy explicit mode."
+            "Run a target Agent through an inspected local project or a calibrated "
+            "question website, then fill actual_response in a new JSONL file."
+        ),
+        epilog=(
+            "Browser setup: python -m playwright install chromium. --page-url always uses the guided terminal workflow; "
+            "omit --interactive and --no-interactive (project mode only). "
+            "Browser mode requires terminal stdin and stderr; without them it stops before opening the browser. With --page-url, "
+            "sign in yourself in the isolated browser, submit the exact calibration question "
+            "shown in the terminal, and wait for the site's final answer before pressing Enter. "
+            "Review the website requests, model destination, real response content transfer and budgets together. "
+            "One YES approves BOTH website requests and model transfer; the two approval flags still grant only their named scopes. "
+            "Then type MATCH after independent verification in the color terminal review (stderr), not an HTML tab. "
+            "Approval flags do not skip review. NO_COLOR or TERM=dumb disables color; redirected review output is refused. "
+            "The full verification response appears in terminal scrollback; no review file is created. "
+            "Browser sign-in and capture are still required. "
+            "At most N+2 model calls for N scheduled trials, each capped at 8192 output tokens, share 60 minutes. "
+            "Input is capped at 120 KiB including JSON framing; no truncation, retries or parser cache. "
+            "On HTTP 401/403, the run stops; sign in again before starting a newly approved run. "
+            "Final answers are saved in responses and trials; cookies, tokens and raw streams are not. "
+            "Each captured response is limited to 1 MiB of decoded bytes; --timeout does not raise this limit. "
+            "Browser startup and page navigation separately allow 300 seconds (5 minutes); --timeout controls website requests, not navigation. "
+            "The local session stays in .lladar/browser-profiles. "
+            "--service-url does not discover an arbitrary API; it is for an inspected project."
         ),
         formatter_class=_HelpFormatter,
     )
-    runner.add_argument("dataset", metavar="DATASET", help="Schema-v2 LLaDAR test dataset JSONL.")
-    runner.add_argument("--project", default=".", metavar="PATH", help="Project directory to copy. Default: current directory (.).")
     runner.add_argument(
-        "--entrypoint",
-        metavar="PATH",
-        help="Optional explicit Python entrypoint. Default: automatic adapter discovery.",
+        "dataset", metavar="DATASET",
+        help="Input test-dataset JSONL whose actual_response values are null.",
     )
-    runner.add_argument("--output", default="qa-results.jsonl", metavar="PATH", help="Answer JSONL path. Default: qa-results.jsonl.")
-    runner.add_argument("--model", default=DEFAULT_MODEL, metavar="MODEL", help=f"Adapter discovery model. Default: {DEFAULT_MODEL}.")
-    runner.add_argument("--env-file", default=".env", metavar="PATH", help="Credential file. Default: .env.")
-    runner.add_argument("--target-python", metavar="PATH", help="Separate target interpreter. Default: project .venv; never LLaDAR's environment.")
-    runner.add_argument("--timeout", type=float, default=120, help="Seconds allowed per adapter/target execution. Default: 120.")
-    runner.add_argument("--max-tool-calls", type=int, default=100, help="Automatic discovery tool-call budget. Default: 100.")
-    runner.add_argument("--intent", default="", help="Public feature to test, in ordinary language. Default: no additional intent.")
-    runner.add_argument("--graphify", action=argparse.BooleanOptionalAction, default=True,
-                        help="Use an optional Graphify code graph first, with source fallback on failure. Default: enabled.")
-    runner.add_argument("--graphify-python", metavar="PATH", help="Independent Graphify interpreter. Default: existing uv tool installation.")
-    runner.add_argument("--service-url", metavar="URL", help="Explicit existing test service URL; never start/stop that service. Default: none.")
-    runner.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=None,
-                        help="Ask about ambiguous interfaces. Default: detect an interactive terminal.")
-    runner.add_argument("--force", action="store_true", help="Allow overwriting an existing answer file. Default: disabled.")
+    target = runner.add_mutually_exclusive_group()
+    target.add_argument(
+        "--project", default=None, metavar="PATH",
+        help="Target Agent project directory to inspect and copy into the isolated run workspace (default: current directory).",
+    )
+    target.add_argument(
+        "--page-url", metavar="URL",
+        help="Question website page opened in a visible isolated browser for manual sign-in, one calibration submission, and replay.",
+    )
     runner.add_argument(
-        "--verbose",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Show timestamped run progress and errors on stderr. Default: enabled.",
+        "--output", default="responses.jsonl", metavar="PATH",
+        help="Destination responses JSONL; also writes PATH.trials.jsonl and PATH.run.json beside it.",
     )
-    resume = commands.add_parser("resume-agent", help="Resume a run waiting for public-interface confirmation.")
-    resume.add_argument("run", metavar="RUN", help="Saved .lladar/runs/<run> directory.")
-    decision = resume.add_mutually_exclusive_group()
-    decision.add_argument("--candidate", metavar="ID", help="Select an evidenced public interface from the saved proposal.")
-    decision.add_argument("--clarification", metavar="TEXT", help="Add intent and redo read-only discovery.")
-    resume.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=None)
-    resume.add_argument("--env-file", default=None, metavar="PATH", help="Optional credential file override; otherwise reuse saved path.")
-    resume.add_argument("--service-url", metavar="URL", help="Supply an existing test service and rediscover its contract.")
-    resume.add_argument("--force", action="store_true", help="Explicitly allow replacing an existing answer file.")
-    resume.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True)
-    skill = commands.add_parser(
-        "skill",
-        help="Install and manage the LLaDAR agent-evaluation skill.",
-        description="Install the project-local LLaDAR agent-evaluation skill for an agent platform.",
+    runner.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
+                        help="Use a local method directory containing SKILL.md; otherwise use bundled run-agent-stability.")
+    runner.add_argument("--seed", type=int, default=0,
+                        help="Deterministic random selection seed.")
+    runner.add_argument(
+        "--model", default=None, metavar="MODEL",
+        help="Project coding model (default: gemini:gemini-2.5-flash), or browser answer extraction model (default: gemini:gemini-3.8-flash; Gemini API only).",
+    )
+    runner.add_argument(
+        "--env-file", default=".env", metavar="PATH",
+        help="Environment file for the coding model provider and target process; existing environment variables win.",
+    )
+    runner.add_argument(
+        "--target-python", metavar="PATH",
+        help="Target project's Python executable (default: discover PROJECT/.venv automatically).",
+    )
+    runner.add_argument(
+        "--timeout", type=float, default=3600, metavar="SECONDS",
+        help="Timeout for each adapter, tool subprocess, or browser request (default: 3600 seconds / 60 minutes).",
+    )
+    runner.add_argument(
+        "--max-tool-calls", type=int, default=100, metavar="N",
+        help="Maximum tool calls per discovery or adapter-repair agent turn.",
+    )
+    runner.add_argument(
+        "--graphify", action=argparse.BooleanOptionalAction, default=True,
+        help="Build an optional static code graph before source exploration; use --no-graphify to disable (default: enabled).",
+    )
+    runner.add_argument(
+        "--graphify-python", metavar="PATH",
+        help="Python executable containing graphifyy (default: discover an existing uv tool environment automatically).",
+    )
+    runner.add_argument(
+        "--service-url", metavar="URL",
+        help="Existing test-service base URL that the generated adapter may call (default: none).",
+    )
+    runner.add_argument(
+        "--confirm-browser-run", action="store_true",
+        help="Preapprove only the browser verification and scheduled dataset requests. Model-transfer approval is still required; neither flag skips MATCH review.",
+    )
+    runner.add_argument(
+        "--fresh-browser-profile", action="store_true",
+        help="Use a temporary signed-out browser profile for this run instead of the reusable site profile.",
+    )
+    runner.add_argument(
+        "--allow-response-model-transfer", action="store_true",
+        help="Approve real captured response content transfer to --model for this run only; N+2 calls for N trials, 8192 output tokens per call, shared 60 minutes. Does not approve website requests or skip local verification.",
+    )
+    runner.add_argument(
+        "--interactive", action=argparse.BooleanOptionalAction, default=None,
+        help="Project mode only: allow or disable project-interface prompts (default: enabled only on a TTY). Not accepted with --page-url, which always uses the guided terminal workflow.",
+    )
+    runner.add_argument(
+        "--force", action="store_true",
+        help="Replace an existing responses file and its sidecars (default: disabled).",
+    )
+    runner.add_argument(
+        "--verbose", action=argparse.BooleanOptionalAction, default=True,
+        help="Show LLaDAR progress and coding-agent traces; use --no-verbose to hide them (default: enabled).",
+    )
+
+    evaluation = commands.add_parser(
+        "eval",
+        help="Plan and run an Agent-assisted evaluation.",
         formatter_class=_HelpFormatter,
     )
-    skill_commands = skill.add_subparsers(dest="skill_command", required=True, metavar="ACTION")
-    skill_install = skill_commands.add_parser("install", help="Install the skill into project-local platform directories.")
-    skill_install.add_argument("--target", required=True, choices=("codex", "claude", "antigravity", "all"))
-    skill_install.add_argument("--force", action="store_true", help="Replace modified installed files.")
-    skill_update = skill_commands.add_parser("update", help="Update an installed skill.")
-    skill_update.add_argument("--target", required=True, choices=("codex", "claude", "antigravity", "all"))
-    skill_update.add_argument("--force", action="store_true", help="Replace modified installed files.")
-    skill_list = skill_commands.add_parser("list", help="List installed project-local skill targets.")
-    skill_uninstall = skill_commands.add_parser("uninstall", help="Remove an installed skill.")
-    skill_uninstall.add_argument("--target", required=True, choices=("codex", "claude", "antigravity", "all"))
-    skill_uninstall.add_argument("--force", action="store_true", help="Remove modified installed files.")
+    evaluation.add_argument("responses", metavar="RESPONSES")
+    evaluation.add_argument("--output", default="evaluation.json", metavar="PATH")
+    evaluation.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
+                            help="Use a local method directory containing SKILL.md; otherwise use bundled eval-answer-verdict.")
+    evaluation.add_argument("--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL")
+    evaluation.add_argument("--env-file", default=".env", metavar="PATH")
+    evaluation.add_argument("--strict", action="store_true")
+    evaluation.add_argument("--force", action="store_true")
+
+    report = commands.add_parser(
+        "report",
+        help="Render an evidence-bounded Markdown report.",
+        formatter_class=_HelpFormatter,
+    )
+    report.add_argument("eval_output", metavar="EVALUATION")
+    report.add_argument("--output", default="report.md", metavar="PATH")
+    report.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
+                        help="Use a local method directory containing SKILL.md; otherwise use bundled report-evidence-summary.")
+    report.add_argument("--model", default=DEFAULT_REPORT_MODEL, metavar="MODEL")
+    report.add_argument("--env-file", default=".env", metavar="PATH")
+    report.add_argument("--force", action="store_true")
     return parser
 
 
 def main(
     argv: Sequence[str] | None = None,
     *,
-    provider: LLMProvider | None = None,
-    adapter_controller: AdapterController | None = None,
     runs_root: str | Path | None = None,
+    skill_agent_factory: Callable[..., Any] | None = None,
+    browser_target_factory: Callable[..., Any] | None = None,
+    extraction_provider_factory: Callable[..., Any] | None = None,
 ) -> int:
-    # Use the same Unicode encoding for interactive prompts and redirected logs.
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
-    raw_argv = list(argv) if argv is not None else sys.argv[1:]
-    args = build_parser().parse_args(raw_argv)
-    reserved_default_output: Path | None = None
-    dataset_output: Path | None = None
+    parser = build_parser()
+    args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.command == "run-agent" and args.page_url:
+        if args.interactive is not None:
+            parser.error("--interactive and --no-interactive are project mode only; omit both with --page-url.")
+        if not (sys.stdin.isatty() and sys.stderr.isatty()):
+            parser.error(
+                "--page-url requires terminal stdin and stderr for sign-in, calibration, consent and MATCH review. "
+                "Run directly in a terminal without piping input or redirecting stderr; no interaction flag is needed."
+            )
+        args.interactive = True
     try:
-        if args.command == "create" and args.create_command == "config":
-            config_path = Path(args.output)
-            try:
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-                mode = "w" if args.force else "x"
-                with config_path.open(mode, encoding="utf-8") as destination:
-                    destination.write(_CONFIG_TEMPLATE)
-            except FileExistsError as error:
-                raise LladarError(f"config already exists: {config_path}") from error
-            print(f"Created config template at {config_path}")
-            return 0
-        if args.command == "skill":
-            if args.skill_command in ("install", "update"):
-                destinations = install_skill(args.target, force=args.force)
-                action = "Installed" if args.skill_command == "install" else "Updated"
-                for destination in destinations:
-                    print(f"{action} {destination}")
-            elif args.skill_command == "list":
-                entries = list_skills()
-                if not entries:
-                    print("No LLaDAR skills installed.")
-                for entry in entries:
-                    print(f"{entry['target']}: {entry['path']} (version={entry['package_version'] or 'unknown'})")
-            else:
-                destinations = uninstall_skill(args.target, force=args.force)
-                for destination in destinations:
-                    print(f"Uninstalled {destination}")
-            return 0
-        if args.command == "eval":
-            report = evaluate(
-                args.dataset,
-                args.answers,
-                prompt=args.prompt,
-                output=args.output,
+        if args.command == "create":
+            output = _resolve_dataset_output(args.output)
+            records = create_test_dataset(
+                [Path(path) for path in args.knowledge],
+                output=output,
+                count=args.count,
+                seed=args.seed,
                 model=args.model,
+                skill=args.skill,
+                skill_agent_factory=skill_agent_factory,
                 env_file=args.env_file,
-                provider=provider,
-                strict=args.strict,
-                include_raw_answers=args.include_raw_answers,
+                temperature=args.temperature,
+                max_input_tokens=args.max_input_tokens,
+                max_output_tokens=args.max_output_tokens,
+                auto_window_ratio=args.auto_window_ratio,
                 force=args.force,
+                verbose=args.verbose,
             )
-            print(
-                f"Evaluated {report['summary']['scheduled_comparisons']} comparison(s) "
-                f"at {args.output}"
-            )
-            return 0
-        if args.command == "resume-agent":
-            from .run_context import load_context
-
-            if args.service_url and args.candidate:
-                raise ValueError('--service-url changes the contract; use clarification instead of --candidate')
-            saved = load_context(args.run)
-            completed = run_agent(
-                saved["dataset"], saved["output"], project=saved["project"],
-                model=saved["model"], target_python=saved["target_python"],
-                env_file=args.env_file if args.env_file is not None else saved["env_file"],
-                timeout=saved["timeout"], max_tool_calls=saved["max_tool_calls"],
-                intent=saved["intent"], interactive=args.interactive,
-                graphify=saved.get("graphify", True), graphify_python=saved.get("graphify_python"),
-                service_url=args.service_url or saved.get('service_url'),
-                resume_run=args.run, candidate_id=args.candidate,
-                clarification=args.clarification or ('Use the explicitly supplied existing test service.' if args.service_url else None),
-                force=args.force, verbose=args.verbose,
-            )
-            print(f"Answered {completed} session(s) at {saved['output']}")
+            metadata = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+            status = f" (status={metadata['status']}; provenance={output}.generation.json)"
+            print(f"Generated {len(records)} record(s) at {output}{status}")
             return 0
         if args.command == "run-agent":
+            project = args.project if args.project is not None else (None if args.page_url else ".")
             completed = run_agent(
                 args.dataset,
                 args.output,
-                project=args.project,
-                entrypoint=args.entrypoint,
-                adapter=adapter_controller
-                or AkashaAdapterController(model=args.model, env_file=args.env_file),
+                project=project,
+                page_url=args.page_url,
                 env_file=args.env_file,
                 force=args.force,
                 verbose=args.verbose,
@@ -685,78 +294,67 @@ def main(
                 target_python=args.target_python,
                 timeout=args.timeout,
                 max_tool_calls=args.max_tool_calls,
+                skill=args.skill,
+                seed=args.seed,
                 interactive=args.interactive,
-                intent=args.intent,
-                graphify=args.graphify, graphify_python=args.graphify_python,
+                graphify=args.graphify,
+                graphify_python=args.graphify_python,
                 service_url=args.service_url,
+                confirm_browser_run=args.confirm_browser_run,
+                fresh_browser_profile=args.fresh_browser_profile,
+                browser_target_factory=browser_target_factory,
+                extraction_provider_factory=extraction_provider_factory,
+                allow_response_model_transfer=args.allow_response_model_transfer,
+                strategy_agent_factory=skill_agent_factory,
             )
-            print(f"Answered {completed} session(s) at {args.output}")
+            print(f"Answered {completed} record(s) at {args.output}")
             return 0
-        config_settings: dict[str, object] = {}
-        if args.config is not None:
-            config_settings = load_test_dataset_config(args.config)
-            _merge_dataset_config(args, config_settings, raw_argv)
-            _warn_about_overrides(
-                args.config,
-                _overridden_config_keys(args, config_settings, raw_argv),
+        if args.command == "eval":
+            result = evaluate(
+                args.responses,
+                output=args.output,
+                skill=args.skill,
+                model=args.model,
+                env_file=args.env_file,
+                strict=args.strict,
+                force=args.force,
             )
-            ProgressReporter(enabled=args.verbose).configuration(
-                {"config": Path(args.config).resolve()}
-            )
-        if args.trace_console and not args.trace:
-            raise LladarError("--trace-console requires --trace")
-        if args.knowledge is None:
-            raise LladarError("test-dataset requires knowledge from --knowledge or --config")
-        if args.config is not None:
-            validate_test_dataset_input_paths(args.knowledge, args.prompt_file)
-        if args.output is None:
-            reserved_default_output = _reserve_default_dataset_output()
-            dataset_output = reserved_default_output
-        else:
-            dataset_output = Path(args.output)
-        dataset = create_test_dataset(
-            knowledge=[Path(value) for value in args.knowledge],
-            prompt=args.prompt,
-            prompt_file=args.prompt_file,
-            chunk_size=args.chunk_size,
-            overlap=args.overlap,
-            count=args.count,
-            seed=args.seed,
-            policies=args.policies,
+            print(f"Evaluated {result['summary']['evaluated']} record(s) at {args.output}")
+            return 0
+        destination = create_report(
+            args.eval_output,
+            args.output,
             model=args.model,
-            output=dataset_output,
-            provider=provider,
             env_file=args.env_file,
-            max_input_tokens=args.max_input_tokens,
-            max_output_tokens=args.max_output_tokens,
-            auto_window_ratio=args.auto_window_ratio,
-            strict=args.strict,
-            force=reserved_default_output is not None,
-            cache=args.cache,
-            cache_dir=args.cache_dir,
-            refresh_cache=args.refresh_cache,
-            verbose=args.verbose,
-            trace=args.trace,
-            trace_console=args.trace_console,
-            trace_root=args.trace_root,
+            skill=args.skill,
+            force=args.force,
         )
+        print(f"Created evaluation report at {destination}")
+        return 0
     except NeedsConfirmation as error:
-        print(str(error), file=sys.stderr)
-        return 3
-    except SkillError as error:
-        _discard_empty_reservation(reserved_default_output)
         print(f"lladar: {error}", file=sys.stderr)
-        return 2
+        return 3
     except ProviderError:
-        _discard_empty_reservation(reserved_default_output)
         print("lladar: provider generation failed", file=sys.stderr)
         return 2
-    except (LladarError, FileExistsError, OSError, ValueError, RuntimeError) as error:
-        _discard_empty_reservation(reserved_default_output)
-        print(f"lladar: {error}", file=sys.stderr)
+    except KeyboardInterrupt:
+        print("lladar: Cancelled. Completed browser answers, if any, were preserved.", file=sys.stderr)
+        return 130
+    except Exception as error:
+        if args.command == "run-agent" and args.page_url:
+            if isinstance(error, AssertionError) and (
+                browser_target_factory is not None or extraction_provider_factory is not None
+            ):
+                raise
+            from .browser_target import browser_error_message
+
+            message = browser_error_message(error)
+        elif isinstance(error, (LladarError, FileExistsError, OSError, ValueError, RuntimeError)):
+            message = str(error)
+        else:
+            raise
+        print(f"lladar: {message}", file=sys.stderr)
         return 2
-    print(f"Generated {len(dataset)} dataset item(s) at {dataset_output}")
-    return 0
 
 
 if __name__ == "__main__":

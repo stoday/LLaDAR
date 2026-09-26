@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLaDAR 文件</title>
+  <meta name="description" content="用 LLaDAR 測試既有 Agent，從準備題目到產出報告。">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="index.html">LLaDAR</a>
+    <nav aria-label="主要導覽">
+      <a href="getting-started.html">開始使用</a>
+      <a href="guides/create-dataset.html">使用指南</a>
+      <a href="examples/support-demo-agent.html">範例</a>
+      <a class="language" href="../index.html" lang="en">English</a>
+    </nav>
+  </header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="index.html" aria-current="page">綜覽</a><a href="getting-started.html">開始使用</a><a href="guides/create-dataset.html">建立測試資料</a><a href="guides/run-agent.html">執行 Agent</a><a href="guides/evaluate.html">評估回答</a><a href="guides/report.html">產生報告</a><a href="reference/cli.html">命令參考</a><a href="examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact">
+      <p class="eyebrow">LLaDAR 文件</p>
+      <h1>把「Agent 有沒有做好事」變成能重複執行的測試</h1>
+      <p class="lead">LLaDAR 會根據你的文件自動出題，把題目送給既有 Agent，再整理每一題的結果和報告。</p>
+      <div class="actions">
+        <a class="button primary" href="getting-started.html">從開始使用看起</a>
+        <a class="button secondary" href="examples/support-demo-agent.html">查看完整範例</a>
+      </div>
+    </section>
+
+    <section>
+      <h2>你可以用它做什麼？</h2>
+      <div class="card-grid">
+        <article class="card"><h3>從文件產生測試題</h3><p>提供要依據的知識文件，LLaDAR 會產生可用來測試 Agent 的題目和預期答案。</p><a href="guides/create-dataset.html">了解如何出題</a></article>
+        <article class="card"><h3>自動把題目交給 Agent</h3><p>讓 LLaDAR 讀取專案，找出如何呼叫 Agent，確認可行後逐題執行。</p><a href="guides/run-agent.html">了解如何執行</a></article>
+        <article class="card"><h3>逐題檢查回答</h3><p>把每題的預期答案和 Agent 實際回答放在一起檢查，再自動統計結果。</p><a href="guides/evaluate.html">了解如何評估</a></article>
+        <article class="card"><h3>產生可閱讀的報告</h3><p>把結果、每題明細、使用的資料和限制整理成報告，方便回頭查。</p><a href="guides/report.html">了解如何產生報告</a></article>
+      </div>
+    </section>
+
+    <section>
+      <h2>一個完整情境：測試既有的客服 Agent</h2>
+      <p>假設你已經有一個客服 Agent，想知道它面對退貨、出貨和退款問題時，會不會依照公司的規則回答。你可以把客服政策交給 LLaDAR：它先依政策出題，再把題目送給 Agent，最後告訴你哪些題目答對、哪些需要改善。</p>
+      <div class="path-grid">
+        <a class="path-card" href="guides/create-dataset.html"><span>1</span><strong>準備知識和題目</strong><small>用客服政策產生測試資料</small></a>
+        <a class="path-card" href="guides/run-agent.html"><span>2</span><strong>執行 Agent</strong><small>讓 Agent 回答每一題</small></a>
+        <a class="path-card" href="guides/evaluate.html"><span>3</span><strong>檢查回答</strong><small>比較預期答案和實際回答</small></a>
+        <a class="path-card" href="guides/report.html"><span>4</span><strong>閱讀報告</strong><small>看整體結果和每題明細</small></a>
+      </div>
+    </section>
+
+    <section>
+      <h2>想改變流程，也可以</h2>
+      <p>LLaDAR 的每個階段都可以放入自己的 <code>SKILL.md</code> 來調整做法。例如，你可以規定出題時只問某些主題、評估時必須檢查哪些規則，或要求報告使用團隊慣用的格式。調整後，LLaDAR 仍會保留過程中的檔案，並由 Python 計算統計結果。</p>
+    </section>
+
+    <section class="note">
+      <h2>開始前要準備什麼？</h2>
+      <p>你需要一份可作為依據的文件、已能運作的 Agent，以及已設定好的 LLaDAR provider。範例 Agent 不需要另外安裝套件；但產生題目和評估回答仍會使用你設定的 provider。</p>
+      <a href="getting-started.html">查看開始使用的完整步驟</a>
+    </section>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

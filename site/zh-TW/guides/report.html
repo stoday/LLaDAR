@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>產生報告 | LLaDAR</title>
+  <meta name="description" content="把評估結果整理成可閱讀、可回頭查的報告。">
+  <link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a class="active" href="report.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../guides/report.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html">建立測試資料</a><a href="run-agent.html">執行 Agent</a><a href="evaluate.html">評估回答</a><a href="report.html" aria-current="page">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">使用指南</p><h1>產生報告</h1><p class="lead">把前面留下的測試資料、回答與評估結果整理成一份可閱讀、可回頭確認的報告。</p></section>
+    <section>
+      <h2>基本用法</h2>
+      <pre><code>lladar report --evaluation artifacts/evaluation.json --output artifacts/report.md</code></pre>
+      <p><code>--evaluation</code> 指向上一階段產生的評估結果；<code>--output</code> 是報告要存放的位置。</p>
+    </section>
+    <section>
+      <h2>報告會告訴你什麼？</h2>
+      <ul>
+        <li>這次測了什麼，以及整體通過情況。</li>
+        <li>哪些題目通過、哪些沒有通過，和各自的判斷理由。</li>
+        <li>統計結果是根據哪些逐題結果算出來的。</li>
+        <li>測試的範圍和限制，例如沒有測到哪些入口或情境。</li>
+      </ul>
+    </section>
+    <section>
+      <h2>把報告用在改善工作</h2>
+      <p>報告不是只用來給一個分數。把未通過的題目分成幾類：是知識文件不清楚、Agent 沒有遵守規則、還是題目沒有涵蓋真正的使用情境？找出原因後，修改文件、Agent 或測試資料，再跑一次同樣流程，就能比較改善前後的差異。</p>
+    </section>
+    <section>
+      <h2>需要團隊自己的報告格式？</h2>
+      <p>可以用 <code>SKILL.md</code> 指定報告要包含的章節、語氣或審核欄位。即使改了呈現方式，逐題結果和統計仍會保留，讓讀者知道每個結論從哪裡來。</p>
+    </section>
+    <section class="note"><h2>範例</h2><p><a href="../examples/support-demo-agent.html">客服 Agent 範例</a>會輸出 <code>artifacts/support-demo/report.md</code>。你可以用它查看哪些客服規則最容易答錯。</p></section>
+    <nav class="page-nav"><a href="evaluate.html">← 評估回答</a><a href="../examples/support-demo-agent.html">查看完整範例 →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

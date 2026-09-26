@@ -1,4 +1,0 @@
-interface:
-  display_name: "LLaDAR Agent Evaluation"
-  short_description: "Run the schema-v2 LLaDAR Agent evaluation workflow"
-  default_prompt: "Use $lladar-agent-evaluation to run my Agent on a schema-v2 LLaDAR dataset and report LLaDAR BFS with coverage and error metrics."

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>建立測試資料 | LLaDAR</title>
+  <meta name="description" content="根據文件建立可測試 Agent 的題目。">
+  <link rel="stylesheet" href="../../assets/style.css">
+</head>
+<body>
+  <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a class="active" href="create-dataset.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../guides/create-dataset.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html" aria-current="page">建立測試資料</a><a href="run-agent.html">執行 Agent</a><a href="evaluate.html">評估回答</a><a href="report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">使用指南</p><h1>建立測試資料</h1><p class="lead">把你想讓 Agent 遵守的文件交給 LLaDAR，讓它產生一組可以實際拿去問 Agent 的題目。</p></section>
+    <section>
+      <h2>這一步在做什麼？</h2>
+      <p>測試資料不是隨便列幾個問題。每一題都會包含問題、預期答案，以及這題為什麼要這樣問的記錄。後面評估時，LLaDAR 會用這些內容判斷 Agent 的回答是否符合文件。</p>
+    </section>
+    <section>
+      <h2>基本用法</h2>
+      <pre><code>lladar create test-dataset --knowledge path/to/policy.md --output artifacts/dataset.json</code></pre>
+      <table><thead><tr><th>選項</th><th>意思</th></tr></thead><tbody>
+        <tr><td><code>--knowledge</code></td><td>你要拿來出題的文件，例如政策、產品規格或內部說明。</td></tr>
+        <tr><td><code>--output</code></td><td>要把產生的測試資料存到哪裡。</td></tr>
+      </tbody></table>
+    </section>
+    <section>
+      <h2>產生後先檢查什麼？</h2>
+      <p>打開 <code>dataset.json</code>，看看題目是不是在測你真正關心的事情、預期答案是否合理，以及是否有足夠的來源說明可回頭確認。若文件本身不完整，題目也無法憑空補齊規則。</p>
+    </section>
+    <section>
+      <h2>想讓題目更符合團隊需求？</h2>
+      <p>在出題階段放入自己的 <code>SKILL.md</code>，就能告訴 LLaDAR 要特別測哪些情境、不要問哪些內容，或採用團隊既有的題目格式。這適合把通用流程改成特定領域的測試流程。</p>
+    </section>
+    <section class="note"><h2>範例</h2><p><a href="../examples/support-demo-agent.html">客服 Agent 範例</a>使用 <code>knowledge.md</code> 中的退貨、出貨和退款規則來出題。接著會把這些題目交給既有 Agent 回答。</p></section>
+    <nav class="page-nav"><a href="../getting-started.html">← 開始使用</a><a href="run-agent.html">下一步：執行 Agent →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

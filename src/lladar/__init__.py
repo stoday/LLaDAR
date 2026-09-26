@@ -1,5 +1,6 @@
 from .api import create_test_dataset
 from .evaluation import evaluate
+from .reporting import create_report
 from .runner import run_agent
 from .exceptions import (
     ChunkingError,
@@ -19,6 +20,7 @@ __all__ = [
     "LladarError",
     "ProviderError",
     "create_test_dataset",
+    "create_report",
     "eval",
     "evaluate",
     "run_agent",

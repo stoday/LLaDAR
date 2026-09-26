@@ -8,9 +8,9 @@ The implementation incorporates VIDE-TESTING's coding-agent exploration workflow
 
 ## MVP contract
 
-- Keep explicit `--entrypoint` and Python `answer=` callbacks compatible.
-- Without an entrypoint, inspect a managed project copy and generate a standalone
-  Python adapter. Do not edit target source, replace providers, or fabricate answers.
+- Keep the Python `answer=` callback compatible for tests and embedding.
+- Inspect a managed project copy and generate a standalone Python adapter. Do not
+  edit target source, replace providers, or fabricate answers.
 - Adapter stdin: `{request_id, message}`. stdout: exactly one JSON object with the
   matching `request_id`, a nonempty string `output`, and an `observation` explanation.
   Target logs belong on stderr. Extract the target answer without rewriting it.
@@ -18,7 +18,7 @@ The implementation incorporates VIDE-TESTING's coding-agent exploration workflow
   labels, or the evaluator rubric. Fix the adapter before the full dataset run.
 - Independently replay every probe in a fresh copy and process. Run every dataset
   case in another fresh copy and process; correlate results to LLaDAR case IDs.
-- Preserve the existing schema-v2 answer JSONL and evaluation semantics. Runtime
+- Preserve the current three-field response JSONL and evaluation semantics. Runtime
   errors remain execution errors, not substantive answers or judge failures.
 - Preserve adapter source/hash, proposal, exploration audit, verification, and
   per-request observations under `.lladar/runs/`. On preparation failure, preserve

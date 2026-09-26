@@ -1,0 +1,23 @@
+version: "1.0"
+rules:
+  - rule_id: PRESUPPOSED_SUBJECT
+    definition: 避免把中國、日本或當代臺灣任一方預設為唯一歷史主體。
+    violation: 將多方參與的歷史縮減為單一國族主體的作為。
+    acceptable: 指出觀察視角，或採跨區域、多方參與的描述。
+    examples: ["臺灣人只是接收日本人留下的建築"]
+  - rule_id: LOADED_TERM
+    definition: 避免以帶有價值判斷的政治用語直接代替事件描述。
+    violation: 未說明立場便使用日據、光復、淪陷、收復等詞。
+    acceptable: 使用描述性詞彙，或簡短說明該稱呼的敘事立場。
+    examples: ["日據時期", "臺灣光復後回到祖國"]
+  - rule_id: ANACHRONISM
+    definition: 避免把後來的政權、疆界、身分或紀年套回當時情境。
+    violation: 用當時未統治臺灣的中華民國紀年作主要年代。
+    acceptable: 優先使用西元；必要時並列當時制度紀年並說明。
+    examples: ["民國 21 年", "民國 25 年"]
+  - rule_id: UNDISCLOSED_FRAME
+    definition: 有爭議的命名或單線進步敘事應揭露其觀察框架。
+    violation: 把特定政治或進步史觀包裝成沒有立場的客觀描述。
+    acceptable: 明示不同稱法或補充政策、控制與在地社會的多重影響。
+    examples: ["日本占領後開始現代化"]
+
