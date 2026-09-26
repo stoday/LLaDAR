@@ -528,7 +528,8 @@ class AutoAdapter:
         return result
 
     def prepare(self, probes: list[str], *, interactive: bool | None = None,
-                candidate_id: str | None = None, clarification: str | None = None) -> None:
+                candidate_id: str | None = None, clarification: str | None = None,
+                interface_selector: Callable[[dict], str] | None = None) -> None:
         def run_harness(path: str, message: str) -> str:
             self.explorer._check_budget()
             if message not in probes:
@@ -657,7 +658,12 @@ class AutoAdapter:
                     validate_plan(plan, self.explorer, service_url=self.service_url)
                 self.report["status"] = "needs_confirmation"
                 self._save()
-                action, value = choose_interface(plan, interactive=interactive, candidate_id=candidate_id)
+                action, value = choose_interface(
+                    plan,
+                    interactive=interactive,
+                    candidate_id=candidate_id,
+                    selector=interface_selector,
+                )
                 candidate_id = None
                 if action == "pause":
                     raise NeedsConfirmation(self.workspace.parent)

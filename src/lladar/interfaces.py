@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 import re
 import sys
@@ -153,8 +154,13 @@ def _display(value: object) -> str:
 
 
 def choose_interface(plan: dict, *, interactive: bool | None,
-                     candidate_id: str | None = None) -> tuple[str, str]:
+                     candidate_id: str | None = None,
+                     selector: Callable[[dict], str] | None = None) -> tuple[str, str]:
     candidates = [c for c in plan["candidates"] if c["public_boundary"]]
+    if selector is not None:
+        if candidate_id is not None:
+            raise ValueError("Provide either candidate_id or selector, not both")
+        candidate_id = selector(plan)
     if candidate_id is not None:
         if candidate_id not in {c["id"] for c in candidates}:
             raise ValueError("Candidate ID is not an evidenced public interface")

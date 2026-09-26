@@ -125,6 +125,7 @@ def run_agent(
     graphify: bool = True,
     graphify_python: str | Path | None = None,
     service_url: str | None = None,
+    interface_selector: Callable[[dict], str] | None = None,
     strategy_agent_factory: SkillAgentFactory | None = None,
     page_url: str | None = None,
     browser_target_factory: Callable[..., Any] | None = None,
@@ -138,6 +139,8 @@ def run_agent(
         raise ValueError("provide exactly one of answer, project, or page_url")
     if page_url is not None and service_url is not None:
         raise ValueError("--service-url applies only to a project target")
+    if project is None and interface_selector is not None:
+        raise ValueError("interface_selector applies only to a project target")
     if page_url is None and confirm_browser_run:
         raise ValueError("--confirm-browser-run requires --page-url")
     if page_url is None and fresh_browser_profile:
@@ -218,7 +221,11 @@ def run_agent(
                     graphify_python=graphify_python,
                     service_url=service_url,
                 )
-                automatic.prepare(probes, interactive=interactive)
+                automatic.prepare(
+                    probes,
+                    interactive=interactive,
+                    interface_selector=interface_selector,
+                )
                 if automatic.source is not None:
                     adapter_sha256 = hashlib.sha256(automatic.source).hexdigest()
             elif page_url is not None and schedule:

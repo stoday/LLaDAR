@@ -11,6 +11,22 @@ from verify_auto_adapter_live import dataset
 from live_acceptance_runtime import runtime_evidence
 
 
+def select_rest_interface(plan):
+    candidates = [
+        candidate for candidate in plan['candidates']
+        if candidate['public_boundary']
+        and candidate.get('transport') == 'http'
+        and candidate.get('service', {}).get('missing') == []
+        and 'POST' in candidate['service'].get('request', '')
+        and '/api/chat' in candidate['service'].get('request', '')
+        and candidate['service'].get('readiness_path') == '/health'
+        and 'server.js' in candidate['service'].get('command', [])
+        and 'node' in candidate['service'].get('command', [])
+    ]
+    assert len(candidates) == 1, 'Expected exactly one complete public POST /api/chat candidate'
+    return candidates[0]['id']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target-python', required=True, type=Path)
@@ -27,7 +43,7 @@ def main():
     data.write_text(json.dumps(dataset('langchain'), ensure_ascii=False) + '\n', encoding='utf-8')
     count = run_agent(data, answers, project=target, target_python=args.target_python,
                       env_file=args.env_file, model=args.model, runs_root=output / 'runs',
-                      interactive=False)
+                      interactive=False, interface_selector=select_rest_interface)
     assert count == 1
     run = next((output / 'runs').iterdir())
     evidence = run / 'adapter'

@@ -28,6 +28,9 @@ def test_evidence_and_noninteractive_selection(tmp_path):
     assert choose_interface(proposal, interactive=False) == ("automatic", "chat")
     proposal["unresolved"] = ["Which tenant?"]
     assert choose_interface(proposal, interactive=False) == ("pause", "")
+    assert choose_interface(
+        proposal, interactive=False, selector=lambda _plan: "chat"
+    ) == ("select", "chat")
 
 
 def test_unsubstantiated_or_internal_candidates_cannot_be_selected(tmp_path):

@@ -103,6 +103,29 @@ def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path):
         assert not stale, f"stale run_agent options: {sorted(stale)}"
         assert options["project"] == target
         assert options["interactive"] is False
+        selector = options["interface_selector"]
+        candidate = {
+            "id": "shop-rest-api",
+            "public_boundary": True,
+            "transport": "http",
+            "service": {
+                "command": ["node", "server.js", "--host", "{host}", "--port", "{port}"],
+                "readiness_path": "/health",
+                "request": "POST /api/chat",
+                "missing": [],
+            },
+        }
+        plan = {
+            "candidates": [candidate],
+            "unresolved": ["The sample client is intentionally outside this backend acceptance."],
+        }
+        assert selector(plan) == "shop-rest-api"
+        with pytest.raises(AssertionError, match="exactly one"):
+            selector({**plan, "candidates": [candidate, {**candidate, "id": "duplicate"}]})
+        incomplete = json.loads(json.dumps(candidate))
+        incomplete["service"]["missing"] = ["startup unknown"]
+        with pytest.raises(AssertionError, match="exactly one"):
+            selector({**plan, "candidates": [incomplete]})
         assert json.loads(data.read_text(encoding="utf-8"))["question"] == "fixture question"
 
         adapter = options["runs_root"] / "run-1" / "adapter"

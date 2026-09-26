@@ -50,8 +50,10 @@ interface discovery itself uses the checked-out project evidence.
   the original Node HTTP API; real LangChain/Gemini/tool calls; one independent
   verification request and three trials of the selected dataset record; final
   response formatting; service shutdown; and unchanged fixture source. The
-  fixture exposes one complete public `POST /api/chat` contract, which normal
-  discovery must select automatically. Missing or ambiguous contracts fail closed.
+  live harness accepts discovery only when exactly one candidate matches the
+  fixture's complete public `node server.js` / `POST /api/chat` / `/health`
+  contract. Missing, incomplete or ambiguous matching contracts fail closed;
+  unrelated discovery uncertainty cannot silently redirect the acceptance target.
 
 The controller, target Python and Graphify use separate environments. Node is
 installed explicitly. The live job has a 30-minute time limit. Acceptance
