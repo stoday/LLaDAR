@@ -11,16 +11,19 @@ The workflow `.github/workflows/release.yml` has three gates:
 3. `publish`: only a pushed version tag can publish. The tag must point to the
    current `origin/main` commit, have a matching `pyproject.toml` version, and
    have a completed, successful `main` push run of this workflow for the exact
-   commit. The release check also requires successful Python 3.11, Python 3.12,
-   and real Gemini jobs in that run; a skipped live job cannot authorize release.
-   Existing `vX.Y` and `vX.Y.Z` tag support is unchanged.
+   commit. If that run is not visible yet or is still queued/in progress, the
+   release gate polls every 15 seconds for up to 35 minutes. A completed failed
+   run still fails immediately. The release check also requires successful
+   Python 3.11, Python 3.12, and real Gemini jobs in that run; a skipped live job
+   cannot authorize release. Existing `vX.Y` and `vX.Y.Z` tag support is unchanged.
 
 Merging a PR into main creates a main push, so both offline and live tests run
 again on the merged commit. Updating a branch with an open PR runs pytest on
 both its push and PR workflows, but only the PR runs the paid live check.
-Wait for the `main` workflow to pass before pushing a version tag. If the tag
-workflow starts too early, its release gate fails closed; rerun it after `main`
-passes. The tag does not repeat pytest or the paid Gemini check.
+You may push a version tag while the matching `main` workflow is still running;
+the publish job waits for it. Waiting is bounded, so a stuck or unusually delayed
+run still fails after 35 minutes and can be rerun later. The tag does not repeat
+pytest or the paid Gemini check.
 
 ## Required GitHub configuration
 
