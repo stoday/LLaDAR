@@ -259,3 +259,69 @@ pytest
 python -m playwright install chromium
 python -m pytest -m browser
 ```
+
+## Repository structure
+
+The main source, documentation, and example paths are shown below. This is a
+navigation map, not an exhaustive listing; generated datasets, reports, caches,
+virtual environments, and build artifacts are omitted.
+
+```text
+LLaDAR/
+├── pyproject.toml              # Package metadata, dependencies, and lladar CLI entry point
+├── uv.lock                     # Locked dependency versions for uv
+├── README.md                   # English overview and quick start
+├── README.zh-TW.md             # Traditional Chinese overview and quick start
+├── qa_agent.py                 # Standalone Akasha QA script; not the lladar CLI entry point
+├── src/lladar/                 # Installable Python package
+│   ├── cli.py                  # CLI arguments and command dispatch
+│   ├── api.py                  # Python API for creating test datasets
+│   ├── skill_generation.py     # Source evidence, graph/planning stages, and dataset output
+│   ├── skill_agent.py          # Thin adapter to Akasha's native dynamic skill loading
+│   ├── method_skill.py         # Shared skill resolution and invocation for run/eval/report
+│   ├── skill_assets/           # Bundled skills and supporting resources
+│   │   ├── knowledge-point-qa/       # Dataset-generation method (SKILL.md)
+│   │   ├── run-agent-stability/      # Repeated-run method (SKILL.md and strategy.py)
+│   │   ├── run-agent-random-sample/  # Random-sampling method (SKILL.md and strategy.py)
+│   │   ├── eval-answer-verdict/     # Answer-evaluation method (SKILL.md)
+│   │   └── report-evidence-summary/ # Evidence-based report method (SKILL.md)
+│   ├── runner.py               # Execute target agents and record responses/trials
+│   ├── run_strategy.py         # Run scheduling and strategy validation
+│   ├── auto_adapter.py         # Discover, verify, and replay target-project adapters
+│   ├── project_profile.py      # Describe target projects from source evidence
+│   ├── browser_target.py       # Browser-target calibration and question replay
+│   ├── evaluation.py           # Answer judgments and deterministic aggregation
+│   ├── reporting.py            # Render saved evaluation facts and report narratives
+│   ├── semantic_graph.py       # Classify probe responses against source candidates
+│   ├── controlled_variants.py  # Select and validate planner-declared control dimensions
+│   ├── question_types.py       # Question-type and probe contracts, fingerprints, and scoring
+│   ├── records.py              # Read, validate, and write dataset records
+│   ├── loaders.py              # Load knowledge-source text
+│   └── providers/              # Model-provider interfaces and Akasha implementation
+├── tests/                      # Automated tests, browser tests, and target-project fixtures
+├── scripts/                    # Live acceptance, packaging, and release verification scripts
+├── example_project/            # End-to-end target projects
+│   ├── diet/                   # Dietary QA agent and knowledge source
+│   ├── resume_review/          # Resume-review service and console example
+│   └── tainan_tutorial/        # Tainan recommendation demo, adapters, data, and tests
+├── examples/support-demo-agent/ # Support-agent HTTP demo
+├── akasha-agent-example/       # Small Akasha agent and hello-skill example
+├── docs/                      # PRDs, design notes, verification records, and presentations
+├── site/                      # English documentation website
+│   └── zh-TW/                 # Traditional Chinese documentation website
+├── .github/workflows/         # Release and documentation-deployment automation
+└── .codex/skills/             # Development-assistant skills, separate from runtime skills
+```
+
+To follow dataset creation, start with `cli.py` → `api.py` →
+`skill_generation.py`; skill loading is implemented in `skill_agent.py`, while
+the method instructions live in `skill_assets/*/SKILL.md`. For the remaining
+commands, start with `runner.py` (`run-agent`), `evaluation.py` (`eval`), and
+`reporting.py` (`report`). To customize a method, pass a local skill directory
+with `--skill` rather than editing the bundled assets.
+
+For target integration, also see `adapter_workspace.py`, `project_inventory.py`,
+`graph_discovery.py`, and `interfaces.py` for workspace inspection and discovery;
+`target_environment.py` and `service_runtime.py` for execution environments and
+managed services; and `playwright_driver.py`, `response_capture.py`, and
+`answer_extraction.py` for browser operation and response extraction.
