@@ -78,6 +78,8 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--output", default=".", metavar="DIRECTORY",
                          help=f"Directory for the generated dataset; the CLI chooses {_DATASET_FILENAME_DISPLAY} (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; zero means all candidates.")
+    dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
+                         default="free", help="Preferred generated question type; free preserves source-grounded open answers.")
     dataset.add_argument("--seed", type=int, default=0,
                          help="Deterministic candidate shuffle seed.")
     dataset.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
@@ -263,6 +265,7 @@ def main(
                 [Path(path) for path in args.knowledge],
                 output=output,
                 count=args.count,
+                question_type=args.question_type,
                 seed=args.seed,
                 model=args.model,
                 skill=args.skill,

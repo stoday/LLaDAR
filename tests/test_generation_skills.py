@@ -160,7 +160,7 @@ def test_saved_dataset_has_traceable_sidecar_and_runs_with_existing_runner(gener
     rows = create_test_dataset(source, skill=skill, output=output,
                                skill_agent_factory=ScriptedSkillAgent, verbose=False)
     provenance = json.loads(Path(str(output) + ".generation.json").read_text())
-    assert provenance["schema_version"] == 1
+    assert provenance["schema_version"] == 2
     assert provenance["status"] == "complete"
     assert provenance["dataset"]["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
     assert provenance["skill"]["path"] == str(skill.resolve())
@@ -170,6 +170,9 @@ def test_saved_dataset_has_traceable_sidecar_and_runs_with_existing_runner(gener
     assert len(provenance["dataset"]["lines"]) == 3
     for line in provenance["dataset"]["lines"]:
         assert line["line"] in (1, 2, 3)
+        assert line["question_type"] == "free"
+        assert line["answer_protocol"] == "natural_language"
+        assert len(line["record_fingerprint"]) == 64
         point = points[line["knowledge_point_ids"][0]]
         evidence = point["evidence"][0]
         assert source.read_text()[evidence["start_char"]:evidence["end_char"]] == evidence["quote"]
@@ -193,6 +196,109 @@ def test_saved_dataset_has_traceable_sidecar_and_runs_with_existing_runner(gener
                      strategy_agent_factory=AllCasesSkillAgent, verbose=False) == 3
     actual = read_records(responses)
     assert all(row["actual_response"] == "Received: " + row["question"] for row in actual)
+
+
+def test_create_dataset_accepts_free_question_type_and_publishes_contract(generation_inputs, tmp_path):
+    source, skill = generation_inputs
+    output = tmp_path / "free.jsonl"
+
+    rows = create_test_dataset(
+        source,
+        skill=skill,
+        output=output,
+        question_type="free",
+        skill_agent_factory=ScriptedSkillAgent,
+        verbose=False,
+    )
+
+    sidecar = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+    assert len(rows) == 3
+    assert sidecar["question_type"] == "free"
+    assert {line["question_type"] for line in sidecar["dataset"]["lines"]} == {"free"}
+    assert {line["answer_protocol"] for line in sidecar["dataset"]["lines"]} == {"natural_language"}
+
+
+def test_single_choice_generation_keeps_three_field_dataset_and_source_contract(tmp_path):
+    facts = [
+        "Plan A retains data for 30 days.",
+        "Plan B retains data for 60 days.",
+        "Plan C retains data for 90 days.",
+    ]
+    source = tmp_path / "plans.md"
+    source.write_text("\n".join(facts), encoding="utf-8")
+    skill = tmp_path / "choice-skill"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: choice-skill\ndescription: Generate source-grounded choices.\n---\nUse the provided tools.\n",
+        encoding="utf-8",
+    )
+
+    class ChoiceSkillAgent:
+        def __init__(self, *, skills, tools, **_options):
+            self.name, self.tools = Path(skills[0]).name, tools
+
+        def __call__(self, request):
+            if request["stage"] == "knowledge_points":
+                page = self.tools["read_source"](request["source_id"])
+                self.tools["submit_knowledge_points"]([
+                    {"statement": fact, "topic": "Data retention", "evidence": [
+                        {"read_id": page["read_id"], "quote": fact},
+                    ]}
+                    for fact in facts
+                ])
+            else:
+                points = self.tools["list_knowledge_points"]()
+                option_ids = ["A", "B", "C"]
+                options = [
+                    {"id": option_id, "text": point["statement"], "knowledge_point_id": point["id"]}
+                    for option_id, point in zip(option_ids, points)
+                ]
+                self.tools["submit_qa"]({
+                    "knowledge_point_id": request["knowledge_point_id"],
+                    "knowledge_point_ids": [point["id"] for point in points],
+                    "question": (
+                        "Which plan retains data for 60 days?\n"
+                        + "\n".join(f"{option['id']}. {option['text']}" for option in options)
+                        + "\nReply with one option ID."
+                    ),
+                    "expected_answer": "B",
+                    "question_type": "single_choice",
+                    "answer_protocol": "one_option_id",
+                    "options": options,
+                    "correct_option_ids": ["B"],
+                })
+            return {"loaded_skills": [self.name]}
+
+    output = tmp_path / "single-choice.jsonl"
+    rows = create_test_dataset(
+        source,
+        skill=skill,
+        output=output,
+        question_type="single-choice",
+        skill_agent_factory=ChoiceSkillAgent,
+        verbose=False,
+    )
+
+    assert rows == [{
+        "question": (
+            "Which plan retains data for 60 days?\n"
+            "A. Plan A retains data for 30 days.\n"
+            "B. Plan B retains data for 60 days.\n"
+            "C. Plan C retains data for 90 days.\n"
+            "Reply with one option ID."
+        ),
+        "expected_answer": "B",
+        "actual_response": None,
+    }]
+    sidecar = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+    line = sidecar["dataset"]["lines"][0]
+    assert sidecar["question_type"] == "single-choice"
+    assert line["question_type"] == "single_choice"
+    assert line["answer_protocol"] == "one_option_id"
+    assert line["correct_option_ids"] == ["B"]
+    assert [option["knowledge_point_id"] for option in line["options"]] == [
+        "kp_000001", "kp_000002", "kp_000003",
+    ]
 
 
 @pytest.mark.parametrize("existing", ["dataset.jsonl", "dataset.jsonl.generation.json"])
@@ -439,7 +545,7 @@ def test_source_tools_expire_when_work_item_changes(generation_inputs, tmp_path)
             else:
                 with pytest.raises(ValueError):
                     previous[0]("source_001")
-                assert set(tools) == {"read_knowledge_point", "submit_qa"}
+                assert set(tools) == {"read_knowledge_point", "list_knowledge_points", "submit_qa"}
             return super().__call__(request)
 
     rows = create_test_dataset([source, another], skill=skill,

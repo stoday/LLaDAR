@@ -59,6 +59,11 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     for name, aggregate in evaluation["aggregates"].items():
         lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", "| Metric | Value |", "| --- | ---: |"]
         lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
+    type_rows = _question_type_rows(evaluation["items"])
+    if type_rows:
+        lines += ["", "## By question type", "", "| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        for row in type_rows:
+            lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
     lines += ["", "## Stability", "", "| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
     for row in evaluation["stability"]["records"]:
         lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
@@ -84,3 +89,25 @@ def _value(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6g}"
     return _escape(value)
+
+
+def _question_type_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        question_type = item.get("question_type")
+        if isinstance(question_type, str):
+            groups.setdefault(question_type, []).append(item)
+    rows = []
+    for question_type, group in sorted(groups.items()):
+        evaluated = [item for item in group if item.get("status") == "evaluated"]
+        correct = sum(item.get("values", {}).get("correct") is True for item in evaluated)
+        rows.append({
+            "question_type": question_type,
+            "scheduled": len(group),
+            "execution_error": sum(item.get("status") == "execution_error" for item in group),
+            "evaluated": len(evaluated),
+            "invalid_response_format": sum(item.get("values", {}).get("response_format_valid") is False for item in evaluated),
+            "correct": correct,
+            "correct_rate": correct / len(evaluated) if evaluated else None,
+        })
+    return rows

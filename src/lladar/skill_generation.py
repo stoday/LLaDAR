@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+import re
 import hashlib
 import json
 import os
@@ -20,6 +21,20 @@ from .exceptions import DatasetValidationError, KnowledgeLoadError, ProviderErro
 from .loaders import load_knowledge
 from .records import validate_record
 from .progress import ProgressReporter
+from .question_types import record_fingerprint
+
+
+_REQUEST_TO_TYPE = {
+    "free": "free",
+    "single-choice": "single_choice",
+    "multiple-choice": "multiple_choice",
+    "ranking": "ranking",
+}
+_TYPED_PROTOCOLS = {
+    "single_choice": "one_option_id",
+    "multiple_choice": "option_id_list",
+    "ranking": "ordered_option_ids",
+}
 
 
 def normalize(value: str) -> str:
@@ -103,7 +118,8 @@ class GenerationResult:
 class GenerationWorkspace:
     """Own source positions and accepted candidates; agents submit through tools."""
 
-    def __init__(self, sources: list[tuple[Path, str]], page_chars: int = 12000):
+    def __init__(self, sources: list[tuple[Path, str]], page_chars: int = 12000,
+                 question_type: str = "free"):
         self.sources = {
             f"source_{index:03d}": {"path": str(path.resolve()), "text": text}
             for index, (path, text) in enumerate(sources, 1)
@@ -113,6 +129,8 @@ class GenerationWorkspace:
         self.points: dict[str, dict[str, Any]] = {}
         self.point_identities: dict[tuple, str] = {}
         self.qa: dict[str, dict[str, Any]] = {}
+        self.qa_contracts: dict[str, dict[str, Any]] = {}
+        self.question_type = question_type
         self.current_source: str | None = None
         self.current_point: str | None = None
         self.tool_epoch = 0
@@ -225,20 +243,118 @@ class GenerationWorkspace:
             raise ValueError("knowledge point is not assigned to this QA stage")
         return deepcopy(self.points[knowledge_point_id])
 
+    def list_knowledge_points(self) -> list[dict]:
+        """Expose source-validated facts for a typed-question candidate set."""
+        if self.current_point is None:
+            raise ValueError("knowledge points are only available in the QA stage")
+        return [deepcopy(point) for point in self.points.values()]
+
     def submit_qa(self, record: dict) -> dict:
-        if not isinstance(record, dict) or set(record) != {"knowledge_point_id", "question", "expected_answer"}:
-            raise ValueError("QA requires exactly knowledge_point_id, question, expected_answer")
-        point_id = record["knowledge_point_id"]
+        row, contract, point_id = self.validate_qa(record)
         self.read_knowledge_point(point_id)
-        row = validate_record({"question": record["question"], "expected_answer": record["expected_answer"],
-                               "actual_response": None})
         if point_id in self.qa:
-            if self.qa[point_id] == row:
+            if self.qa[point_id] == row and self.qa_contracts[point_id] == contract:
                 self.stats["repeated_qa_submissions"] += 1
                 return {"accepted": True, "duplicate": True}
             raise ValueError("this knowledge point already has an accepted QA")
         self.qa[point_id] = row
+        self.qa_contracts[point_id] = contract
         return {"accepted": True}
+
+    def validate_qa(self, record: Any) -> tuple[dict[str, Any], dict[str, Any], str]:
+        base_fields = {"knowledge_point_id", "question", "expected_answer"}
+        if not isinstance(record, dict):
+            raise ValueError("QA requires a JSON object")
+        if set(record) == base_fields:
+            point_id = record["knowledge_point_id"]
+            row = validate_record({"question": record["question"], "expected_answer": record["expected_answer"],
+                                   "actual_response": None})
+            contract = {"question_type": "free", "answer_protocol": "natural_language"}
+        else:
+            row, contract, point_id = self.validate_typed_qa(record)
+        expected_type = _REQUEST_TO_TYPE.get(self.question_type)
+        if self.question_type != "auto" and contract["question_type"] != expected_type:
+            raise ValueError(f"QA type must be {expected_type} for --question-type {self.question_type}")
+        return row, contract, point_id
+
+    def validate_typed_qa(self, record: dict) -> tuple[dict[str, Any], dict[str, Any], str]:
+        common = {"knowledge_point_id", "knowledge_point_ids", "question", "expected_answer",
+                  "question_type", "answer_protocol", "options", "correct_option_ids"}
+        question_type = record.get("question_type")
+        if question_type == "ranking":
+            expected_fields = common | {"ranking_axis", "direction"}
+        else:
+            expected_fields = common
+        if set(record) != expected_fields or question_type not in _TYPED_PROTOCOLS:
+            raise ValueError("typed QA has an invalid schema")
+        point_id = record["knowledge_point_id"]
+        point_ids = record["knowledge_point_ids"]
+        if (not isinstance(point_ids, list) or not point_ids or len(set(point_ids)) != len(point_ids)
+                or any(not isinstance(value, str) or value not in self.points for value in point_ids)
+                or point_id not in point_ids):
+            raise ValueError("typed QA must reference known distinct knowledge points")
+        topics = {self.points[value]["topic"] for value in point_ids}
+        if len(topics) != 1:
+            raise ValueError("typed QA options must share one source topic")
+        options = record["options"]
+        if not isinstance(options, list):
+            raise ValueError("typed QA options must be a list")
+        option_ids: list[str] = []
+        option_points: list[str] = []
+        for option in options:
+            if not isinstance(option, dict) or set(option) != {"id", "text", "knowledge_point_id"}:
+                raise ValueError("typed QA option has an invalid schema")
+            option_id, text, option_point = option["id"], option["text"], option["knowledge_point_id"]
+            if (not isinstance(option_id, str) or re.fullmatch(r"[A-Z]", option_id) is None
+                    or not isinstance(text, str) or not text.strip() or option_point not in self.points
+                    or text != self.points[option_point]["statement"]):
+                raise ValueError("typed QA option must be a source-grounded labeled statement")
+            option_ids.append(option_id)
+            option_points.append(option_point)
+        if len(set(option_ids)) != len(option_ids) or set(option_points) != set(point_ids) or len(option_points) != len(point_ids):
+            raise ValueError("typed QA options must map once to every referenced knowledge point")
+        if question_type == "single_choice" and not 2 <= len(options) <= 5:
+            raise ValueError("single-choice QA requires 2 to 5 options")
+        if question_type == "multiple_choice" and not 3 <= len(options) <= 6:
+            raise ValueError("multiple-choice QA requires 3 to 6 options")
+        if question_type == "ranking" and not 3 <= len(options) <= 5:
+            raise ValueError("ranking QA requires 3 to 5 options")
+        correct = record["correct_option_ids"]
+        if (not isinstance(correct, list) or not correct or len(set(correct)) != len(correct)
+                or any(value not in option_ids for value in correct)):
+            raise ValueError("typed QA must declare distinct known correct option IDs")
+        if question_type == "single_choice" and len(correct) != 1:
+            raise ValueError("single-choice QA requires exactly one correct option")
+        if question_type == "multiple_choice" and not 2 <= len(correct) < len(options):
+            raise ValueError("multiple-choice QA requires multiple but not all correct options")
+        if question_type == "ranking" and set(correct) != set(option_ids):
+            raise ValueError("ranking QA must order every option exactly once")
+        expected = (
+            correct[0] if question_type == "single_choice"
+            else ",".join(correct) if question_type == "multiple_choice"
+            else ">".join(correct)
+        )
+        row = validate_record({"question": record["question"], "expected_answer": record["expected_answer"],
+                               "actual_response": None})
+        if row["expected_answer"] != expected:
+            raise ValueError("typed QA expected_answer does not match the response protocol")
+        for option in options:
+            if f"{option['id']}. {option['text']}" not in row["question"]:
+                raise ValueError("typed QA question must display every option")
+        if record["answer_protocol"] != _TYPED_PROTOCOLS[question_type]:
+            raise ValueError("typed QA answer protocol does not match question type")
+        contract = {
+            "question_type": question_type,
+            "answer_protocol": record["answer_protocol"],
+            "options": deepcopy(options),
+            "correct_option_ids": list(correct),
+        }
+        if question_type == "ranking":
+            if (not isinstance(record["ranking_axis"], str) or not record["ranking_axis"].strip()
+                    or record["direction"] not in {"ascending", "descending"}):
+                raise ValueError("ranking QA requires an axis and direction")
+            contract.update(ranking_axis=record["ranking_axis"].strip(), direction=record["direction"])
+        return row, contract, point_id
 
     def tools(self, stage: str) -> dict[str, Callable]:
         self.tool_epoch += 1
@@ -263,12 +379,12 @@ class GenerationWorkspace:
                     return result
             return invoke
         names = ("list_sources", "read_source", "submit_knowledge_points") if stage == "knowledge_points" else (
-            "read_knowledge_point", "submit_qa")
+            "read_knowledge_point", "list_knowledge_points", "submit_qa")
         return {name: scoped(getattr(self, name)) for name in names}
 
 
 def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | None,
-                        count: int, seed: int, model: str, env_file: str | Path,
+                        count: int, question_type: str, seed: int, model: str, env_file: str | Path,
                         temperature: float, profile, verbose: bool) -> GenerationResult:
     skill = skill.resolve()
     if not (skill / "SKILL.md").is_file():
@@ -284,9 +400,14 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     sources = load_knowledge(knowledge)
     if not sources:
         raise KnowledgeLoadError("no supported knowledge files were found")
-    workspace = GenerationWorkspace(sources, page_chars=min(12000, max(1, profile.max_input_tokens // 4)))
+    workspace = GenerationWorkspace(
+        sources,
+        page_chars=min(12000, max(1, profile.max_input_tokens // 4)),
+        question_type=question_type,
+    )
     reporter = ProgressReporter(verbose)
-    reporter.configuration({"skill": skill, "model": model, "sources": len(sources), "count": count, "seed": seed})
+    reporter.configuration({"skill": skill, "model": model, "sources": len(sources), "count": count,
+                            "question_type": question_type, "seed": seed})
     skill_files = {"SKILL.md": hashlib.sha256((skill / "SKILL.md").read_bytes()).hexdigest()}
     executions = []
     if agent_factory is None:
@@ -353,11 +474,16 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             continue
         workspace.current_point = point_id
         workspace.points[point_id].update(execute(
-            {"stage": "qa", "knowledge_point_id": point_id}, lambda: point_id in workspace.qa))
+            {"stage": "qa", "knowledge_point_id": point_id, "question_type": question_type},
+            lambda: point_id in workspace.qa))
         if point_id in workspace.qa:
             row = workspace.qa[point_id]
+            contract = workspace.qa_contracts[point_id]
             identity = (normalize(row["question"]), normalize(row["expected_answer"]))
             if identity in seen_qa:
+                existing = lines[seen_qa[identity]]
+                if any(existing.get(key) != value for key, value in contract.items()):
+                    raise DatasetValidationError("duplicate question/answer has conflicting question-type contracts")
                 lines[seen_qa[identity]]["knowledge_point_ids"].append(point_id)
                 lines[seen_qa[identity]]["qa_ids"].append(point_id.replace("kp_", "qa_", 1))
             else:
@@ -365,16 +491,18 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 records.append(row)
                 qa_id = point_id.replace("kp_", "qa_", 1)
                 lines.append({"line": len(records), "qa_id": qa_id, "qa_ids": [qa_id],
-                              "knowledge_point_ids": [point_id]})
+                              "knowledge_point_ids": [point_id], "record_fingerprint": record_fingerprint(row),
+                              **contract})
     if not records:
         raise DatasetValidationError("no valid question records were generated")
     reporter.done(len(records))
     return GenerationResult(records, {
-        "schema_version": 1, "status": "partial" if any(
+        "schema_version": 2, "question_type": question_type, "status": "partial" if any(
             point.get("status") == "failed" for point in workspace.points.values()) or any(
             source["work"]["status"] == "failed" for source in workspace.sources.values()) else "complete",
         "skill": {"name": skill.name, "path": str(skill), "files": skill_files},
-        "settings": {"model": model, "temperature": temperature, "count": count, "seed": seed,
+        "settings": {"model": model, "temperature": temperature, "count": count,
+                     "question_type": question_type, "seed": seed,
                      "max_attempts": 3, "read_page_chars": workspace.page_chars,
                      "max_input_tokens": profile.max_input_tokens, "max_output_tokens": profile.max_output_tokens},
         "sources": [{"id": key, "path": source["path"], **source["work"], **workspace.coverage(key),
@@ -382,7 +510,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                      "sha256": hashlib.sha256(source["text"].encode("utf-8")).hexdigest()}
                     for key, source in workspace.sources.items()],
         "knowledge_points": list(workspace.points.values()),
-        "qa": [{"id": key.replace("kp_", "qa_", 1), "knowledge_point_id": key, **value}
+        "qa": [{"id": key.replace("kp_", "qa_", 1), "knowledge_point_id": key, **value,
+                **workspace.qa_contracts[key]}
                for key, value in workspace.qa.items()],
         "reads": list(workspace.reads.values()), "executions": executions,
         "dataset": {"lines": lines},

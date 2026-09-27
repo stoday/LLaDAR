@@ -175,7 +175,8 @@ class AkashaSkillAgent:
             "read_source": "Read original text by source_id and zero-based character range; follow next_start to continue.",
             "submit_knowledge_points": "Submit points: each has statement, topic, evidence [{read_id, quote}]. Fix rejected items.",
             "read_knowledge_point": "Read the currently assigned validated knowledge point and its evidence.",
-            "submit_qa": "Submit record with exactly knowledge_point_id, question, expected_answer for the assigned point.",
+            "list_knowledge_points": "List every validated knowledge point for a source-grounded typed-question candidate set.",
+            "submit_qa": "Submit a source-grounded free or typed QA record for the assigned point; follow the selected skill contract.",
         }
         bound = [akasha.create_tool(descriptions.get(name, name), controlled(name, function), name)
                  for name, function in tools.items()]

@@ -11,6 +11,7 @@ from .skill_generation import generate_with_skill, preflight_output
 
 DEFAULT_DATASET_MODEL = "gemini:gemini-3.7-flash"
 BUILTIN_SKILL_DIR = Path(__file__).resolve().parent / "skill_assets" / "knowledge-point-qa"
+QUESTION_TYPES = ("free", "auto", "single-choice", "multiple-choice", "ranking")
 
 
 def create_test_dataset(
@@ -18,6 +19,7 @@ def create_test_dataset(
     *,
     output: str | Path | None = None,
     count: int = 0,
+    question_type: str = "free",
     seed: int = 0,
     model: str = DEFAULT_DATASET_MODEL,
     env_file: str | Path = ".env",
@@ -33,6 +35,8 @@ def create_test_dataset(
     """Generate source-grounded QA with the bundled or selected local skill."""
     if count < 0:
         raise ValueError("count must be zero or greater")
+    if question_type not in QUESTION_TYPES:
+        raise ValueError(f"unknown question type: {question_type}")
     profile = resolve_model_profile(
         model,
         max_input_tokens=max_input_tokens,
@@ -46,6 +50,7 @@ def create_test_dataset(
         skill=Path(skill) if skill is not None else BUILTIN_SKILL_DIR,
         agent_factory=skill_agent_factory,
         count=count,
+        question_type=question_type,
         seed=seed,
         model=model,
         env_file=env_file,

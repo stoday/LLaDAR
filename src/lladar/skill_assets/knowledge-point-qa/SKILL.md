@@ -43,16 +43,27 @@ Example submission shape (replace every value with actual source evidence):
 
 1. Read the assigned `knowledge_point_id` with `read_knowledge_point`. Review its
    statement and every supporting quotation; use only the supplied evidence.
-2. Form one independently understandable question that tests the point. Name
+2. Inspect the request's `question_type`. When it is `free`, form one independently understandable question that tests the point. Name
    the relevant subject explicitly, retaining conditions needed to distinguish
    similar policies or services. Match the source language.
-3. Write a concise `expected_answer` supported by the evidence. Preserve exact
+3. For `single-choice`, `multiple-choice`, `ranking`, or `auto`, first call
+   `list_knowledge_points`. Create a typed question only when the points form a
+   complete, same-topic, source-grounded candidate set. Every displayed option
+   must be the exact statement of one listed point. Never invent a plausible
+   distractor or join unrelated topics. If the requested typed form is not
+   possible, submit a normal free QA when `question_type` is `auto`; do not
+   submit a free QA for an explicitly requested typed form.
+4. Write a concise `expected_answer` supported by the evidence. Preserve exact
    numbers, units, exceptions, and negative statements. Do not fill missing
    details with outside knowledge. If the statement overreaches its quotations,
    formulate a supported question from those quotations; if that is impossible,
    report the issue instead of submitting an invented answer.
-4. Call `submit_qa` with `record` containing exactly `knowledge_point_id`,
-   `question`, and `expected_answer`. Correct validation errors before ending.
+5. For `free`, call `submit_qa` with `record` containing exactly
+   `knowledge_point_id`, `question`, and `expected_answer`. For a typed question,
+   include `knowledge_point_ids`, `question_type`, `answer_protocol`, `options`,
+   and `correct_option_ids`; a ranking also includes `ranking_axis` and
+   `direction`. Use canonical answers: one ID for single choice, comma-separated
+   IDs for multiple choice, and `>`-separated IDs for ranking. Correct validation errors before ending.
    Completion is an accepted submission for the assigned point. Leave final
    dataset formatting, deduplication, output limits, and file writing to LLaDAR.
 

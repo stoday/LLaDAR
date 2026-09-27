@@ -14,6 +14,7 @@ from typing import Any
 from .progress import ProgressReporter
 from .records import read_records, write_records
 from .method_skill import SkillAgentFactory, resolve_skill
+from .question_types import load_question_type_contract
 from .run_strategy import SkillStrategy
 
 
@@ -161,6 +162,7 @@ def run_agent(
     selected_skill = resolve_skill(skill, BUILTIN_RUN_SKILL_DIR)
 
     records = read_records(dataset)
+    question_type_contract = load_question_type_contract(Path(dataset), records)
     if any(record["actual_response"] is not None for record in records):
         raise ValueError("run-agent requires records with actual_response set to null")
     output_path = Path(output)
@@ -362,6 +364,8 @@ def run_agent(
         "target": target_evidence,
     }
     run_record["skill"] = strategy.evidence
+    if question_type_contract is not None:
+        run_record["question_type_contract"] = question_type_contract
     if browser_cancelled:
         run_record["status"] = "cancelled"
     run_path.parent.mkdir(parents=True, exist_ok=True)

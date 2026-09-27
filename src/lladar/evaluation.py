@@ -10,6 +10,7 @@ from typing import Any
 
 from .exceptions import EvaluationError
 from .method_skill import SkillAgentFactory, invoke_skill, resolve_skill
+from .question_types import deterministic_judgment, load_run_question_type_contract, record_fingerprint
 from .records import read_records
 
 
@@ -47,9 +48,27 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
     selected_skill = resolve_skill(skill, BUILTIN_EVALUATION_SKILL_DIR)
     records = read_records(responses)
     trials, trials_source = _load_trials(Path(responses), records)
+    contracts = load_run_question_type_contract(Path(responses))
+    typed_trial_contracts = {
+        (trial["record_index"], trial["trial"]): contracts.get(record_fingerprint(trial))
+        for trial in trials if trial["status"] == "ok"
+    }
+    has_typed_trials = any(contract and contract["question_type"] != "free"
+                           for contract in typed_trial_contracts.values())
     completed = [trial for trial in trials if trial["status"] == "ok"]
     workspace = EvaluationWorkspace()
-    if completed:
+    if has_typed_trials:
+        evidence = {"skill_files": {"SKILL.md": _sha(selected_skill / "SKILL.md")}}
+        workspace.plan = {
+            "title": "Typed response correctness",
+            "approach": "Use deterministic response protocols for typed records and the selected skill for free responses.",
+            "dimensions": [
+                {"name": "correct", "description": "Correct answer", "kind": "boolean"},
+                {"name": "response_format_valid", "description": "Response follows the required answer protocol", "kind": "boolean"},
+            ],
+            "limitations": ["Typed response comparison does not judge source completeness."],
+        }
+    elif completed:
         evidence = invoke_skill(skill=selected_skill, tools={"submit_plan": workspace.submit_plan},
                                 request={"stage": "plan", "records": completed[:25]}, model=model,
                                 env_file=env_file, system_prompt=EVAL_SYSTEM_PROMPT,
@@ -65,12 +84,23 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
     judge_errors = 0
     for trial in trials:
         item = {key: trial.get(key) for key in ("record_index", "trial", "question", "expected_answer", "actual_response")}
+        contract = typed_trial_contracts.get((trial["record_index"], trial["trial"]))
+        item["question_type"] = contract["question_type"] if contract else "unknown"
         if trial["status"] != "ok":
             item.update(status="execution_error", values={}, reason=trial.get("error", "Target Agent returned no response."))
+        elif contract and contract["question_type"] != "free":
+            item.update(status="evaluated", **deterministic_judgment(contract, item["expected_answer"], item["actual_response"]))
         else:
             workspace.judgment = None
             try:
-                invoke_skill(skill=selected_skill, tools={"submit_judgment": workspace.submit_judgment},
+                submit_judgment = workspace.submit_judgment
+                if has_typed_trials:
+                    def submit_judgment(value):
+                        if (isinstance(value, dict) and isinstance(value.get("values"), dict)
+                                and set(value["values"]) == {"correct"}):
+                            value = {**value, "values": {**value["values"], "response_format_valid": None}}
+                        return workspace.submit_judgment(value)
+                invoke_skill(skill=selected_skill, tools={"submit_judgment": submit_judgment},
                              request={"stage": "judgment", **item}, model=model, env_file=env_file,
                              system_prompt=EVAL_SYSTEM_PROMPT, agent_factory=skill_agent_factory)
                 if workspace.judgment is None:
