@@ -64,6 +64,11 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         lines += ["", "## By question type", "", "| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for row in type_rows:
             lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
+    probe_rows = _semantic_probe_rows(evaluation["items"])
+    if probe_rows:
+        lines += ["", "## Semantic probes", "", "| Concept | Scheduled | Mapped | Synthesized | Unmapped |", "| --- | ---: | ---: | ---: | ---: |"]
+        for row in probe_rows:
+            lines.append("| {concept_id} | {scheduled} | {mapped} | {synthesized} | {unmapped} |".format(**{key: _value(value) for key, value in row.items()}))
     lines += ["", "## Stability", "", "| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
     for row in evaluation["stability"]["records"]:
         lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
@@ -110,4 +115,19 @@ def _question_type_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "correct": correct,
             "correct_rate": correct / len(evaluated) if evaluated else None,
         })
+    return rows
+
+
+def _semantic_probe_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        if item.get("probe_type") in {"concept_mapping", "demographic_invariance"} and isinstance(item.get("concept_id"), str):
+            groups.setdefault(item["concept_id"], []).append(item)
+    rows = []
+    for concept_id, group in sorted(groups.items()):
+        outcomes = [item.get("values", {}).get("mapping_outcome") for item in group if item.get("status") == "evaluated"]
+        rows.append({"concept_id": concept_id, "scheduled": len(group),
+                     "mapped": sum(isinstance(value, str) and value.startswith("maps_to:") for value in outcomes),
+                     "synthesized": outcomes.count("synthesized"),
+                     "unmapped": sum(value in {"unmapped", "external_or_unsupported", None} for value in outcomes)})
     return rows

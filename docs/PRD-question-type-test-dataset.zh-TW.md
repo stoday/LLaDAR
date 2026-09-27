@@ -2,11 +2,12 @@
 
 ## 狀態與決策請求
 
-**狀態：提案，尚未實作。**
+**狀態：已實作 MVP；目前以來源驗證與固定題型契約為範圍。**
 
 本文件請求確認下列 MVP 範圍：LLaDAR 在既有自由回答資料集以外，可從確實具備可比較結構的來源內容生成單選、複選與排序題；正式 JSONL 仍嚴格維持三欄。題型在生成時決定並由 sidecar 保存，評測與報表只能讀取已驗證的題型契約，不能從 Agent 回答文字猜測題型。
 
-確認本文件後才開始程式、測試、CLI help 與文件實作。
+程式、測試、CLI help 與雙語使用文件已隨 MVP 更新；真實 provider 驗收仍須由
+具備有效 provider 設定的環境執行。
 
 ## 問題
 
@@ -110,7 +111,8 @@
 
 ### generation sidecar：擴充但不暴露至 JSONL
 
-`<dataset>.jsonl.generation.json` 是題型的權威來源。此功能將其 `schema_version` 升為 2；現有資料集仍可讀取，沒有題型映射者視為題型未知而非被推定為選擇題。
+`<dataset>.jsonl.generation.json` 是題型的權威來源。現行實作只接受與產生 v4；
+沒有 v4 題型映射者視為題型未知，而非被推定為選擇題。
 
 sidecar 的 `dataset` 必須保存完整 JSONL 的 SHA-256 與每筆正式列的映射。每筆映射新增：
 
@@ -194,7 +196,7 @@ sidecar 的 `dataset` 必須保存完整 JSONL 的 SHA-256 與每筆正式列的
 | AC3 | 單選、複選與排序各有固定離線 fixture，覆蓋有效案例及缺少同位階選項、未知選項、關係混合、同分排序與不明排序方向。 |
 | AC4 | 每個題型題的所有選項、正確 ID、比較軸與方向都有可定位來源 evidence。 |
 | AC5 | 正式 JSONL 的每列仍恰有三欄，且通過既有 `read_records`。 |
-| AC6 | generation sidecar v2 具有 dataset hash、record fingerprint、題型、協定、選項／證據映射；dataset 被改寫後 lineage 被拒絕。 |
+| AC6 | generation sidecar v4 具有 dataset hash、record fingerprint、題型、協定、選項／證據映射；dataset 被改寫後 lineage 被拒絕。 |
 | AC7 | runner 在 dataset 與 sidecar 均有效時建立最小題型契約快照；缺少或失效 sidecar 時不猜測題型。 |
 | AC8 | eval 對有效題型契約做決定性格式／答案比對，並原樣保存 Agent 回覆。 |
 | AC9 | eval 對無 lineage 的 responses 維持一般評測，report 顯示題型統計不可得而非失敗。 |
@@ -204,14 +206,14 @@ sidecar 的 `dataset` 必須保存完整 JSONL 的 SHA-256 與每筆正式列的
 ## 建議實作順序
 
 1. 先定義題型候選集合、可行性驗證器與固定 fixture；以測試先鎖住「單一事實不可硬做選擇題」。
-2. 讓內建生成 skill 在受控的唯讀候選集合上渲染題目，核心驗證後輸出既有三欄資料與 generation sidecar v2。
+2. 讓內建生成 skill 在受控的唯讀候選集合上渲染題目，核心驗證後輸出既有三欄資料與 generation sidecar v4。
 3. 實作 runner 的 dataset／sidecar 核對與最小 lineage snapshot。
 4. 實作 eval 的 deterministic protocol judge 與 report 題型表。
 5. 更新 CLI help、雙語文件與使用案例；最後以小型、無敏感來源進行真實 provider 驗收，將結果與離線測試清楚區分。
 
-## 核准後的執行範例
+## 執行範例
 
-下列是**功能完成後**的示意命令；目前尚不能執行，因為 `--question-type` 還未實作。
+下列命令可直接執行：
 
 ```powershell
 .\.venv\Scripts\lladar.exe create test-dataset `

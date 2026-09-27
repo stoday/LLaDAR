@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from lladar.cli import build_parser
 from lladar.evaluation import evaluate
 from lladar.reporting import create_report
 from lladar.runner import run_agent
+
+
+def test_generation_sidecar_has_one_current_contract_version():
+    from lladar.question_types import GENERATION_SIDECAR_VERSION
+    import lladar.question_types as question_types
+
+    source = Path(question_types.__file__).read_text(encoding="utf-8")
+    assert GENERATION_SIDECAR_VERSION == 4
+    assert source.count("GENERATION_SIDECAR_VERSION") == 3
+    assert re.search(r"schema_version[^\n]*(?:2|3)", source) is None
 
 
 def test_create_dataset_cli_exposes_question_type_with_compatible_default():
@@ -25,7 +36,7 @@ def test_create_dataset_cli_exposes_question_type_with_compatible_default():
     assert selected.question_type == "multiple-choice"
 
 
-def test_run_agent_snapshots_verified_question_type_contract(tmp_path):
+def test_run_agent_snapshots_verified_v4_question_type_contract(tmp_path):
     dataset = tmp_path / "dataset.jsonl"
     record = {
         "question": "Which option is correct?\nA. First\nB. Second\nReply with one option ID.",
@@ -37,7 +48,7 @@ def test_run_agent_snapshots_verified_question_type_contract(tmp_path):
         json.dumps([record["question"], record["expected_answer"]], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     sidecar = {
-        "schema_version": 2,
+        "schema_version": 4,
         "dataset": {
             "sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
             "lines": [{

@@ -9,6 +9,9 @@ from typing import Any
 import unicodedata
 
 
+GENERATION_SIDECAR_VERSION = 4
+
+
 def record_fingerprint(record: dict[str, Any]) -> str:
     """Return the stable join key for a question and expected answer."""
     payload = json.dumps(
@@ -26,7 +29,8 @@ def load_question_type_contract(dataset: Path, records: list[dict[str, Any]]) ->
         raw = sidecar_path.read_bytes()
         sidecar = json.loads(raw.decode("utf-8"))
         metadata = sidecar["dataset"]
-        if sidecar.get("schema_version") != 2 or metadata.get("sha256") != hashlib.sha256(dataset.read_bytes()).hexdigest():
+        if (sidecar.get("schema_version") != GENERATION_SIDECAR_VERSION
+                or metadata.get("sha256") != hashlib.sha256(dataset.read_bytes()).hexdigest()):
             return None
         lines = metadata["lines"]
         if not isinstance(lines, list) or len(lines) != len(records):
@@ -60,6 +64,64 @@ def load_question_type_contract(dataset: Path, records: list[dict[str, Any]]) ->
         }
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
         return None
+
+
+def load_probe_contract(dataset: Path, records: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return verified v4 semantic-probe metadata without exposing source text."""
+    sidecar_path = Path(str(dataset) + ".generation.json")
+    try:
+        raw = sidecar_path.read_bytes()
+        sidecar = json.loads(raw.decode("utf-8"))
+        metadata = sidecar["dataset"]
+        if (sidecar.get("schema_version") != GENERATION_SIDECAR_VERSION
+                or metadata.get("sha256") != hashlib.sha256(dataset.read_bytes()).hexdigest()):
+            return None
+        lines = metadata["lines"]
+        if not isinstance(lines, list) or len(lines) != len(records):
+            return None
+        contracts: dict[str, dict[str, Any]] = {}
+        for index, record in enumerate(records, 1):
+            line = lines[index - 1]
+            fingerprint = record_fingerprint(record)
+            if not isinstance(line, dict) or line.get("line") != index or line.get("record_fingerprint") != fingerprint:
+                return None
+            if line.get("plan_type") not in {"concept_mapping", "demographic_invariance"}:
+                continue
+            candidates = line.get("candidates")
+            if not isinstance(candidates, list) or not candidates:
+                return None
+            normalized = []
+            for candidate in candidates:
+                if not isinstance(candidate, dict) or not all(isinstance(candidate.get(key), str) and candidate[key]
+                                                              for key in ("entity_id", "label", "value", "unit")):
+                    return None
+                normalized.append({key: candidate[key] for key in ("entity_id", "label", "value", "unit")})
+            contract = {"plan_type": line["plan_type"], "candidates": normalized,
+                        "concept_id": line.get("concept_id"), "concept_origin": line.get("concept_origin"),
+                        "pair_id": line.get("pair_id"), "varied_dimension": line.get("varied_dimension"),
+                        "expected_relation": line.get("expected_relation")}
+            if not isinstance(contract["concept_id"], str) or not isinstance(contract["concept_origin"], str):
+                return None
+            if contract["plan_type"] == "demographic_invariance" and (
+                not isinstance(contract["pair_id"], str) or not isinstance(contract["varied_dimension"], str)
+                or contract["expected_relation"] != "invariant"
+            ):
+                return None
+            contracts[fingerprint] = contract
+        return {"dataset_sha256": metadata["sha256"], "generation_sidecar_sha256": hashlib.sha256(raw).hexdigest(),
+                "records": contracts}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def load_run_probe_contract(responses: Path) -> dict[str, dict[str, Any]]:
+    """Read the verified semantic-probe snapshot written by run-agent."""
+    try:
+        run = json.loads(Path(str(responses) + ".run.json").read_text(encoding="utf-8"))
+        records = run["probe_contract"]["records"]
+        return records if isinstance(records, dict) else {}
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return {}
 
 
 def load_run_question_type_contract(responses: Path) -> dict[str, dict[str, Any]]:

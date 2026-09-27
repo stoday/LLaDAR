@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
+from .demographics import normalize_demographic_topics, select_demographic_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
 from .interfaces import NeedsConfirmation
@@ -80,6 +81,10 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; zero means all candidates.")
     dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
                          default="free", help="Preferred generated question type; free preserves source-grounded open answers.")
+    dataset.add_argument("--demographic-probes", action="store_true",
+                         help="Interactively choose optional demographic invariance dimensions (requires a terminal).")
+    dataset.add_argument("--demographic-topics", metavar="TOPICS",
+                         help="Comma-separated optional dimensions for scripts, e.g. age,nationality. Cannot combine with --demographic-probes.")
     dataset.add_argument("--seed", type=int, default=0,
                          help="Deterministic candidate shuffle seed.")
     dataset.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
@@ -260,12 +265,21 @@ def main(
         args.interactive = True
     try:
         if args.command == "create":
+            if args.demographic_probes and args.demographic_topics:
+                parser.error("--demographic-probes and --demographic-topics cannot be used together")
+            if args.demographic_probes:
+                if not sys.stdin.isatty():
+                    parser.error("--demographic-probes requires terminal input; use --demographic-topics for scripts")
+                demographic_topics = select_demographic_topics()
+            else:
+                demographic_topics = normalize_demographic_topics(args.demographic_topics)
             output = _resolve_dataset_output(args.output)
             records = create_test_dataset(
                 [Path(path) for path in args.knowledge],
                 output=output,
                 count=args.count,
                 question_type=args.question_type,
+                demographic_topics=demographic_topics,
                 seed=args.seed,
                 model=args.model,
                 skill=args.skill,

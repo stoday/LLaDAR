@@ -24,6 +24,22 @@ lladar create test-dataset \
 內建方法屬於套件資源，不在未來使用者 skill 管理命令的移除範圍；若套件資源缺失，
 會報錯而不會默默退回其他方法。具備檔案系統權限者仍可手動修改或移除安裝檔案。
 
+預設會產生來源事實題；若已驗證到早餐／午餐／晚餐這類餐次熱量同位階事實，也會
+產生「正餐」的概念映射 probe。人口統計控制題預設不產生：
+
+```bash
+# 終端顯示受控維度清單後選擇
+lladar create test-dataset --knowledge ./knowledge --demographic-probes
+
+# 非互動腳本以逗號指定已定義維度
+lladar create test-dataset --knowledge ./knowledge --demographic-topics age,nationality
+```
+
+可選維度為年齡、性別、國籍／居留身分、種族／族裔、語言、宗教／信仰、
+身心障礙需求與教育／社經條件。系統不接受自由撰寫的人口統計 prompt，確保
+pair 的兩側只變動一個可驗證的控制維度。概念映射與人口統計結果是觀察訊號，
+不會被併入一般題的答對率。
+
 ```python
 from lladar import create_test_dataset
 
@@ -76,19 +92,28 @@ Skill 可續讀、重讀與引用多個已讀區間。核心定位所有相同�
 ## 輸出與安全
 
 Dataset 每行僅有 `question`、`expected_answer`、`actual_response: null`，
-可直接交給既有 `lladar run-agent`。唯一新增 sidecar 是 `<output>.generation.json`：
+可直接交給既有 `lladar run-agent`。資料集附帶兩個內部 sidecar：
+
+- `<output>.generation.json` 使用唯一的 v4 契約，保存題型與 probe 的可驗證
+  lineage。只有有效 v4 sidecar 才會被 runner／eval 用於題型或 probe 統計。
+- `<output>.graph.json` 保存可審核的語意圖譜；它含來源引用與推論出的概念，
+  不需要使用者編輯。
+
+generation sidecar 包含：
 
 - skill 實際使用檔案雜湊、模型與有效選項（不保存憑證）。
 - 來源路徑及載入文字雜湊、讀取紀錄、已讀／未讀區間。
 - 知識點與原文引用、QA、工作狀態、嘗試次數、拒絕與去重統計。
 - native skill 載入與工具證據、dataset SHA-256、實體行號到 QA／知識點映射。
+- 每列的 `plan_type`；概念／人口統計 probe 另有候選實體、concept ID、pair ID
+  與控制維度。
 
 Sidecar 包含知識內容與本機路徑，應與原文採相同的存取保護。
 Dataset 有任何修改時必須重新核對雜湊；不可沿用不符的行號映射。
 已接受點的處理比例不是整篇文章的事實抽取完整率。
 
-模型工作前先檢查 dataset 與 sidecar；任一已存在都需要 `--force`。
-兩份資料先序列化與暫存，sidecar 最後發布作為完成標記。
+模型工作前先檢查 dataset、generation sidecar 與 graph sidecar；任一已存在都需要
+`--force`。所有產物先序列化與暫存，再一併發布。
 一般發布失敗會復原舊檔；這不是跨檔案的原子交易。
 若程序被強制終止，可留下隱藏 `.bak`／`.generation.lock` 供人工檢查和復原，
 不要把缺少 sidecar 的 dataset 當成已完成且可追溯的輸出。
@@ -108,11 +133,12 @@ Dataset 有任何修改時必須重新核對雜湊；不可沿用不符的行號
 Python 3.11／3.12 測試結果，以及使用者確認的三組真實 QA。
 
 ```bash
-pytest tests/test_generation_skills.py tests/test_skill_agent.py
+pytest tests/test_generation_skills.py tests/test_question_types.py tests/test_semantic_graph_probes.py tests/test_skill_agent.py
 python scripts/verify_skill_generation_live.py --output /tmp/lladar-skill-live/dataset.jsonl
 ```
 
 第二個命令會呼叫真實模型並產生費用；使用固定、無敏感內容的文章，讀取 `.env`
 但不列印憑證。預設不覆寫；重跑同一路徑需明確加 `--force`。
 腳本通過代表自動檢查成功，不能取代人工語意驗收。
-本期不實作 skill 管理、多 skill、graphify 或其他三個階段的 skill 外掛。
+本期不實作 skill 管理、多 skill、通用 graphify 或其他三個階段的 skill 外掛；
+目前的語意圖譜僅支援已驗證的餐次熱量同位階事實。

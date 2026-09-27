@@ -160,7 +160,8 @@ def test_saved_dataset_has_traceable_sidecar_and_runs_with_existing_runner(gener
     rows = create_test_dataset(source, skill=skill, output=output,
                                skill_agent_factory=ScriptedSkillAgent, verbose=False)
     provenance = json.loads(Path(str(output) + ".generation.json").read_text())
-    assert provenance["schema_version"] == 2
+    assert provenance["schema_version"] == 4
+    assert Path(str(output) + ".graph.json").is_file()
     assert provenance["status"] == "complete"
     assert provenance["dataset"]["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
     assert provenance["skill"]["path"] == str(skill.resolve())

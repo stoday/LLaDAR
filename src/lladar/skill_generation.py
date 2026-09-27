@@ -21,7 +21,8 @@ from .exceptions import DatasetValidationError, KnowledgeLoadError, ProviderErro
 from .loaders import load_knowledge
 from .records import validate_record
 from .progress import ProgressReporter
-from .question_types import record_fingerprint
+from .question_types import GENERATION_SIDECAR_VERSION, record_fingerprint
+from .semantic_graph import build_semantic_graph, plan_graph_probes
 
 
 _REQUEST_TO_TYPE = {
@@ -42,7 +43,7 @@ def normalize(value: str) -> str:
 
 
 def preflight_output(output: Path, *, force: bool) -> None:
-    for path in (output, Path(str(output) + ".generation.json")):
+    for path in (output, Path(str(output) + ".generation.json"), Path(str(output) + ".graph.json")):
         if path.is_symlink():
             raise ValueError(f"output cannot be a symlink: {path}")
         if path.exists():
@@ -59,6 +60,7 @@ def preflight_output(output: Path, *, force: bool) -> None:
 class GenerationResult:
     records: list[dict]
     provenance: dict
+    graph: dict | None = None
 
     def publish(self, output: Path, *, force: bool) -> None:
         for record in self.records:
@@ -68,13 +70,17 @@ class GenerationResult:
         sidecar = json.dumps(self.provenance, ensure_ascii=False, indent=2) + "\n"
         preflight_output(output, force=force)
         targets = [output, Path(str(output) + ".generation.json")]
+        payloads = [content, sidecar]
+        if self.graph is not None:
+            targets.append(Path(str(output) + ".graph.json"))
+            payloads.append(json.dumps(self.graph, ensure_ascii=False, indent=2) + "\n")
         staged, backups, published, reservations = {}, {}, [], []
         lock = output.with_name(f".{output.name}.generation.lock")
         with lock.open("x"):
             pass
         try:
             preflight_output(output, force=force)
-            for target, text in zip(targets, (content, sidecar)):
+            for target, text in zip(targets, payloads):
                 temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
                 staged[target] = temporary
                 with temporary.open("x", encoding="utf-8", newline="\n") as handle:
@@ -384,7 +390,8 @@ class GenerationWorkspace:
 
 
 def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | None,
-                        count: int, question_type: str, seed: int, model: str, env_file: str | Path,
+                        count: int, question_type: str, demographic_topics: tuple[str, ...],
+                        seed: int, model: str, env_file: str | Path,
                         temperature: float, profile, verbose: bool) -> GenerationResult:
     skill = skill.resolve()
     if not (skill / "SKILL.md").is_file():
@@ -491,18 +498,50 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 records.append(row)
                 qa_id = point_id.replace("kp_", "qa_", 1)
                 lines.append({"line": len(records), "qa_id": qa_id, "qa_ids": [qa_id],
-                              "knowledge_point_ids": [point_id], "record_fingerprint": record_fingerprint(row),
-                              **contract})
+                               "knowledge_point_ids": [point_id], "record_fingerprint": record_fingerprint(row),
+                               "plan_type": "direct_fact", **contract})
+    graph = build_semantic_graph(workspace.points.values())
+    graph["corpus_sha256"] = hashlib.sha256(
+        "".join(source["text"] for source in workspace.sources.values()).encode("utf-8")
+    ).hexdigest()
+    probe_plans = plan_graph_probes(graph, demographic_topics=demographic_topics)
+    for plan in probe_plans:
+        pair_id = plan.get("pair_id")
+        if pair_id is not None:
+            pair = [item for item in probe_plans if item.get("pair_id") == pair_id]
+            if plan is not pair[0]:
+                continue
+            if count and len(records) + len(pair) > count:
+                continue
+            selected_plans = pair
+        else:
+            if count and len(records) >= count:
+                continue
+            selected_plans = [plan]
+        for selected in selected_plans:
+            row = validate_record({"question": selected["question"], "expected_answer": selected["expected_answer"],
+                                   "actual_response": None})
+            identity = (normalize(row["question"]), normalize(row["expected_answer"]))
+            if identity in seen_qa:
+                continue
+            seen_qa[identity] = len(records)
+            records.append(row)
+            lines.append({"line": len(records), "qa_id": selected["plan_id"], "qa_ids": [selected["plan_id"]],
+                          "knowledge_point_ids": [item["evidence_ref"] for item in selected["candidates"]],
+                          "record_fingerprint": record_fingerprint(row), "question_type": "free",
+                          "answer_protocol": "natural_language", "plan_type": selected["type"],
+                          **{key: value for key, value in selected.items() if key not in {
+                              "question", "expected_answer", "type", "plan_id"}}})
     if not records:
         raise DatasetValidationError("no valid question records were generated")
     reporter.done(len(records))
     return GenerationResult(records, {
-        "schema_version": 2, "question_type": question_type, "status": "partial" if any(
+        "schema_version": GENERATION_SIDECAR_VERSION, "question_type": question_type, "status": "partial" if any(
             point.get("status") == "failed" for point in workspace.points.values()) or any(
             source["work"]["status"] == "failed" for source in workspace.sources.values()) else "complete",
         "skill": {"name": skill.name, "path": str(skill), "files": skill_files},
         "settings": {"model": model, "temperature": temperature, "count": count,
-                     "question_type": question_type, "seed": seed,
+                     "question_type": question_type, "demographic_topics": list(demographic_topics), "seed": seed,
                      "max_attempts": 3, "read_page_chars": workspace.page_chars,
                      "max_input_tokens": profile.max_input_tokens, "max_output_tokens": profile.max_output_tokens},
         "sources": [{"id": key, "path": source["path"], **source["work"], **workspace.coverage(key),
@@ -524,4 +563,4 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                   "deduplicated_qa": len(workspace.qa) - len(records),
                   "not_attempted_count_limit": sum(p.get("status") == "not_attempted_count_limit"
                                                    for p in workspace.points.values())},
-    })
+    }, graph)

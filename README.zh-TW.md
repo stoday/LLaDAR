@@ -37,7 +37,15 @@ lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
 預設使用隨套件安裝的 Akasha `knowledge-point-qa` skill，先抽取知識點，再逐點產生 QA。
-無須另外安裝 skill；會另產生 `dataset.jsonl.generation.json` 保存原文引用與執行狀態。
+若存在已驗證的早餐／午餐／晚餐熱量同位階事實，也會建立可審核的語意圖譜、概念映射
+probe。無須另外安裝 skill；會另產生
+`dataset.jsonl.generation.json` 與 `dataset.jsonl.graph.json` 保存原文引用與執行狀態。
+
+圖譜 probe 用來觀察目標模型如何把「正餐」等推論概念映射至來源實例，沒有唯一正解，
+會與答對率分開報告。合成人口統計控制是測試輸入，不是來源或人物主張，預設不產生。
+在終端可用 `--demographic-probes` 顯示受控維度清單後選擇；自動化腳本則用
+`--demographic-topics age,nationality`。不接受自由撰寫的人口統計 prompt，讓每一組
+pair 都維持可比較性。
 
 需要 Akasha 1.8 以上。`--skill DIRECTORY` 可改用一個可信任的本地 skill；
 不需要額外 manifest，尚未加入 skill 安裝管理命令。內建方法不屬於可移除的使用者安裝項目。
@@ -167,7 +175,7 @@ lladar report evaluation.json --output report.md
 
 ## 輸出
 
-- `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL；skill 模式另有 `<output>.generation.json`
+- `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL；另有 `<output>.generation.json` 與 `<output>.graph.json`
 - `run-agent`：完成後的三欄 JSONL、`<output>.trials.jsonl` 與 `<output>.run.json`
 - `eval`：包含評估計畫、逐筆判讀、覆蓋率與統計彙整的 JSON
 - `report`：包含固定表格、解讀、限制與逐筆附錄的 Markdown
