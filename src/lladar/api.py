@@ -7,7 +7,7 @@ from typing import Any
 from .loaders import KnowledgeInput
 from .model_profiles import resolve_model_profile
 from .skill_generation import generate_with_skill, preflight_output
-from .demographics import normalize_demographic_topics
+from .controlled_variants import normalize_controlled_variant_topics
 
 
 DEFAULT_DATASET_MODEL = "gemini:gemini-3.7-flash"
@@ -21,7 +21,8 @@ def create_test_dataset(
     output: str | Path | None = None,
     count: int = 0,
     question_type: str = "free",
-    demographic_topics: Iterable[str] = (),
+    controlled_variant_topics: Iterable[str] = (),
+    controlled_variant_selector: Callable[[tuple[dict[str, Any], ...]], Iterable[str]] | None = None,
     seed: int = 0,
     model: str = DEFAULT_DATASET_MODEL,
     env_file: str | Path = ".env",
@@ -39,7 +40,7 @@ def create_test_dataset(
         raise ValueError("count must be zero or greater")
     if question_type not in QUESTION_TYPES:
         raise ValueError(f"unknown question type: {question_type}")
-    demographic_topics = normalize_demographic_topics(demographic_topics)
+    controlled_variant_topics = normalize_controlled_variant_topics(controlled_variant_topics)
     profile = resolve_model_profile(
         model,
         max_input_tokens=max_input_tokens,
@@ -54,7 +55,8 @@ def create_test_dataset(
         agent_factory=skill_agent_factory,
         count=count,
         question_type=question_type,
-        demographic_topics=demographic_topics,
+        controlled_variant_topics=controlled_variant_topics,
+        controlled_variant_selector=controlled_variant_selector,
         seed=seed,
         model=model,
         env_file=env_file,

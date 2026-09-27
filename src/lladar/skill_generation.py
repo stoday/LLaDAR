@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import re
 import hashlib
 import json
@@ -17,12 +16,13 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from llama_index.core.schema import Document, MetadataMode
+
 from .exceptions import DatasetValidationError, KnowledgeLoadError, ProviderError
 from .loaders import load_knowledge
 from .records import validate_record
 from .progress import ProgressReporter
 from .question_types import GENERATION_SIDECAR_VERSION, record_fingerprint
-from .semantic_graph import build_semantic_graph, plan_graph_probes
 
 
 _REQUEST_TO_TYPE = {
@@ -40,6 +40,10 @@ _TYPED_PROTOCOLS = {
 
 def normalize(value: str) -> str:
     return " ".join(value.split())
+
+
+def _format_value(fact: dict[str, str]) -> str:
+    return " ".join((fact["value"], fact["unit"])).strip()
 
 
 def preflight_output(output: Path, *, force: bool) -> None:
@@ -130,6 +134,16 @@ class GenerationWorkspace:
             f"source_{index:03d}": {"path": str(path.resolve()), "text": text}
             for index, (path, text) in enumerate(sources, 1)
         }
+        # LlamaIndex is the source-document boundary for the graph-extraction
+        # stage.  Keep the original text alongside it only for deterministic
+        # hashes and source-relative evidence offsets.
+        self.documents = {
+            source_id: Document(
+                text=source["text"],
+                metadata={"source_id": source_id, "path": source["path"]},
+            )
+            for source_id, source in self.sources.items()
+        }
         self.page_chars = page_chars
         self.reads: dict[str, dict[str, Any]] = {}
         self.points: dict[str, dict[str, Any]] = {}
@@ -139,12 +153,15 @@ class GenerationWorkspace:
         self.question_type = question_type
         self.current_source: str | None = None
         self.current_point: str | None = None
+        self.current_stage: str | None = None
         self.tool_epoch = 0
         self.pending_rejections = {source_id: 0 for source_id in self.sources}
         self.tool_lock = RLock()
         self.events: list[dict] = []
         self.stats = {"point_candidates": 0, "rejected_points": 0, "deduplicated_points": 0,
                       "qa_candidates": 0, "rejected_qa": 0, "repeated_qa_submissions": 0}
+        self.semantic_graph: dict[str, Any] | None = None
+        self.test_plans: list[dict[str, Any]] = []
 
     def list_sources(self) -> list[dict[str, Any]]:
         return [{"source_id": key, "name": value["path"], "length": len(value["text"])}
@@ -173,7 +190,7 @@ class GenerationWorkspace:
     def read_source(self, source_id: str, start_char: int = 0, end_char: int | None = None) -> dict:
         if source_id != self.current_source or source_id not in self.sources:
             raise ValueError("source is not assigned to this extraction")
-        text = self.sources[source_id]["text"]
+        text = self.documents[source_id].get_content(metadata_mode=MetadataMode.NONE)
         if type(start_char) is not int or not 0 <= start_char <= len(text):
             raise ValueError("invalid source start_char")
         if end_char is None:
@@ -251,9 +268,217 @@ class GenerationWorkspace:
 
     def list_knowledge_points(self) -> list[dict]:
         """Expose source-validated facts for a typed-question candidate set."""
-        if self.current_point is None:
-            raise ValueError("knowledge points are only available in the QA stage")
+        if self.current_stage not in {"qa", "semantic_graph"}:
+            raise ValueError("knowledge points are not available in this stage")
         return [deepcopy(point) for point in self.points.values()]
+
+    def submit_semantic_graph(self, graph: dict[str, Any]) -> dict[str, Any]:
+        """Accept one evidence-backed, domain-independent graph candidate."""
+        if self.current_stage != "semantic_graph":
+            raise ValueError("semantic-graph submission is not available in this stage")
+        if self.semantic_graph is not None:
+            raise ValueError("semantic graph was already submitted")
+        if not isinstance(graph, dict) or set(graph) != {"nodes", "edges", "facts"}:
+            raise ValueError("semantic graph requires exactly nodes, edges, and facts")
+        nodes, edges, facts = graph["nodes"], graph["edges"], graph["facts"]
+        if not isinstance(nodes, list) or not isinstance(edges, list) or not isinstance(facts, list):
+            raise ValueError("semantic graph nodes, edges, and facts must be lists")
+
+        known_points = set(self.points)
+        node_ids: set[str] = set()
+        normalized_nodes: list[dict[str, Any]] = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                raise ValueError("semantic graph node must be an object")
+            node_id, node_type, label, origin = (node.get("id"), node.get("type"), node.get("label"), node.get("origin"))
+            refs = node.get("evidence_refs")
+            if (not isinstance(node_id, str) or not node_id or node_id in node_ids
+                    or node_type not in {"entity", "attribute", "concept"}
+                    or not isinstance(label, str) or not label.strip()
+                    or origin not in {"source", "inferred"}
+                    or not isinstance(refs, list) or not refs or any(ref not in known_points for ref in refs)):
+                raise ValueError("semantic graph node has invalid identity or evidence")
+            normalized = {"id": node_id, "type": node_type, "label": label.strip(), "origin": origin,
+                          "evidence_refs": list(dict.fromkeys(refs))}
+            if node_type == "concept":
+                members = node.get("member_ids")
+                if (not isinstance(members, list) or len(members) < 2
+                        or any(not isinstance(member, str) for member in members)
+                        or len(set(members)) != len(members)):
+                    raise ValueError("concept requires distinct member IDs")
+                normalized["member_ids"] = list(members)
+            elif "member_ids" in node:
+                raise ValueError("only concepts may declare member IDs")
+            node_ids.add(node_id)
+            normalized_nodes.append(normalized)
+        nodes_by_id = {node["id"]: node for node in normalized_nodes}
+        for node in normalized_nodes:
+            if node["type"] == "concept" and any(
+                member not in nodes_by_id or nodes_by_id[member]["type"] != "entity"
+                for member in node["member_ids"]
+            ):
+                raise ValueError("concept members must be graph entities")
+
+        normalized_facts: list[dict[str, str]] = []
+        fact_entities: set[str] = set()
+        for fact in facts:
+            if not isinstance(fact, dict) or set(fact) != {"entity_id", "label", "value", "unit", "evidence_ref"}:
+                raise ValueError("semantic graph fact has an invalid schema")
+            if (not all(isinstance(fact[key], str) and fact[key].strip()
+                        for key in ("entity_id", "label", "value", "evidence_ref"))
+                    or not isinstance(fact["unit"], str)
+                    or fact["entity_id"] not in nodes_by_id
+                    or nodes_by_id[fact["entity_id"]]["type"] != "entity"
+                    or fact["label"] != nodes_by_id[fact["entity_id"]]["label"]
+                    or fact["evidence_ref"] not in known_points):
+                raise ValueError("semantic graph fact must reference an evidenced entity")
+            if fact["entity_id"] in fact_entities:
+                raise ValueError("semantic graph accepts one comparable fact per entity")
+            fact_entities.add(fact["entity_id"])
+            normalized_facts.append({key: fact[key].strip() for key in fact})
+
+        normalized_edges: list[dict[str, Any]] = []
+        for edge in edges:
+            if not isinstance(edge, dict) or set(edge) != {"from", "relation", "to", "origin", "evidence_refs"}:
+                raise ValueError("semantic graph edge has an invalid schema")
+            refs = edge["evidence_refs"]
+            if (edge["from"] not in nodes_by_id or edge["to"] not in nodes_by_id
+                    or not isinstance(edge["relation"], str) or not edge["relation"].strip()
+                    or edge["origin"] not in {"source", "inferred"}
+                    or not isinstance(refs, list) or not refs or any(ref not in known_points for ref in refs)):
+                raise ValueError("semantic graph edge must be evidenced and reference graph nodes")
+            normalized_edges.append({"from": edge["from"], "relation": edge["relation"].strip(), "to": edge["to"],
+                                     "origin": edge["origin"], "evidence_refs": list(dict.fromkeys(refs))})
+        self.semantic_graph = {"schema_version": 1, "nodes": normalized_nodes, "edges": normalized_edges,
+                               "facts": normalized_facts,
+                               "evidence": [
+                                   {"ref": point["id"], **evidence}
+                                   for point in self.points.values() for evidence in point["evidence"]
+                               ]}
+        return {"accepted": True, "nodes": len(normalized_nodes), "facts": len(normalized_facts)}
+
+    def read_semantic_graph(self) -> dict[str, Any]:
+        if self.current_stage != "test_plans" or self.semantic_graph is None:
+            raise ValueError("verified semantic graph is not available in this stage")
+        return deepcopy(self.semantic_graph)
+
+    def _concept_candidates(self, concept_id: str) -> tuple[dict[str, Any], list[dict[str, str]], str]:
+        if self.semantic_graph is None:
+            raise ValueError("semantic graph is required before planning")
+        nodes = {node["id"]: node for node in self.semantic_graph["nodes"]}
+        concept = nodes.get(concept_id)
+        if not isinstance(concept, dict) or concept.get("type") != "concept":
+            raise ValueError("plan must reference a verified concept")
+        facts = {fact["entity_id"]: fact for fact in self.semantic_graph["facts"]}
+        members = concept["member_ids"]
+        if any(member not in facts for member in members):
+            raise ValueError("every concept member needs one comparable source fact")
+        candidates = [{key: facts[member][key] for key in ("entity_id", "label", "value", "unit", "evidence_ref")}
+                      for member in members]
+        if len({(candidate["value"], candidate["unit"]) for candidate in candidates}) < 2:
+            raise ValueError("concept candidates need distinct source values")
+        expected = "; ".join(f"{item['label']}: {_format_value(item)}" for item in candidates)
+        return concept, candidates, expected
+
+    def submit_test_plans(self, plans: list[dict[str, Any]]) -> dict[str, Any]:
+        """Validate model-proposed plans without letting them alter graph facts."""
+        if self.current_stage != "test_plans" or self.semantic_graph is None:
+            raise ValueError("test-plan submission is not available in this stage")
+        if self.test_plans:
+            raise ValueError("test plans were already submitted")
+        if not isinstance(plans, list) or not plans:
+            raise ValueError("test plans must be a non-empty list")
+        normalized: list[dict[str, Any]] = []
+        for plan in plans:
+            if not isinstance(plan, dict) or plan.get("type") not in {
+                "direct_fact", "concept_mapping", "controlled_invariance",
+            }:
+                raise ValueError("test plan type is invalid")
+            question, submitted_answer = plan.get("question"), plan.get("expected_answer")
+            if not isinstance(question, str) or not question.strip() or not isinstance(submitted_answer, str):
+                raise ValueError("test plan requires a natural-language question and expected answer")
+            if plan["type"] == "direct_fact":
+                if set(plan) != {"type", "entity_id", "question", "expected_answer"}:
+                    raise ValueError("direct-fact plan has an invalid schema")
+                facts = {fact["entity_id"]: fact for fact in self.semantic_graph["facts"]}
+                entity_id = plan["entity_id"]
+                if not isinstance(entity_id, str) or entity_id not in facts:
+                    raise ValueError("direct-fact plan must reference a verified fact entity")
+                fact = facts[entity_id]
+                expected = _format_value(fact)
+                if submitted_answer.strip() != expected:
+                    raise ValueError("direct-fact expected answer must equal the source fact")
+                normalized.append({
+                    "type": "direct_fact", "plan_id": f"df_{entity_id}", "entity_id": entity_id,
+                    "question": question.strip(), "expected_answer": expected,
+                    "evidence_refs": [fact["evidence_ref"]],
+                })
+                continue
+            concept_id = plan.get("concept_id", plan.get("source_concept"))
+            concept, candidates, expected = self._concept_candidates(concept_id)
+            if submitted_answer.strip() != expected:
+                raise ValueError("test plan expected answer must equal the complete source candidate set")
+            base = {
+                "type": plan["type"], "concept_id": concept_id, "concept_label": concept["label"],
+                "concept_origin": concept["origin"], "member_ids": list(concept["member_ids"]),
+                "candidates": candidates, "question": question.strip(), "expected_answer": expected,
+            }
+            if plan["type"] == "concept_mapping":
+                if set(plan) != {"type", "concept_id", "question", "expected_answer"}:
+                    raise ValueError("concept plan has an invalid schema")
+                base["plan_id"] = f"cp_{concept_id}"
+            else:
+                required = {"type", "pair_id", "source_concept", "source_support", "answer_contract",
+                            "varied_dimension", "control_value", "question_template", "question", "expected_answer"}
+                if set(plan) != required:
+                    raise ValueError("controlled-invariance plan has an invalid schema")
+                pair_id, dimension, control_value, template = (
+                    plan["pair_id"], plan["varied_dimension"], plan["control_value"], plan["question_template"])
+                if (not isinstance(pair_id, str) or not pair_id
+                        or plan["source_support"] != "group_unspecified"
+                        or plan["answer_contract"] != "invariant"
+                        or not isinstance(control_value, str) or not control_value.strip()
+                        or not isinstance(template, str) or template.strip() != question.strip()
+                        or control_value.casefold() not in question.casefold()
+                        or not isinstance(dimension, dict)
+                        or set(dimension) != {"id", "label", "semantic_scope", "mutual_exclusivity", "coexists_with"}
+                        or not all(isinstance(dimension[key], str) and dimension[key].strip()
+                                   for key in ("id", "label", "semantic_scope", "mutual_exclusivity"))
+                        or dimension["mutual_exclusivity"] == "unknown"
+                        or not isinstance(dimension["coexists_with"], list)
+                        or any(not isinstance(value, str) or not value for value in dimension["coexists_with"])):
+                    raise ValueError("controlled-invariance plan has invalid dimension metadata")
+                base.update({
+                    "plan_id": f"{pair_id}_{len(normalized) + 1:03d}", "pair_id": pair_id,
+                    "origin": "synthetic_control", "source_concept": concept_id,
+                    "source_support": plan["source_support"], "answer_contract": plan["answer_contract"],
+                    "varied_dimension": dimension["id"], "control_dimension": deepcopy(dimension),
+                    "control_value": control_value.strip(), "question_template": template.strip(),
+                })
+            normalized.append(base)
+        pair_groups: dict[str, list[dict[str, Any]]] = {}
+        for plan in normalized:
+            if plan["type"] == "controlled_invariance":
+                pair_groups.setdefault(plan["pair_id"], []).append(plan)
+        for pair in pair_groups.values():
+            if len(pair) < 2:
+                raise ValueError("controlled-invariance pairs need at least two variants")
+            first = pair[0]
+            controls = [plan["control_value"] for plan in pair]
+            if len(set(controls)) != len(controls):
+                raise ValueError("controlled-invariance pair values must be distinct")
+            static = (first["source_concept"], first["answer_contract"], first["control_dimension"],
+                      first["expected_answer"])
+            skeletons = []
+            for plan in pair:
+                if (plan["source_concept"], plan["answer_contract"], plan["control_dimension"],
+                        plan["expected_answer"]) != static:
+                    raise ValueError("controlled-invariance pair must retain one source contract and dimension")
+                skeletons.append(plan["question"].casefold().replace(plan["control_value"].casefold(), "{control_value}"))
+            if len(set(skeletons)) != 1:
+                raise ValueError("controlled-invariance pair must change only its control value")
+        self.test_plans = normalized
+        return {"accepted": len(normalized), "pairs": len(pair_groups)}
 
     def submit_qa(self, record: dict) -> dict:
         row, contract, point_id = self.validate_qa(record)
@@ -384,13 +609,21 @@ class GenerationWorkspace:
                     self.events.append({"tool": name, "result": deepcopy(result)})
                     return result
             return invoke
-        names = ("list_sources", "read_source", "submit_knowledge_points") if stage == "knowledge_points" else (
-            "read_knowledge_point", "list_knowledge_points", "submit_qa")
+        names_by_stage = {
+            "knowledge_points": ("list_sources", "read_source", "submit_knowledge_points"),
+            "qa": ("read_knowledge_point", "list_knowledge_points", "submit_qa"),
+            "semantic_graph": ("list_knowledge_points", "submit_semantic_graph"),
+            "test_plans": ("read_semantic_graph", "submit_test_plans"),
+        }
+        if stage not in names_by_stage:
+            raise ValueError(f"unknown generation stage: {stage}")
+        names = names_by_stage[stage]
         return {name: scoped(getattr(self, name)) for name in names}
 
 
 def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | None,
-                        count: int, question_type: str, demographic_topics: tuple[str, ...],
+                        count: int, question_type: str, controlled_variant_topics: tuple[str, ...],
+                        controlled_variant_selector: Callable[[tuple[dict[str, Any], ...]], Any] | None,
                         seed: int, model: str, env_file: str | Path,
                         temperature: float, profile, verbose: bool) -> GenerationResult:
     skill = skill.resolve()
@@ -428,6 +661,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             reporter.emit(request["stage"].upper(),
                           f"item={request.get('source_id', request.get('knowledge_point_id'))} attempt={attempt}/3")
             # Initialization errors are fatal, unlike one model work item failing.
+            workspace.current_stage = request["stage"]
             agent = agent_factory(skills=[str(skill)], tools=workspace.tools(request["stage"]),
                                   model=model, env_file=str(env_file), temperature=temperature,
                                   max_input_tokens=profile.max_input_tokens,
@@ -470,41 +704,37 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             {"stage": "knowledge_points", "source_id": source_id},
             lambda: not workspace.coverage(source_id)["unread_ranges"] and not workspace.pending_rejections[source_id])
     workspace.current_source = None
-    point_ids = list(workspace.points)
-    random.Random(seed).shuffle(point_ids)
     records = []
     lines = []
     seen_qa = {}
-    for point_id in point_ids:
-        if count and len(records) >= count:
-            workspace.points[point_id].update(status="not_attempted_count_limit", attempts=0, errors=[])
-            continue
-        workspace.current_point = point_id
-        workspace.points[point_id].update(execute(
-            {"stage": "qa", "knowledge_point_id": point_id, "question_type": question_type},
-            lambda: point_id in workspace.qa))
-        if point_id in workspace.qa:
-            row = workspace.qa[point_id]
-            contract = workspace.qa_contracts[point_id]
-            identity = (normalize(row["question"]), normalize(row["expected_answer"]))
-            if identity in seen_qa:
-                existing = lines[seen_qa[identity]]
-                if any(existing.get(key) != value for key, value in contract.items()):
-                    raise DatasetValidationError("duplicate question/answer has conflicting question-type contracts")
-                lines[seen_qa[identity]]["knowledge_point_ids"].append(point_id)
-                lines[seen_qa[identity]]["qa_ids"].append(point_id.replace("kp_", "qa_", 1))
-            else:
-                seen_qa[identity] = len(records)
-                records.append(row)
-                qa_id = point_id.replace("kp_", "qa_", 1)
-                lines.append({"line": len(records), "qa_id": qa_id, "qa_ids": [qa_id],
-                               "knowledge_point_ids": [point_id], "record_fingerprint": record_fingerprint(row),
-                               "plan_type": "direct_fact", **contract})
-    graph = build_semantic_graph(workspace.points.values())
+    graph_work = execute({"stage": "semantic_graph"}, lambda: workspace.semantic_graph is not None)
+    if graph_work["status"] != "complete" or workspace.semantic_graph is None:
+        raise DatasetValidationError("semantic graph generation did not produce a valid graph")
+    graph = workspace.semantic_graph
     graph["corpus_sha256"] = hashlib.sha256(
         "".join(source["text"] for source in workspace.sources.values()).encode("utf-8")
     ).hexdigest()
-    probe_plans = plan_graph_probes(graph, demographic_topics=demographic_topics)
+    plan_work = execute({"stage": "test_plans"}, lambda: bool(workspace.test_plans))
+    if plan_work["status"] != "complete":
+        raise DatasetValidationError("semantic test planning did not produce valid plans")
+    probe_plans = workspace.test_plans
+    dimensions = tuple({plan["varied_dimension"]: plan["control_dimension"]
+                        for plan in probe_plans if plan["type"] == "controlled_invariance"}.values())
+    if controlled_variant_topics and controlled_variant_selector is not None:
+        raise ValueError("controlled_variant_topics and controlled_variant_selector cannot be combined")
+    selected_topics = (
+        tuple(controlled_variant_selector(dimensions)) if controlled_variant_selector is not None
+        else controlled_variant_topics
+    )
+    known_topics = {dimension["id"] for dimension in dimensions}
+    unknown_topics = set(selected_topics) - known_topics
+    if unknown_topics:
+        raise ValueError(f"unknown controlled-variant topic: {', '.join(sorted(unknown_topics))}")
+    probe_plans = [
+        plan for plan in probe_plans
+        if plan["type"] != "controlled_invariance" or plan["varied_dimension"] in selected_topics
+    ]
+    graph["control_dimensions"] = list(dimensions)
     for plan in probe_plans:
         pair_id = plan.get("pair_id")
         if pair_id is not None:
@@ -527,7 +757,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             seen_qa[identity] = len(records)
             records.append(row)
             lines.append({"line": len(records), "qa_id": selected["plan_id"], "qa_ids": [selected["plan_id"]],
-                          "knowledge_point_ids": [item["evidence_ref"] for item in selected["candidates"]],
+                          "knowledge_point_ids": [item["evidence_ref"] for item in selected.get("candidates", [])]
+                          or list(selected["evidence_refs"]),
                           "record_fingerprint": record_fingerprint(row), "question_type": "free",
                           "answer_protocol": "natural_language", "plan_type": selected["type"],
                           **{key: value for key, value in selected.items() if key not in {
@@ -541,7 +772,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             source["work"]["status"] == "failed" for source in workspace.sources.values()) else "complete",
         "skill": {"name": skill.name, "path": str(skill), "files": skill_files},
         "settings": {"model": model, "temperature": temperature, "count": count,
-                     "question_type": question_type, "demographic_topics": list(demographic_topics), "seed": seed,
+                     "question_type": question_type, "controlled_variant_topics": list(selected_topics), "seed": seed,
                      "max_attempts": 3, "read_page_chars": workspace.page_chars,
                      "max_input_tokens": profile.max_input_tokens, "max_output_tokens": profile.max_output_tokens},
         "sources": [{"id": key, "path": source["path"], **source["work"], **workspace.coverage(key),

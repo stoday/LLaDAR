@@ -39,24 +39,30 @@ or a directory in which the CLI creates a timestamped dataset.
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
-The default method is the bundled Akasha `knowledge-point-qa` skill: it extracts
-knowledge points, then generates one QA per point. It also builds an auditable
-semantic graph when verified meal-calorie peers are present, producing a
-concept-mapping probe. It is included in pip installs and writes `dataset.jsonl.generation.json` plus
-`dataset.jsonl.graph.json` with evidence and processing status.
+The bundled Akasha `knowledge-point-qa` skill stores source documents and
+source metadata through LlamaIndex. After source-grounded fact extraction, its
+two model stages propose a domain-independent evidence graph, then propose
+direct-fact, concept-mapping, and optional controlled-variant questions from
+that verified graph. It is included in pip installs and writes
+`dataset.jsonl.generation.json` plus `dataset.jsonl.graph.json` with evidence
+and processing status.
 
 Graph probes observe how a target maps an inferred concept such as “meal” to
 source-backed peers; they do not have a single correct answer and are reported
-separately from correctness. Synthetic demographic controls are test inputs, not
-claims about the source or people. They are off by default. Use
-`--demographic-probes` in a terminal to pick from the curated dimensions, or
-use `--demographic-topics age,nationality` in a script. The command does not
-accept free-form demographic prompt text, so every pair remains comparable.
+separately from correctness. Synthetic controls are test inputs, not claims
+about the source or people. They are off by default. Use
+`--controlled-variant-probes` in a terminal after the graph stage lists its
+validated dimensions, or use `--controlled-variant-topics DIMENSION_ID` in a
+script with an ID recorded for the same corpus fingerprint. The core accepts
+only planner-validated dimensions, so every pair remains comparable.
 
 This requires Akasha 1.8 or later. Use `--skill DIRECTORY` to override the
 default with one trusted local skill; there is no extra skill manifest or
-installation command. The bundled method is not a removable user-installed skill.
-See [skill generation](docs/skill-generation.md) for limits and Python usage.
+installation command. LLaDAR passes the one selected directory to Akasha as
+`skills=[...]`: Akasha initially exposes its metadata, then the model loads the
+selected `SKILL.md` on demand. The bundled method is not a removable
+user-installed skill. See [skill generation](docs/skill-generation.md) for
+limits and Python usage.
 
 Migration: dataset creation now uses a skill only, so `create test-dataset` no
 longer accepts `--method`, `--chunk-size`, `--overlap`, `--strict`, `--prompt`, or

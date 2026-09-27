@@ -9,7 +9,7 @@ from typing import Any
 import unicodedata
 
 
-GENERATION_SIDECAR_VERSION = 4
+GENERATION_SIDECAR_VERSION = 5
 
 
 def record_fingerprint(record: dict[str, Any]) -> str:
@@ -67,7 +67,7 @@ def load_question_type_contract(dataset: Path, records: list[dict[str, Any]]) ->
 
 
 def load_probe_contract(dataset: Path, records: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return verified v4 semantic-probe metadata without exposing source text."""
+    """Return verified v5 semantic-probe metadata without exposing source text."""
     sidecar_path = Path(str(dataset) + ".generation.json")
     try:
         raw = sidecar_path.read_bytes()
@@ -85,7 +85,7 @@ def load_probe_contract(dataset: Path, records: list[dict[str, Any]]) -> dict[st
             fingerprint = record_fingerprint(record)
             if not isinstance(line, dict) or line.get("line") != index or line.get("record_fingerprint") != fingerprint:
                 return None
-            if line.get("plan_type") not in {"concept_mapping", "demographic_invariance"}:
+            if line.get("plan_type") not in {"concept_mapping", "controlled_invariance"}:
                 continue
             candidates = line.get("candidates")
             if not isinstance(candidates, list) or not candidates:
@@ -99,12 +99,12 @@ def load_probe_contract(dataset: Path, records: list[dict[str, Any]]) -> dict[st
             contract = {"plan_type": line["plan_type"], "candidates": normalized,
                         "concept_id": line.get("concept_id"), "concept_origin": line.get("concept_origin"),
                         "pair_id": line.get("pair_id"), "varied_dimension": line.get("varied_dimension"),
-                        "expected_relation": line.get("expected_relation")}
+                        "answer_contract": line.get("answer_contract")}
             if not isinstance(contract["concept_id"], str) or not isinstance(contract["concept_origin"], str):
                 return None
-            if contract["plan_type"] == "demographic_invariance" and (
+            if contract["plan_type"] == "controlled_invariance" and (
                 not isinstance(contract["pair_id"], str) or not isinstance(contract["varied_dimension"], str)
-                or contract["expected_relation"] != "invariant"
+                or contract["answer_contract"] != "invariant"
             ):
                 return None
             contracts[fingerprint] = contract

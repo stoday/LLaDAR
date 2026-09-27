@@ -1,4 +1,4 @@
-"""Exercise Akasha's real skill loader with an offline chat model."""
+"""Public behavior of the thin adapter over Akasha's native skill runtime."""
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -27,159 +27,82 @@ class ToolScriptModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=self.replies.pop(0))])
 
 
-def test_native_skill_loads_instructions_and_only_controlled_tools(tmp_path):
+def test_akasha_native_skill_is_loaded_only_after_the_model_requests_it(tmp_path):
     from lladar.skill_agent import AkashaSkillAgent
 
     skill = tmp_path / "native-example"
     skill.mkdir()
     (skill / "SKILL.md").write_text(
-        "---\nname: native-example\ndescription: Example for a native load.\n---\n"
+        "---\nname: native-example\ndescription: Example.\n---\n"
         "Use the phrase NEBULA-METHOD when recording a fact.\n", encoding="utf-8")
     received = []
 
-    def record_fact(value: str) -> str:
+    def record_fact(value: str) -> None:
         received.append(value)
-        return "accepted"
 
     model = ToolScriptModel(replies=[
-        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "native-example"}, "id": "load-1"}]),
-        AIMessage(content="", tool_calls=[{"name": "record_fact", "args": {"value": "NEBULA-METHOD"}, "id": "submit-1"}]),
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "native-example"}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "record_fact", "args": {"value": "NEBULA-METHOD"}, "id": "record"}]),
         AIMessage(content="Done"),
     ])
-    agent = AkashaSkillAgent(skills=[str(skill)], tools={"record_fact": record_fact},
-                            model=model, env_file="", temperature=0,
-                            max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={"record_fact": record_fact}, model=model,
+                             env_file="", temperature=0, max_input_tokens=16000,
+                             max_output_tokens=2000, verbose=False)
+
     evidence = agent({"stage": "qa", "knowledge_point_id": "point-1"})
-    assert evidence["loaded_skills"] == ["native-example"]
-    assert received == ["NEBULA-METHOD"]
+
+    assert "NEBULA-METHOD" not in str(model.prompts[0])
     assert "NEBULA-METHOD" in str(model.prompts[1])
-    assert all("python_execute" not in names for names in model.offered)
+    assert received == ["NEBULA-METHOD"]
+    assert evidence["loaded_skills"] == ["native-example"]
     assert evidence["skill_files"]["SKILL.md"]
+    assert "load_skill" in model.offered[0]
 
 
-def test_native_agent_rejects_execution_and_work_before_skill_load(tmp_path):
-    from lladar.skill_agent import AkashaSkillAgent
-
-    skill = tmp_path / "restricted"
-    skill.mkdir()
-    (skill / "SKILL.md").write_text(
-        "---\nname: restricted\ndescription: Restricted test.\n---\nRead before submitting.\n")
-    received = []
-
-    def record_fact(value: str) -> str:
-        received.append(value)
-        return "accepted"
-
-    marker = tmp_path / "must-not-exist"
-    model = ToolScriptModel(replies=[
-        AIMessage(content="", tool_calls=[{"name": "record_fact", "args": {"value": "premature"}, "id": "early"}]),
-        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "restricted"}, "id": "load"}]),
-        AIMessage(content="", tool_calls=[{"name": "python_execute", "args": {
-            "skill": "restricted", "source": f"open({str(marker)!r}, 'w').write('escaped')"}, "id": "escape"}]),
-        AIMessage(content="", tool_calls=[{"name": "record_fact", "args": {"value": "allowed"}, "id": "late"}]),
-        AIMessage(content="Done"),
-    ])
-    agent = AkashaSkillAgent(skills=[str(skill)], tools={"record_fact": record_fact},
-                            model=model, env_file="", temperature=0,
-                            max_input_tokens=16000, max_output_tokens=2000, verbose=False)
-    agent({"stage": "qa", "knowledge_point_id": "point-1"})
-    assert not marker.exists()
-    assert received == ["allowed"]
-
-
-def test_skill_resource_is_scoped_and_effective_tools_are_auditable(tmp_path):
+def test_akasha_native_skill_reads_a_declared_resource_on_demand(tmp_path):
     from lladar.skill_agent import AkashaSkillAgent
 
     skill = tmp_path / "references"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: references\ndescription: Read a reference.\n---\nRead note.md.")
-    (skill / "note.md").write_text("Scoped reference content")
-    (tmp_path / "outside.txt").write_text("OUTSIDE-SECRET")
+    (skill / "SKILL.md").write_text(
+        "---\nname: references\ndescription: Resource.\n---\nRead note.md.\n", encoding="utf-8")
+    (skill / "note.md").write_text("Scoped reference content", encoding="utf-8")
     model = ToolScriptModel(replies=[
         AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "references"}, "id": "load"}]),
-        AIMessage(content="", tool_calls=[{"name": "read_skill_resource", "args": {"skill": "references", "path": "../outside.txt"}, "id": "escape"}]),
         AIMessage(content="", tool_calls=[{"name": "read_skill_resource", "args": {"skill": "references", "path": "note.md"}, "id": "read"}]),
         AIMessage(content="Done"),
     ])
     agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
-                            max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+
     evidence = agent({"stage": "knowledge_points", "source_id": "source_001"})
-    assert "OUTSIDE-SECRET" not in str(model.prompts)
-    assert "Scoped reference content" in str(model.prompts[-1])
-    assert evidence["skill_files"]["note.md"]
-    assert set(evidence["tool_names"]) == {"load_skill", "read_skill_resource"}
-    assert any(event["tool"] == "load_skill" for event in evidence["tool_events"])
+
+    assert "Scoped reference content" not in str(model.prompts[1])
+    assert "Scoped reference content" in str(model.prompts[2])
+    assert evidence["loaded_skills"] == ["references"]
+    assert "read_skill_resource" in model.offered[1]
 
 
-def test_agent_enforces_model_context_budget_before_model_call(tmp_path):
-    import pytest
-    from lladar.skill_agent import AkashaSkillAgent
+def test_adapter_has_no_lladar_specific_skill_middleware_or_agent_subclass():
+    import lladar.skill_agent as skill_agent
 
-    skill = tmp_path / "budget"
-    skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: budget\ndescription: Budget test.\n---\nRead sources.")
-    model = ToolScriptModel(replies=[AIMessage(content="Done")])
-    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
-                            max_input_tokens=100, max_output_tokens=100, verbose=False)
-    with pytest.raises(RuntimeError, match="input.*budget"):
-        agent({"stage": "knowledge_points", "source_id": "source_001" + "long " * 100})
-    assert model.prompts == []
+    assert not hasattr(skill_agent, "DatasetSkillMiddleware")
+    assert not hasattr(skill_agent, "DatasetAkashaAgent")
 
 
-def test_all_tool_calls_including_unknown_tools_share_a_finite_budget(tmp_path):
+def test_direct_adapter_limits_bound_host_tool_calls(tmp_path):
     import pytest
     from lladar.skill_agent import AkashaSkillAgent
 
     skill = tmp_path / "bounded"
     skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: bounded\ndescription: Tool budget.\n---\nRead sources.")
+    (skill / "SKILL.md").write_text("---\nname: bounded\ndescription: Budget.\n---\nSubmit facts.")
     model = ToolScriptModel(replies=[
-        AIMessage(content="", tool_calls=[{"name": "unknown_tool", "args": {}, "id": f"call-{i}"} for i in range(41)]),
-        AIMessage(content="Done"),
+        AIMessage(content="", tool_calls=[{"name": "record", "args": {"value": str(i)}, "id": f"call-{i}"}
+                                          for i in range(41)]),
     ])
-    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
-                            max_input_tokens=100000, max_output_tokens=2000, verbose=False)
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={"record": lambda value: value}, model=model,
+                             env_file="", temperature=0, max_input_tokens=100000,
+                             max_output_tokens=2000, verbose=False)
     with pytest.raises(RuntimeError, match="tool call budget"):
         agent({"stage": "knowledge_points", "source_id": "source_001"})
-
-
-def test_native_skill_load_failure_is_fatal_not_a_retryable_model_failure(tmp_path):
-    import pytest
-    from lladar.exceptions import LladarError
-    from lladar.skill_agent import AkashaSkillAgent
-
-    skill = tmp_path / "broken"
-    skill.mkdir()
-    document = skill / "SKILL.md"
-    document.write_text("---\nname: broken\ndescription: Loader test.\n---\nRead sources.")
-    model = ToolScriptModel(replies=[
-        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "broken"}, "id": "load"}]),
-        AIMessage(content="Done"),
-    ])
-    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
-                            max_input_tokens=16000, max_output_tokens=2000, verbose=False)
-    document.write_text("Invalid skill entry")
-    with pytest.raises(LladarError, match="skill.*load"):
-        agent({"stage": "knowledge_points", "source_id": "source_001"})
-
-
-def test_native_provider_failure_is_retryable_without_exposing_exception_details(tmp_path):
-    import pytest
-    from lladar.exceptions import ProviderError
-    from lladar.skill_agent import AkashaSkillAgent
-
-    class DisconnectedModel(ToolScriptModel):
-        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
-            raise ConnectionError("PRIVATE-REQUEST-DATA")
-
-    skill = tmp_path / "network"
-    skill.mkdir()
-    (skill / "SKILL.md").write_text("---\nname: network\ndescription: Network test.\n---\nRead sources.")
-    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=DisconnectedModel(), env_file="", temperature=0,
-                            max_input_tokens=16000, max_output_tokens=2000, verbose=False)
-    with pytest.raises(ProviderError) as error:
-        agent({"stage": "knowledge_points", "source_id": "source_001"})
-    assert "PRIVATE-REQUEST-DATA" not in str(error.value)
-    assert error.value.skill_evidence["tool_call_limit"] == 40
-    assert error.value.skill_evidence["max_round"] == 30
-    assert error.value.skill_evidence["loaded_skills"] == []

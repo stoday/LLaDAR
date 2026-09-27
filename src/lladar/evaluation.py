@@ -109,6 +109,8 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
             item["probe_type"] = probe["plan_type"]
             item["concept_id"] = probe["concept_id"]
             item["pair_id"] = probe["pair_id"]
+            item["varied_dimension"] = probe.get("varied_dimension")
+            item["answer_contract"] = probe.get("answer_contract")
         if trial["status"] != "ok":
             item.update(status="execution_error", values={}, reason=trial.get("error", "Target Agent returned no response."))
         elif probe:
