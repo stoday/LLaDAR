@@ -9,11 +9,12 @@ from datetime import datetime
 from pathlib import Path
 
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
+from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
 from .interfaces import NeedsConfirmation
 from .reporting import DEFAULT_REPORT_MODEL, create_report
-from .runner import run_agent
+from .runner import DEFAULT_ADAPTER_MODEL, run_agent
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -78,6 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--output", default=".", metavar="DIRECTORY",
                          help=f"Directory for the generated dataset; the CLI chooses {_DATASET_FILENAME_DISPLAY} (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; zero means all candidates.")
+    dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
+                         default="free", help="Preferred generated question type; free preserves source-grounded open answers.")
+    dataset.add_argument("--controlled-variant-probes", action="store_true",
+                         help="Interactively choose optional source-validated controlled-variant dimensions (requires a terminal).")
+    dataset.add_argument("--controlled-variant-topics", metavar="DIMENSION_ID[,DIMENSION_ID]",
+                         help="Comma-separated planned dimension IDs for scripts. Cannot combine with --controlled-variant-probes.")
     dataset.add_argument("--seed", type=int, default=0,
                          help="Deterministic candidate shuffle seed.")
     dataset.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
@@ -150,7 +157,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Deterministic random selection seed.")
     runner.add_argument(
         "--model", default=None, metavar="MODEL",
-        help="Project coding model (default: gemini:gemini-2.5-flash), or browser answer extraction model (default: gemini:gemini-3.8-flash; Gemini API only).",
+        help=f"Project coding model (default: {DEFAULT_ADAPTER_MODEL}), or browser answer extraction model (default: gemini:gemini-3.8-flash; Gemini API only).",
+    )
+    runner.add_argument(
+        "--max-input-tokens", type=int, metavar="N",
+        help="Override the project auto-adapter input token budget for discovery, generation and repair (default: selected model profile). Does not change the target Agent or browser extraction budgets.",
+    )
+    runner.add_argument(
+        "--max-output-tokens", type=int, metavar="N",
+        help="Override the project auto-adapter output token budget for discovery, generation and repair (default: selected model profile). Does not change the target Agent or browser extraction budgets.",
     )
     runner.add_argument(
         "--env-file", default=".env", metavar="PATH",
@@ -258,11 +273,24 @@ def main(
         args.interactive = True
     try:
         if args.command == "create":
+            if args.controlled_variant_probes and args.controlled_variant_topics:
+                parser.error("--controlled-variant-probes and --controlled-variant-topics cannot be used together")
+            if args.controlled_variant_probes:
+                if not sys.stdin.isatty():
+                    parser.error("--controlled-variant-probes requires terminal input; use --controlled-variant-topics for scripts")
+                controlled_variant_selector = select_controlled_variant_topics
+                controlled_variant_topics = ()
+            else:
+                controlled_variant_selector = None
+                controlled_variant_topics = normalize_controlled_variant_topics(args.controlled_variant_topics)
             output = _resolve_dataset_output(args.output)
             records = create_test_dataset(
                 [Path(path) for path in args.knowledge],
                 output=output,
                 count=args.count,
+                question_type=args.question_type,
+                controlled_variant_topics=controlled_variant_topics,
+                controlled_variant_selector=controlled_variant_selector,
                 seed=args.seed,
                 model=args.model,
                 skill=args.skill,
@@ -276,7 +304,18 @@ def main(
                 verbose=args.verbose,
             )
             metadata = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
-            status = f" (status={metadata['status']}; provenance={output}.generation.json)"
+            graph = json.loads(Path(str(output) + ".graph.json").read_text(encoding="utf-8"))
+            concept_count = sum(node.get("type") == "concept" for node in graph.get("nodes", []))
+            dimensions = graph.get("control_dimensions", [])
+            selected_controls = sum(
+                line.get("plan_type") == "controlled_invariance"
+                for line in metadata["dataset"]["lines"]
+            )
+            status = (
+                f" (status={metadata['status']}; concepts={concept_count}; "
+                f"controlled_dimensions={len(dimensions)}; controlled_records={selected_controls}; "
+                f"provenance={output}.generation.json)"
+            )
             print(f"Generated {len(records)} record(s) at {output}{status}")
             return 0
         if args.command == "run-agent":
@@ -292,6 +331,8 @@ def main(
                 runs_root=runs_root,
                 model=args.model,
                 target_python=args.target_python,
+                max_input_tokens=args.max_input_tokens,
+                max_output_tokens=args.max_output_tokens,
                 timeout=args.timeout,
                 max_tool_calls=args.max_tool_calls,
                 skill=args.skill,

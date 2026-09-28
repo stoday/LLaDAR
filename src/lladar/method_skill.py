@@ -34,7 +34,7 @@ def invoke_skill(
     system_prompt: str,
     agent_factory: SkillAgentFactory | None = None,
 ) -> dict[str, Any]:
-    """Run one native local skill and require evidence that it was loaded."""
+    """Run one native Akasha local skill and require its recorded evidence."""
     if agent_factory is None:
         from .skill_agent import AkashaSkillAgent
         agent_factory = AkashaSkillAgent

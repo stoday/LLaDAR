@@ -10,7 +10,9 @@ from typing import Any
 
 from .exceptions import EvaluationError
 from .method_skill import SkillAgentFactory, invoke_skill, resolve_skill
+from .question_types import deterministic_judgment, load_run_probe_contract, load_run_question_type_contract, record_fingerprint
 from .records import read_records
+from .semantic_graph import classify_probe_response
 
 
 DEFAULT_EVALUATION_MODEL = "gemini:gemini-2.5-flash"
@@ -47,9 +49,44 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
     selected_skill = resolve_skill(skill, BUILTIN_EVALUATION_SKILL_DIR)
     records = read_records(responses)
     trials, trials_source = _load_trials(Path(responses), records)
+    contracts = load_run_question_type_contract(Path(responses))
+    probe_contracts = load_run_probe_contract(Path(responses))
+    typed_trial_contracts = {
+        (trial["record_index"], trial["trial"]): contracts.get(record_fingerprint(trial))
+        for trial in trials if trial["status"] == "ok"
+    }
+    probe_trial_contracts = {
+        (trial["record_index"], trial["trial"]): probe_contracts.get(record_fingerprint(trial))
+        for trial in trials if trial["status"] == "ok"
+    }
+    has_typed_trials = any(contract and contract["question_type"] != "free"
+                            for contract in typed_trial_contracts.values())
+    has_probe_trials = any(probe_trial_contracts.values())
     completed = [trial for trial in trials if trial["status"] == "ok"]
     workspace = EvaluationWorkspace()
-    if completed:
+    if has_typed_trials:
+        evidence = {"skill_files": {"SKILL.md": _sha(selected_skill / "SKILL.md")}}
+        workspace.plan = {
+            "title": "Typed response correctness",
+            "approach": "Use deterministic response protocols for typed records and the selected skill for free responses.",
+            "dimensions": [
+                {"name": "correct", "description": "Correct answer", "kind": "boolean"},
+                {"name": "response_format_valid", "description": "Response follows the required answer protocol", "kind": "boolean"},
+            ],
+            "limitations": ["Typed response comparison does not judge source completeness."],
+        }
+    elif has_probe_trials:
+        evidence = {"skill_files": {"SKILL.md": _sha(selected_skill / "SKILL.md")}}
+        workspace.plan = {
+            "title": "Semantic probe outcomes",
+            "approach": "Map verified probe candidates deterministically before any skill judgment.",
+            "dimensions": [
+                {"name": "correct", "description": "Correct answer", "kind": "boolean"},
+                {"name": "mapping_outcome", "description": "Verified semantic-probe response mapping", "kind": "categorical"},
+            ],
+            "limitations": ["A mapping outcome is not a correctness or bias verdict."],
+        }
+    elif completed:
         evidence = invoke_skill(skill=selected_skill, tools={"submit_plan": workspace.submit_plan},
                                 request={"stage": "plan", "records": completed[:25]}, model=model,
                                 env_file=env_file, system_prompt=EVAL_SYSTEM_PROMPT,
@@ -65,12 +102,35 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
     judge_errors = 0
     for trial in trials:
         item = {key: trial.get(key) for key in ("record_index", "trial", "question", "expected_answer", "actual_response")}
+        contract = typed_trial_contracts.get((trial["record_index"], trial["trial"]))
+        probe = probe_trial_contracts.get((trial["record_index"], trial["trial"]))
+        item["question_type"] = contract["question_type"] if contract else "unknown"
+        if probe:
+            item["probe_type"] = probe["plan_type"]
+            item["concept_id"] = probe["concept_id"]
+            item["pair_id"] = probe["pair_id"]
+            item["varied_dimension"] = probe.get("varied_dimension")
+            item["answer_contract"] = probe.get("answer_contract")
         if trial["status"] != "ok":
             item.update(status="execution_error", values={}, reason=trial.get("error", "Target Agent returned no response."))
+        elif probe:
+            outcome = classify_probe_response(probe, item["actual_response"])
+            item.update(status="evaluated", values={"correct": None, "mapping_outcome": outcome},
+                        reason="Deterministic semantic-probe candidate mapping.")
+        elif contract and contract["question_type"] != "free":
+            item.update(status="evaluated", **deterministic_judgment(contract, item["expected_answer"], item["actual_response"]))
         else:
             workspace.judgment = None
             try:
-                invoke_skill(skill=selected_skill, tools={"submit_judgment": workspace.submit_judgment},
+                submit_judgment = workspace.submit_judgment
+                if has_typed_trials or has_probe_trials:
+                    def submit_judgment(value):
+                        if (isinstance(value, dict) and isinstance(value.get("values"), dict)
+                                and set(value["values"]) == {"correct"}):
+                            extra_dimension = "response_format_valid" if has_typed_trials else "mapping_outcome"
+                            value = {**value, "values": {**value["values"], extra_dimension: None}}
+                        return workspace.submit_judgment(value)
+                invoke_skill(skill=selected_skill, tools={"submit_judgment": submit_judgment},
                              request={"stage": "judgment", **item}, model=model, env_file=env_file,
                              system_prompt=EVAL_SYSTEM_PROMPT, agent_factory=skill_agent_factory)
                 if workspace.judgment is None:
@@ -83,12 +143,15 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
                 item.update(status="judge_error", values={}, reason=f"{type(error).__name__}: {error}")
         items.append(item)
     evaluated = [item for item in items if item["status"] == "evaluated"]
+    summary = {"records": len(records), "scheduled_trials": len(trials), "evaluated": len(evaluated),
+               "execution_error": sum(item["status"] == "execution_error" for item in items),
+               "judge_error": judge_errors, "coverage": len(evaluated) / len(trials) if trials else None}
+    if has_probe_trials:
+        summary.update(probe_trials=sum(item.get("probe_type") is not None for item in items),
+                       correctness_trials=sum(item.get("probe_type") is None for item in items))
     result = {"source": str(Path(responses).resolve()), "trials_source": trials_source,
               "skill": {"name": selected_skill.name, "path": str(selected_skill), "files": evidence["skill_files"]},
-              "evaluator_model": model, "plan": workspace.plan,
-              "summary": {"records": len(records), "scheduled_trials": len(trials), "evaluated": len(evaluated),
-                          "execution_error": sum(item["status"] == "execution_error" for item in items),
-                          "judge_error": judge_errors, "coverage": len(evaluated) / len(trials) if trials else None},
+              "evaluator_model": model, "plan": workspace.plan, "summary": summary,
               "aggregates": _aggregate(workspace.plan, evaluated), "stability": _stability(items, len(records)), "items": items}
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

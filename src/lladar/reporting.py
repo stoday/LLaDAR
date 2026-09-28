@@ -59,6 +59,21 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     for name, aggregate in evaluation["aggregates"].items():
         lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", "| Metric | Value |", "| --- | ---: |"]
         lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
+    type_rows = _question_type_rows(evaluation["items"])
+    if type_rows:
+        lines += ["", "## By question type", "", "| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        for row in type_rows:
+            lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
+    probe_rows = _semantic_probe_rows(evaluation["items"])
+    if probe_rows:
+        lines += ["", "## Semantic probes", "", "| Concept | Scheduled | Mapped | Synthesized | Unmapped |", "| --- | ---: | ---: | ---: | ---: |"]
+        for row in probe_rows:
+            lines.append("| {concept_id} | {scheduled} | {mapped} | {synthesized} | {unmapped} |".format(**{key: _value(value) for key, value in row.items()}))
+    controlled_rows = _controlled_variant_rows(evaluation["items"])
+    if controlled_rows:
+        lines += ["", "## Controlled variants", "", "| Dimension | Pair | Scheduled | Mapped | Same | Different | Indeterminate |", "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+        for row in controlled_rows:
+            lines.append("| {varied_dimension} | {pair_id} | {scheduled} | {mapped} | {same} | {different} | {indeterminate} |".format(**{key: _value(value) for key, value in row.items()}))
     lines += ["", "## Stability", "", "| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
     for row in evaluation["stability"]["records"]:
         lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
@@ -84,3 +99,67 @@ def _value(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.6g}"
     return _escape(value)
+
+
+def _question_type_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        question_type = item.get("question_type")
+        if isinstance(question_type, str):
+            groups.setdefault(question_type, []).append(item)
+    rows = []
+    for question_type, group in sorted(groups.items()):
+        evaluated = [item for item in group if item.get("status") == "evaluated"]
+        correct = sum(item.get("values", {}).get("correct") is True for item in evaluated)
+        rows.append({
+            "question_type": question_type,
+            "scheduled": len(group),
+            "execution_error": sum(item.get("status") == "execution_error" for item in group),
+            "evaluated": len(evaluated),
+            "invalid_response_format": sum(item.get("values", {}).get("response_format_valid") is False for item in evaluated),
+            "correct": correct,
+            "correct_rate": correct / len(evaluated) if evaluated else None,
+        })
+    return rows
+
+
+def _semantic_probe_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        if item.get("probe_type") in {"concept_mapping", "controlled_invariance"} and isinstance(item.get("concept_id"), str):
+            groups.setdefault(item["concept_id"], []).append(item)
+    rows = []
+    for concept_id, group in sorted(groups.items()):
+        outcomes = [item.get("values", {}).get("mapping_outcome") for item in group if item.get("status") == "evaluated"]
+        rows.append({"concept_id": concept_id, "scheduled": len(group),
+                     "mapped": sum(isinstance(value, str) and value.startswith("maps_to:") for value in outcomes),
+                     "synthesized": outcomes.count("synthesized"),
+                     "unmapped": sum(value in {"unmapped", "external_or_unsupported", None} for value in outcomes)})
+    return rows
+
+
+def _controlled_variant_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for item in items:
+        if (item.get("probe_type") == "controlled_invariance"
+                and isinstance(item.get("varied_dimension"), str)
+                and isinstance(item.get("pair_id"), str)):
+            groups.setdefault((item["varied_dimension"], item["pair_id"]), []).append(item)
+    rows = []
+    for (dimension, pair_id), group in sorted(groups.items()):
+        outcomes = [
+            item.get("values", {}).get("mapping_outcome")
+            for item in group if item.get("status") == "evaluated"
+        ]
+        mapped = [outcome for outcome in outcomes if isinstance(outcome, str) and outcome.startswith("maps_to:")]
+        complete = len(mapped) == len(group) and len(group) >= 2
+        rows.append({
+            "varied_dimension": dimension,
+            "pair_id": pair_id,
+            "scheduled": len(group),
+            "mapped": len(mapped),
+            "same": len(mapped) if complete and len(set(mapped)) == 1 else 0,
+            "different": len(mapped) if complete and len(set(mapped)) > 1 else 0,
+            "indeterminate": len(group) - len(mapped),
+        })
+    return rows

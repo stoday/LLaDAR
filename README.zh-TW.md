@@ -37,7 +37,15 @@ lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
 預設使用隨套件安裝的 Akasha `knowledge-point-qa` skill，先抽取知識點，再逐點產生 QA。
-無須另外安裝 skill；會另產生 `dataset.jsonl.generation.json` 保存原文引用與執行狀態。
+若存在已驗證的早餐／午餐／晚餐熱量同位階事實，也會建立可審核的語意圖譜、概念映射
+probe。無須另外安裝 skill；會另產生
+`dataset.jsonl.generation.json` 與 `dataset.jsonl.graph.json` 保存原文引用與執行狀態。
+
+圖譜 probe 用來觀察目標模型如何把「正餐」等推論概念映射至來源實例，沒有唯一正解，
+會與答對率分開報告。合成人口統計控制是測試輸入，不是來源或人物主張，預設不產生。
+在終端可用 `--demographic-probes` 顯示受控維度清單後選擇；自動化腳本則用
+`--demographic-topics age,nationality`。不接受自由撰寫的人口統計 prompt，讓每一組
+pair 都維持可比較性。
 
 需要 Akasha 1.8 以上。`--skill DIRECTORY` 可改用一個可信任的本地 skill；
 不需要額外 manifest，尚未加入 skill 安裝管理命令。內建方法不屬於可移除的使用者安裝項目。
@@ -167,7 +175,7 @@ lladar report evaluation.json --output report.md
 
 ## 輸出
 
-- `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL；skill 模式另有 `<output>.generation.json`
+- `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL；另有 `<output>.generation.json` 與 `<output>.graph.json`
 - `run-agent`：完成後的三欄 JSONL、`<output>.trials.jsonl` 與 `<output>.run.json`
 - `eval`：包含評估計畫、逐筆判讀、覆蓋率與統計彙整的 JSON
 - `report`：包含固定表格、解讀、限制與逐筆附錄的 Markdown
@@ -186,3 +194,66 @@ pytest
 python -m playwright install chromium
 python -m pytest -m browser
 ```
+
+## 目錄結構與檔案用途
+
+以下列出主要原始碼、文件與範例，作為閱讀導覽，而非完整檔案清單；省略產生的資料集、
+報告、快取、虛擬環境與建置產物。
+
+```text
+LLaDAR/
+├── pyproject.toml              # 套件資訊、相依套件與 lladar CLI 入口設定
+├── uv.lock                     # uv 使用的相依套件版本鎖定檔
+├── README.md                   # 英文總覽與快速入門
+├── README.zh-TW.md             # 繁體中文總覽與快速入門
+├── qa_agent.py                 # 獨立的 Akasha 問答腳本，非 lladar CLI 入口
+├── src/lladar/                 # 安裝後使用的 Python 套件
+│   ├── cli.py                  # CLI 參數解析與指令分派
+│   ├── api.py                  # 建立測試資料集的 Python API
+│   ├── skill_generation.py     # 來源證據、圖譜／出題規劃階段與資料集輸出
+│   ├── skill_agent.py          # 銜接 Akasha 原生動態 skill 載入的薄介接層
+│   ├── method_skill.py         # run/eval/report 共用的 skill 路徑解析與呼叫
+│   ├── skill_assets/           # 套件內建 skills 與輔助資源
+│   │   ├── knowledge-point-qa/       # 資料集生成方法（SKILL.md）
+│   │   ├── run-agent-stability/      # 重複執行方法（SKILL.md 與 strategy.py）
+│   │   ├── run-agent-random-sample/  # 隨機抽樣方法（SKILL.md 與 strategy.py）
+│   │   ├── eval-answer-verdict/     # 回答評估方法（SKILL.md）
+│   │   └── report-evidence-summary/ # 依據證據撰寫報告的方法（SKILL.md）
+│   ├── runner.py               # 執行受測 Agent，記錄回答與逐次試驗
+│   ├── run_strategy.py         # 執行排程與策略驗證
+│   ├── auto_adapter.py         # 探索、驗證並重播受測專案的 adapter
+│   ├── project_profile.py      # 根據原始碼證據描述受測專案
+│   ├── browser_target.py       # 瀏覽器受測目標的校正與問題重播
+│   ├── evaluation.py           # 回答判讀與確定性的統計彙整
+│   ├── reporting.py            # 將已儲存的評估事實與文字解讀組成報告
+│   ├── semantic_graph.py       # 將探針回答分類至來源候選項
+│   ├── controlled_variants.py  # 選取並驗證 planner 提出的控制維度
+│   ├── question_types.py       # 題型與探針契約、指紋及計分
+│   ├── records.py              # 資料集紀錄的讀取、驗證與寫入
+│   ├── loaders.py              # 載入知識來源文字
+│   └── providers/              # 模型供應者介面與 Akasha 實作
+├── tests/                      # 自動化測試、瀏覽器測試與受測專案 fixtures
+├── scripts/                    # 真實環境驗收、打包與發版驗證腳本
+├── example_project/            # 端到端受測專案範例
+│   ├── diet/                   # 飲食問答 Agent 與知識來源
+│   ├── resume_review/          # 履歷審查服務與終端操作範例
+│   └── tainan_tutorial/        # 台南推薦示範、adapters、資料與測試
+├── examples/support-demo-agent/ # 客服 Agent HTTP 示範服務
+├── akasha-agent-example/       # 簡單的 Akasha Agent 與 hello-skill 範例
+├── docs/                      # PRD、設計說明、驗證紀錄與簡報
+├── site/                      # 英文文件網站
+│   └── zh-TW/                 # 繁體中文文件網站
+├── .github/workflows/         # 發版與文件網站部署自動化
+└── .codex/skills/             # 開發助手使用的 skills，與執行時的 skills 分開
+```
+
+若要追蹤資料集生成，建議從 `cli.py` → `api.py` → `skill_generation.py` 閱讀；
+skill 載入實作在 `skill_agent.py`，方法指令則在 `skill_assets/*/SKILL.md`。
+其他指令可分別從 `runner.py`（`run-agent`）、`evaluation.py`（`eval`）與
+`reporting.py`（`report`）開始。若要自訂方法，使用 `--skill` 指定本地 skill 目錄，
+不必修改套件內建資源。
+
+若要了解受測專案整合，可接著查看 `adapter_workspace.py`、`project_inventory.py`、
+`graph_discovery.py` 與 `interfaces.py` 的工作目錄檢視及探索流程；
+`target_environment.py` 與 `service_runtime.py` 的執行環境及服務管理；以及
+`playwright_driver.py`、`response_capture.py` 與 `answer_extraction.py` 的瀏覽器操作與回答擷取。

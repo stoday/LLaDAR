@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      EXAMPLE_MODEL: ${{ vars.LLADAR_LIVE_MODEL || 'gemini-3-flash-preview' }}
+      EXAMPLE_MODEL: ${{ vars.LLADAR_LIVE_MODEL || 'gemini-3.8-flash' }}
     steps:
       - name: Require Gemini credentials
         env:

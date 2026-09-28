@@ -30,6 +30,29 @@ responses.jsonl（只填入 actual_response）與 run evidence
 
 ## 2. 探索：找出真正的入口與輸出
 
+### 模型額度
+
+探索、adapter 生成與修復共用 `model_profiles.py` 中所選 `--model` 的額度，
+不再各自固定為 24,000 input／8,192 output tokens。預設模型為 `gemini:gemini-3.8-flash`。
+設定表中的 `gemini:gemini-3.8-flash`、`gemini:gemini-3-flash-preview`、
+`gemini:gemini-3.7-flash` 與 `gemini:gemini-2.5-flash` 的預設為
+1,048,576 input／65,536 output tokens；未列入設定表的模型使用
+16,384 input／8,192 output tokens 的 fallback。
+
+可分別覆寫輸入或輸出額度（必須大於零），未指定的值仍採模型預設：
+
+```bash
+lladar run-agent dataset.jsonl --project ./my-agent --model gemini:gemini-3.8-flash --max-input-tokens 24000 --max-output-tokens 65536
+```
+
+Python API 的 `run_agent(...)` 與 `AutoAdapter(...)` 同樣接受
+`max_input_tokens`、`max_output_tokens`。這些設定只影響專案 auto-adapter，
+不改變受測 Agent 自己的模型設定，也不適用於 `--page-url` 的瀏覽器回答擷取。
+實際解析後的額度記錄在 `adapter/run.json` 的同名欄位。
+提高上限不代表每次會用滿，但可能容許更高的成本與耗時；覆寫時須遵守模型本身的限制。
+
+### 探索工具
+
 `AutoAdapter.prepare()` 會建立第一個探索 agent。它只有下列唯讀能力：
 
 - `list_files`

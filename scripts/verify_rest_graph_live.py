@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import socket
 
-from lladar.runner import run_agent
+from lladar.runner import DEFAULT_ADAPTER_MODEL, run_agent
 from lladar.project_inventory import inventory
 from verify_auto_adapter_live import dataset
 from live_acceptance_runtime import runtime_evidence
@@ -31,7 +31,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--target-python', required=True, type=Path)
     parser.add_argument('--env-file', type=Path, help='Optional dotenv file; defaults to process environment')
-    parser.add_argument('--model', default='gemini:gemini-3-flash-preview')
+    parser.add_argument('--model', default=DEFAULT_ADAPTER_MODEL)
     args = parser.parse_args()
     runtime_evidence(args.target_python)
     root = Path(__file__).resolve().parents[1]

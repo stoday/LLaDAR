@@ -39,14 +39,30 @@ or a directory in which the CLI creates a timestamped dataset.
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
-The default method is the bundled Akasha `knowledge-point-qa` skill: it extracts
-knowledge points, then generates one QA per point. It is included in pip installs
-and writes `dataset.jsonl.generation.json` with evidence and processing status.
+The bundled Akasha `knowledge-point-qa` skill stores source documents and
+source metadata through LlamaIndex. After source-grounded fact extraction, its
+two model stages propose a domain-independent evidence graph, then propose
+direct-fact, concept-mapping, and optional controlled-variant questions from
+that verified graph. It is included in pip installs and writes
+`dataset.jsonl.generation.json` plus `dataset.jsonl.graph.json` with evidence
+and processing status.
+
+Graph probes observe how a target maps an inferred concept such as “meal” to
+source-backed peers; they do not have a single correct answer and are reported
+separately from correctness. Synthetic controls are test inputs, not claims
+about the source or people. They are off by default. Use
+`--controlled-variant-probes` in a terminal after the graph stage lists its
+validated dimensions, or use `--controlled-variant-topics DIMENSION_ID` in a
+script with an ID recorded for the same corpus fingerprint. The core accepts
+only planner-validated dimensions, so every pair remains comparable.
 
 This requires Akasha 1.8 or later. Use `--skill DIRECTORY` to override the
 default with one trusted local skill; there is no extra skill manifest or
-installation command. The bundled method is not a removable user-installed skill.
-See [skill generation](docs/skill-generation.md) for limits and Python usage.
+installation command. LLaDAR passes the one selected directory to Akasha as
+`skills=[...]`: Akasha initially exposes its metadata, then the model loads the
+selected `SKILL.md` on demand. The bundled method is not a removable
+user-installed skill. See [skill generation](docs/skill-generation.md) for
+limits and Python usage.
 
 Migration: dataset creation now uses a skill only, so `create test-dataset` no
 longer accepts `--method`, `--chunk-size`, `--overlap`, `--strict`, `--prompt`, or
@@ -228,7 +244,7 @@ copy-and-run instructions in Chinese.
 
 ## Outputs
 
-- `create test-dataset`: three-field JSONL with `actual_response: null`; skill mode also writes `<output>.generation.json`
+- `create test-dataset`: three-field JSONL with `actual_response: null`; also writes `<output>.generation.json` and `<output>.graph.json`
 - `run-agent`: completed three-field JSONL, `<output>.trials.jsonl`, and `<output>.run.json`
 - `eval`: evaluation plan, judgments, coverage, and aggregates in JSON
 - `report`: Markdown tables, interpretation, limitations, and audit appendix
@@ -249,3 +265,69 @@ pytest
 python -m playwright install chromium
 python -m pytest -m browser
 ```
+
+## Repository structure
+
+The main source, documentation, and example paths are shown below. This is a
+navigation map, not an exhaustive listing; generated datasets, reports, caches,
+virtual environments, and build artifacts are omitted.
+
+```text
+LLaDAR/
+├── pyproject.toml              # Package metadata, dependencies, and lladar CLI entry point
+├── uv.lock                     # Locked dependency versions for uv
+├── README.md                   # English overview and quick start
+├── README.zh-TW.md             # Traditional Chinese overview and quick start
+├── qa_agent.py                 # Standalone Akasha QA script; not the lladar CLI entry point
+├── src/lladar/                 # Installable Python package
+│   ├── cli.py                  # CLI arguments and command dispatch
+│   ├── api.py                  # Python API for creating test datasets
+│   ├── skill_generation.py     # Source evidence, graph/planning stages, and dataset output
+│   ├── skill_agent.py          # Thin adapter to Akasha's native dynamic skill loading
+│   ├── method_skill.py         # Shared skill resolution and invocation for run/eval/report
+│   ├── skill_assets/           # Bundled skills and supporting resources
+│   │   ├── knowledge-point-qa/       # Dataset-generation method (SKILL.md)
+│   │   ├── run-agent-stability/      # Repeated-run method (SKILL.md and strategy.py)
+│   │   ├── run-agent-random-sample/  # Random-sampling method (SKILL.md and strategy.py)
+│   │   ├── eval-answer-verdict/     # Answer-evaluation method (SKILL.md)
+│   │   └── report-evidence-summary/ # Evidence-based report method (SKILL.md)
+│   ├── runner.py               # Execute target agents and record responses/trials
+│   ├── run_strategy.py         # Run scheduling and strategy validation
+│   ├── auto_adapter.py         # Discover, verify, and replay target-project adapters
+│   ├── project_profile.py      # Describe target projects from source evidence
+│   ├── browser_target.py       # Browser-target calibration and question replay
+│   ├── evaluation.py           # Answer judgments and deterministic aggregation
+│   ├── reporting.py            # Render saved evaluation facts and report narratives
+│   ├── semantic_graph.py       # Classify probe responses against source candidates
+│   ├── controlled_variants.py  # Select and validate planner-declared control dimensions
+│   ├── question_types.py       # Question-type and probe contracts, fingerprints, and scoring
+│   ├── records.py              # Read, validate, and write dataset records
+│   ├── loaders.py              # Load knowledge-source text
+│   └── providers/              # Model-provider interfaces and Akasha implementation
+├── tests/                      # Automated tests, browser tests, and target-project fixtures
+├── scripts/                    # Live acceptance, packaging, and release verification scripts
+├── example_project/            # End-to-end target projects
+│   ├── diet/                   # Dietary QA agent and knowledge source
+│   ├── resume_review/          # Resume-review service and console example
+│   └── tainan_tutorial/        # Tainan recommendation demo, adapters, data, and tests
+├── examples/support-demo-agent/ # Support-agent HTTP demo
+├── akasha-agent-example/       # Small Akasha agent and hello-skill example
+├── docs/                      # PRDs, design notes, verification records, and presentations
+├── site/                      # English documentation website
+│   └── zh-TW/                 # Traditional Chinese documentation website
+├── .github/workflows/         # Release and documentation-deployment automation
+└── .codex/skills/             # Development-assistant skills, separate from runtime skills
+```
+
+To follow dataset creation, start with `cli.py` → `api.py` →
+`skill_generation.py`; skill loading is implemented in `skill_agent.py`, while
+the method instructions live in `skill_assets/*/SKILL.md`. For the remaining
+commands, start with `runner.py` (`run-agent`), `evaluation.py` (`eval`), and
+`reporting.py` (`report`). To customize a method, pass a local skill directory
+with `--skill` rather than editing the bundled assets.
+
+For target integration, also see `adapter_workspace.py`, `project_inventory.py`,
+`graph_discovery.py`, and `interfaces.py` for workspace inspection and discovery;
+`target_environment.py` and `service_runtime.py` for execution environments and
+managed services; and `playwright_driver.py`, `response_capture.py`, and
+`answer_extraction.py` for browser operation and response extraction.

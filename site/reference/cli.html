@@ -36,7 +36,8 @@
       <tr><td><code>--output PATH</code></td><td><code>responses.jsonl</code></td><td>Responses file; LLaDAR also writes <code>PATH.trials.jsonl</code> and <code>PATH.run.json</code>.</td></tr>
       <tr><td><code>--skill DIRECTORY</code></td><td>Bundled <code>run-agent-stability</code></td><td>One local <code>SKILL.md</code> method directory for scheduling.</td></tr>
       <tr><td><code>--seed SEED</code></td><td><code>0</code></td><td>Seed for deterministic record selection.</td></tr>
-      <tr><td><code>--model MODEL</code></td><td><code>gemini:gemini-2.5-flash</code></td><td>Project coding model; browser answer extraction defaults instead to gemini:gemini-3.8-flash (Gemini API only).</td></tr>
+      <tr><td><code>--model MODEL</code></td><td><code>gemini:gemini-3.8-flash</code></td><td>Project coding model; browser answer extraction defaults to gemini:gemini-3.8-flash (Gemini API only).</td></tr>
+      <tr><td><code>--max-input-tokens N</code> / <code>--max-output-tokens N</code></td><td>Selected model profile</td><td>Override positive token budgets for project auto-adapter discovery, generation and repair only; target Agent and browser extraction budgets are unchanged. Default Gemini 3.8 Flash budgets: 1,048,576 input / 65,536 output tokens.</td></tr>
       <tr><td><code>--env-file PATH</code></td><td><code>.env</code></td><td>Environment file for both the coding-model provider and target process. Existing environment variables take precedence.</td></tr>
       <tr><td><code>--target-python PATH</code></td><td>Auto-discover <code>PROJECT/.venv</code></td><td>Python executable used by the target project.</td></tr>
       <tr><td><code>--timeout SECONDS</code></td><td><code>3600</code> (60 minutes)</td><td>Limit in seconds for each adapter, tool subprocess, or browser request. Browser startup/navigation separately allow 300 seconds (5 minutes). Does not raise the separate extraction limits.</td></tr>
