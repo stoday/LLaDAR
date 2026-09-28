@@ -14,7 +14,7 @@ from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
 from .interfaces import NeedsConfirmation
 from .reporting import DEFAULT_REPORT_MODEL, create_report
-from .runner import run_agent
+from .runner import DEFAULT_ADAPTER_MODEL, run_agent
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
@@ -157,7 +157,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Deterministic random selection seed.")
     runner.add_argument(
         "--model", default=None, metavar="MODEL",
-        help="Project coding model (default: gemini:gemini-2.5-flash), or browser answer extraction model (default: gemini:gemini-3.8-flash; Gemini API only).",
+        help=f"Project coding model (default: {DEFAULT_ADAPTER_MODEL}), or browser answer extraction model (default: gemini:gemini-3.8-flash; Gemini API only).",
+    )
+    runner.add_argument(
+        "--max-input-tokens", type=int, metavar="N",
+        help="Override the project auto-adapter input token budget for discovery, generation and repair (default: selected model profile). Does not change the target Agent or browser extraction budgets.",
+    )
+    runner.add_argument(
+        "--max-output-tokens", type=int, metavar="N",
+        help="Override the project auto-adapter output token budget for discovery, generation and repair (default: selected model profile). Does not change the target Agent or browser extraction budgets.",
     )
     runner.add_argument(
         "--env-file", default=".env", metavar="PATH",
@@ -323,6 +331,8 @@ def main(
                 runs_root=runs_root,
                 model=args.model,
                 target_python=args.target_python,
+                max_input_tokens=args.max_input_tokens,
+                max_output_tokens=args.max_output_tokens,
                 timeout=args.timeout,
                 max_tool_calls=args.max_tool_calls,
                 skill=args.skill,

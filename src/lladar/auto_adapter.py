@@ -22,6 +22,7 @@ from .adapter_workspace import ExplorationBudget, WorkspaceExplorer
 from .target_environment import target_environment
 from .interfaces import DISCOVERY_PROMPT, NeedsConfirmation, choose_interface, parse_object, validate_plan, validate_service_url, write_json
 from .validation_retry import run_validated
+from .model_profiles import resolve_model_profile
 
 
 MAX_ADAPTER_REPAIR_ATTEMPTS = 50
@@ -245,9 +246,14 @@ class AutoAdapter:
                  model: str, timeout: float = 3600, max_tool_calls: int = 100,
                  verbose: bool = True,
                  graphify: bool = True, graphify_python: str | Path | None = None,
-                 service_url: str | None = None):
+                 service_url: str | None = None,
+                 max_input_tokens: int | None = None,
+                 max_output_tokens: int | None = None):
         if timeout <= 0 or max_tool_calls <= 0:
             raise ValueError("timeout and max_tool_calls must be positive")
+        self.model_profile = resolve_model_profile(
+            model, max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens,
+        )
         self.workspace = workspace.resolve()
         self.python = python.absolute()
         if not self.python.is_file():
@@ -267,6 +273,8 @@ class AutoAdapter:
         )
         self.source: bytes | None = None
         self.report: dict = {"status": "preparing", "model": model,
+                             "max_input_tokens": self.model_profile.max_input_tokens,
+                             "max_output_tokens": self.model_profile.max_output_tokens,
                              "controller_python": sys.executable,
                              "controller_prefix": sys.prefix,
                              "target_python": str(self.python), "verification": [],
@@ -628,7 +636,8 @@ class AutoAdapter:
                         with redirect_stdout(sys.stderr):
                             discovery = akasha.agents(
                                 model=self.model, env_file=self.env_file, tools=tools[:5],
-                                max_input_tokens=24000, max_output_tokens=8192,
+                                max_input_tokens=self.model_profile.max_input_tokens,
+                                max_output_tokens=self.model_profile.max_output_tokens,
                                 max_round=30, thinking=True, stream=True,
                                 verbose=self.verbose, keep_logs=False)
                             return _stream_answer(discovery(prompt))
@@ -690,7 +699,8 @@ class AutoAdapter:
                 with redirect_stdout(sys.stderr):
                     return akasha.agents(
                         model=self.model, env_file=self.env_file, tools=tools,
-                        max_input_tokens=24000, max_output_tokens=8192,
+                        max_input_tokens=self.model_profile.max_input_tokens,
+                        max_output_tokens=self.model_profile.max_output_tokens,
                         max_round=30, thinking=True, stream=True,
                         verbose=self.verbose, keep_logs=False,
                     )

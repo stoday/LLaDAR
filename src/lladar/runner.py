@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .progress import ProgressReporter
+from .model_profiles import resolve_model_profile
 from .records import read_records, write_records
 from .method_skill import SkillAgentFactory, resolve_skill
 from .question_types import load_probe_contract, load_question_type_contract
@@ -19,6 +20,7 @@ from .run_strategy import SkillStrategy
 
 
 Answerer = Callable[[str], str]
+DEFAULT_ADAPTER_MODEL = "gemini:gemini-3.8-flash"
 BUILTIN_RUN_SKILL_DIR = Path(__file__).resolve().parent / "skill_assets" / "run-agent-stability"
 
 
@@ -117,6 +119,8 @@ def run_agent(
     verbose: bool = True,
     runs_root: str | Path | None = None,
     model: str | None = None,
+    max_input_tokens: int | None = None,
+    max_output_tokens: int | None = None,
     target_python: str | Path | None = None,
     timeout: float = 3600,
     max_tool_calls: int = 100,
@@ -150,7 +154,12 @@ def run_agent(
         raise ValueError("response extraction options require --page-url")
     from .answer_extraction import DEFAULT_EXTRACTION_MODEL
     extraction_model = model or DEFAULT_EXTRACTION_MODEL
-    model = model or "gemini:gemini-2.5-flash"
+    model = model or DEFAULT_ADAPTER_MODEL
+    if project is None and (max_input_tokens is not None or max_output_tokens is not None):
+        raise ValueError("max_input_tokens and max_output_tokens apply only to a project target")
+    adapter_profile = resolve_model_profile(
+        model, max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens,
+    ) if project is not None else None
     page_origin = None
     if page_url is not None:
         from .browser_target import validate_browser_page_url
@@ -217,6 +226,8 @@ def run_agent(
                     python=target_python_path,
                     env_file=env_file,
                     model=model,
+                    max_input_tokens=adapter_profile.max_input_tokens,
+                    max_output_tokens=adapter_profile.max_output_tokens,
                     timeout=timeout,
                     max_tool_calls=max_tool_calls,
                     verbose=verbose,
