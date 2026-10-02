@@ -33,7 +33,7 @@ test = ["pytest>=8"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py"]
+lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py", "template_assets/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q -m 'not browser'"

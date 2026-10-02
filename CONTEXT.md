@@ -49,3 +49,24 @@ from judgments. The evaluator Agent does not calculate aggregate arithmetic.
 
 An evidence-bounded presentation of one saved evaluation. Tables are rendered
 deterministically; Agent-written prose may interpret but not replace them.
+
+## Proposed situation language
+
+**Situation config**
+
+A reusable, frozen specification of one behavior to observe, how to vary its
+test situations, when to stop, and how to judge the resulting dialogue.
+
+**Scenario instance**
+
+One concrete starting situation generated under a situation config, including
+the declared variation choices.
+
+**Trial**
+
+One execution of a scenario instance against a target.
+
+**Transcript**
+
+The ordered messages and target observations from one trial, including a
+partial trial that stopped with an error.

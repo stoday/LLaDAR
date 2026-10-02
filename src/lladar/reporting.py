@@ -42,6 +42,9 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         evaluation = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise EvaluationError(f"could not read evaluation JSON: {source}") from error
+    if isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation":
+        return _situation_report(evaluation, target, skill=skill, model=model,
+                                 env_file=env_file, skill_agent_factory=skill_agent_factory)
     required = {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"}
     if not isinstance(evaluation, dict) or set(evaluation) != required:
         raise EvaluationError("evaluation JSON does not match the current contract")
@@ -80,6 +83,64 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     lines += ["", "## Limitations", "", workspace.narrative["limitations"], "", "## Trial appendix", "", "| Record | Trial | Question | Expected answer | Actual response | Status | Judgment | Reason |", "| ---: | ---: | --- | --- | --- | --- | --- | --- |"]
     for item in evaluation["items"]:
         lines.append("| {record_index} | {trial} | {question} | {expected_answer} | {actual_response} | {status} | {values} | {reason} |".format(**{key: _cell(json.dumps(value, ensure_ascii=False, sort_keys=True) if key == "values" else value) for key, value in item.items()}))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
+    return target
+
+
+def _situation_report(evaluation: dict[str, Any], target: Path, *,
+                      skill: str | Path | None, model: str, env_file: str | Path,
+                      skill_agent_factory: SkillAgentFactory | None) -> Path:
+    required = {"kind", "source", "situation_config", "situation_sha256",
+                "evaluator_model", "method", "observe", "summary", "items"}
+    if set(evaluation) != required or not isinstance(evaluation["items"], list):
+        raise EvaluationError("situation evaluation JSON does not match the current contract")
+    narrative = None
+    if skill is not None:
+        selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
+        workspace = ReportWorkspace()
+        invoke_skill(skill=selected_skill, tools={"submit_report": workspace.submit_report},
+                     request={"stage": "report", "facts": {
+                         "observe": evaluation["observe"], "summary": evaluation["summary"],
+                         "method": evaluation["method"],
+                         "trial_evidence": [
+                             {key: item[key] for key in (
+                                 "scenario_id", "status", "validity", "behavior",
+                                 "evidence_turn_ids", "reason")}
+                             for item in evaluation["items"]
+                         ],
+                     }},
+                     model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
+                     agent_factory=skill_agent_factory)
+        if workspace.narrative is None:
+            raise EvaluationError("report skill did not submit a report")
+        narrative = workspace.narrative
+    lines = ["# LLaDAR situation evaluation", ""]
+    if narrative:
+        lines += [narrative["overview"], ""]
+    lines += ["## Observation", "", _escape(evaluation["observe"]["text"]), "",
+             "## Summary", "", "| Metric | Value |", "| --- | ---: |"]
+    lines += [f"| {_escape(key)} | {_value(value)} |"
+              for key, value in evaluation["summary"].items()]
+    lines += ["", "## Trial evidence", "",
+              "| Scenario | Status | Turns | Validity | Behavior | Evidence turns | Reason |",
+              "| --- | --- | ---: | --- | --- | --- | --- |"]
+    for item in evaluation["items"]:
+        lines.append("| {scenario} | {status} | {turns} | {validity} | {behavior} | {evidence} | {reason} |".format(
+            scenario=_cell(item["scenario_id"]), status=_cell(item["status"]),
+            turns=len(item["turns"]), validity=_cell(item["validity"]),
+            behavior=_cell(item["behavior"]),
+            evidence=_cell(", ".join(item["evidence_turn_ids"])),
+            reason=_cell(item["reason"])))
+    if narrative:
+        lines += ["", "## Findings", "", narrative["findings"]]
+    lines += ["", "## Limits", "",
+              "The rate uses only completed, valid, determinate trials. "
+              "The saved transcripts and cited turn IDs support review of each judgment."]
+    if narrative:
+        lines += ["", narrative["limitations"]]
+    lines += ["", f"Transcript: {_escape(evaluation['source'])}",
+              f"Situation config: {_escape(evaluation['situation_config'])}"]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
     return target

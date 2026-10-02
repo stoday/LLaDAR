@@ -70,6 +70,8 @@ longer accepts `--method`, `--chunk-size`, `--overlap`, `--strict`, `--prompt`, 
 legacy parameters or `provider`. Every stage now uses a bundled or local skill;
 `run-agent` and `eval` no longer accept prompt guidance.
 
+For knowledge-optional adaptive conversations, see the [multi-turn situation example](example_project/situation_demo/README.md). The project session adapter is calibrated with two turns and a fresh session before scored tests.
+
 Run the target Agent. LLaDAR inspects a copied project and creates a temporary
 adapter for its real public workflow:
 

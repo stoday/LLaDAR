@@ -79,6 +79,7 @@ class AkashaSkillAgent:
             "submit_plan": "Submit the evaluation plan.",
             "submit_judgment": "Submit one evidence-bounded evaluation judgment.",
             "submit_report": "Submit the narrative sections for the report.",
+            "submit_situation": "Submit the situation plan with variation axes, methods, and rubric.",
             "read_dataset": "Read the scheduled dataset cases.",
             "write_strategy": "Write the constrained run strategy source.",
         }

@@ -194,6 +194,21 @@ def test_run_agent_help_explains_browser_setup_handoffs_and_artifacts(capsys):
         assert explanation in help_text
 
 
+def test_each_cli_argument_explains_its_default_or_requirement():
+    commands = build_parser()._subparsers._group_actions[0].choices
+    create_commands = commands["create"]._subparsers._group_actions[0].choices
+    parsers = [*create_commands.values(), commands["run-agent"],
+               commands["eval"], commands["report"]]
+    for parser in parsers:
+        for action in parser._actions:
+            if action.dest == "help":
+                continue
+            assert action.help, f"{parser.prog}: {action.dest} has no explanation"
+            assert "default" in action.help.lower() or "required" in action.help.lower(), (
+                f"{parser.prog}: {action.dest} does not explain what happens when omitted"
+            )
+
+
 @pytest.mark.parametrize("entry", ["cli", "api"])
 @pytest.mark.parametrize("override", [None, 17])
 def test_agent_wait_defaults_to_one_hour_and_still_allows_a_shorter_timeout(tmp_path, entry, override):

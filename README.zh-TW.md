@@ -62,6 +62,8 @@ pair 都維持可比較性。
 lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 ```
 
+若要測試無知識文本的多輪情境，請參閱[可直接執行的情境範例](example_project/situation_demo/README.md)。正式測試前會先用同一個 session 進行兩輪校準，再開新 session 檢查隔離。
+
 該選哪個目標參數？
 
 - `--project PATH`：從專案程式碼與文件理解對外入口。只有專案也可能足夠：啟動資訊與必要執行環境設定完整時，LLaDAR 可以在隔離的專案副本中啟動服務、測試，最後只關閉自己啟動的服務。
