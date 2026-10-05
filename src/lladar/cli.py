@@ -91,6 +91,10 @@ def build_parser() -> argparse.ArgumentParser:
             "--output", metavar="DIRECTORY",
             help=f"Destination skill directory (default: ./lladar-skills/{stage}).",
         )
+        template.add_argument(
+            "--force", action="store_true",
+            help="Overwrite SKILL.md and AUTHORING.md in an existing directory; keep other files (default: off).",
+        )
     dataset = create_commands.add_parser(
         "test-dataset",
         help="Generate question and expected-answer records from knowledge.",
@@ -345,7 +349,7 @@ def main(
         if args.command == "create":
             if args.create_command.endswith("-skill"):
                 stage = args.create_command.removesuffix("-skill")
-                destination = create_skill_template(stage, args.output)
+                destination = create_skill_template(stage, args.output, force=args.force)
                 uses = {
                     "test-dataset": "lladar create test-dataset --knowledge KNOWLEDGE --skill {skill} --output DATASET.jsonl",
                     "situation": "lladar create situation --observe TEXT --stop-criteria TEXT --max-turns 3 --skill {skill} --output situation.json",
@@ -354,6 +358,7 @@ def main(
                     "report": "lladar report EVALUATION --skill {skill} --output report.md",
                 }
                 print(f"Created skill at {destination}")
+                print(f"Author guide: {destination / 'AUTHORING.md'}")
                 skill_arg = (subprocess.list2cmdline([str(destination)]) if os.name == "nt"
                              else shlex.quote(str(destination)))
                 print("Use: " + uses[stage].format(skill=skill_arg))

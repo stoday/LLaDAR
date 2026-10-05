@@ -2,6 +2,7 @@
 
 狀態：已在本機工作樹實作，尚未發布
 日期：2026-10-02
+作者指南修訂：2026-10-05
 所屬流程：create → run-agent → eval → report
 
 ## Problem Statement
@@ -14,15 +15,15 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 
 新增五個不呼叫模型的範本產生命令：
 
-    lladar create test-dataset-skill [--output DIRECTORY]
-    lladar create situation-skill [--output DIRECTORY]
-    lladar create run-agent-skill [--output DIRECTORY]
-    lladar create eval-skill [--output DIRECTORY]
-    lladar create report-skill [--output DIRECTORY]
+    lladar create test-dataset-skill [--output DIRECTORY] [--force]
+    lladar create situation-skill [--output DIRECTORY] [--force]
+    lladar create run-agent-skill [--output DIRECTORY] [--force]
+    lladar create eval-skill [--output DIRECTORY] [--force]
+    lladar create report-skill [--output DIRECTORY] [--force]
 
 未指定 --output 時，在目前工作目錄建立 ./lladar-skills/<stage>/；stage 依序為 test-dataset、situation、run-agent、eval、report。指定 --output 時，該路徑就是 Skill 目錄，不再加上一層階段目錄。每個範本包含可直接載入的 SKILL.md，以及供人閱讀的 AUTHORING.md。SKILL.md 從對應的現行內建方法出發，提供可修改、可運作的完整指令；AUTHORING.md 說明該階段的請求、可用工具與參數、必要提交、完成條件、主程式持有的驗證，以及最小使用範例。
 
-成功時印出實際建立的目錄及使用該目錄的完整 --skill 命令。若目的目錄已存在，先報出位置並停止，不覆寫使用者已編修的 Skill。產生命令本身不需要 provider 憑證，也不執行受測 Agent。
+成功時印出實際建立的目錄及使用該目錄的完整 --skill 命令。目的目錄已存在時預設停止；五種範本命令均接受 `--force`，明確覆寫 `SKILL.md` 與 `AUTHORING.md`，保留其餘檔案。覆寫失敗時嘗試還原原檔。產生命令本身不需要 provider 憑證，也不執行受測 Agent。
 
 ## User Stories
 
@@ -47,6 +48,10 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 
 ## Implementation Decisions
 
+- 作者指南須列出用途、可修改規則、參數資料結構、完整階段工具清單、回傳值及完整提交範例。不能只把現行內建指令複製給使用者。
+- run-agent 分別說明 Agent 工具與 Python 策略入口，定義 `cases`、案例屬性、`schedule`、回傳值與重複排程累加行為，提供全量、抽樣及條件選取範例，列出受限 Python 環境提供的函數。
+- `AUTHORING.md` 承擔人類撰寫指南的角色，不新增重複的 guide.md。它不會自動註冊為 Skill，但仍可被 Agent 作為參考資源讀取；檔名不能作為執行隔離。明確標示範例為替代方案，實際行為以 SKILL.md 的單一策略為準。
+
 - 五個 create <stage>-skill 子命令分別對應 create test-dataset、create situation、run-agent、eval、report 的 --skill 入口。新命令只建立 Skill，不執行原階段工作。
 - --output 一律表示最終 Skill 目錄。預設值為 ./lladar-skills/<stage>/，相對於呼叫時的工作目錄；命令回報解析後的位置。
 - 每個產物至少有有效的 SKILL.md 和人類作者指南 AUTHORING.md。作者指南不構成執行契約；即使 agent 不讀取它，SKILL.md 仍須能獨立完成對應工作。
@@ -56,7 +61,7 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 - run-agent 指南明確說明內建預設策略可直接執行隨附程式；複製到自訂路徑後，--skill 會走自訂 Skill 的 agent 排程流程。範本不能暗示複製內建 strategy.py 就能保有內建快速路徑。受測 target Agent 與排程 agent 是不同角色。
 - eval 指南明確說明開放式回答可走 Skill 評估，具答案協定的題型與部分 probe 由主程式確定性判定；彙總與穩定度由主程式計算。report 指南明確說明 Skill 只提交敘述，數字與表格取自保存的評估結果。
 - situation-skill 對應情境設定的 authoring Skill。指南說明情境執行及 --situation-config 評估模式目前不能改由一般 run-agent 或 eval 的 --skill 取代。
-- 目的目錄已存在時，不寫入、不合併、不覆蓋。輸出路徑不可建立或 metadata 不合法時，回報明確錯誤；避免留下可被誤認為完整 Skill 的部分產物。
+- 目的目錄已存在時預設停止；`--force` 僅覆寫 SKILL.md 與 AUTHORING.md，保留其他檔案，失敗時嘗試還原原檔。輸出路徑不可建立或 metadata 不合法時，回報明確錯誤；避免留下可被誤認為完整 Skill 的部分產物。
 - 此功能沿用目前單一 --skill DIRECTORY 載入介面、Akasha Skill 格式和現有主程式驗證，不另建 Skill registry、套件安裝流程或新的 agent 工具集。
 
 ## Testing Decisions
@@ -72,7 +77,7 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 - 不新增 lladar skill validate、互動式編輯器、模型協助改寫 Skill 或自動試跑命令；作者指南可示範如何用既有命令跑最小案例。
 - 不改變四階段的資料格式、工具權限、驗證邏輯、預設模型、內建方法或受測 Agent 的執行方式。
 - 不讓 Skill 覆寫確定性評估、統計、報告表格、情境執行規則或主程式安全邊界。
-- 不將現有目錄中的 Skill 自動升級、合併或覆寫；不建立 Skill 市集或跨專案安裝機制。
+- 不將現有目錄中的 Skill 自動升級或合併；覆寫僅透過使用者明確指定 `--force`。不建立 Skill 市集或跨專案安裝機制。
 
 ## Further Notes
 

@@ -37,6 +37,18 @@ lladar report ./evaluation.json --skill ./my-report --output ./report.md --model
 
 ## 其餘範本與預設位置
 
-`lladar create test-dataset-skill`、`situation-skill`、`run-agent-skill`、`eval-skill`、`report-skill` 都可省略 `--output`，分別建立在目前目錄的 `./lladar-skills/<stage>/`。每次命令會印出帶有該路徑的使用範例。目的目錄若已存在，命令會停止，請選新的輸出位置。
+每個目錄內的 `SKILL.md` 是實際執行方法，`AUTHORING.md` 是撰寫指南，包含用途、可修改的規則、
+工具參數、回傳值與完整範例。這份指南就是 guide.md 的角色，不需要再建立重複文件。
+以 run-agent 為例，指南會解釋 `cases` 是案例物件序列、`schedule` 是主程式提供的登記函數，
+以及 `select_cases` 如何選題與設定次數，並提供全量、抽樣和條件選取範例。
+
+參考檔不會自動成為另一個 Skill，但 Agent 可以透過資源工具主動讀取。
+因此指南的替代範例只供作者選擇；採用時請替換 `SKILL.md` 中的原策略，避免互相矛盾的規則。
+
+`lladar create test-dataset-skill`、`situation-skill`、`run-agent-skill`、`eval-skill`、`report-skill` 都可省略 `--output`，分別建立在目前目錄的 `./lladar-skills/<stage>/`。每次命令會印出帶有該路徑的使用範例。目的目錄若已存在，命令預設停止。要用最新範本蓋掉原本的 `SKILL.md` 與 `AUTHORING.md`（包含你的修改），加上 `--force`；目錄內其他檔案保留：
+
+```sh
+lladar create run-agent-skill --output ./my-run-agent --force
+```
 
 本機驗證紀錄（2026-10-02）：在此 checkout 以產生的 `my-eval` 和 `my-report` Skill 真實呼叫 Gemini，得到 1 筆已評估紀錄、`correct=true`，並成功產出 Markdown 報告。這是上述最小範例的實際結果，不代表所有自訂準則或目標 Agent 都已驗證。
