@@ -35,6 +35,8 @@ def test_akasha_native_skill_is_loaded_only_after_the_model_requests_it(tmp_path
     (skill / "SKILL.md").write_text(
         "---\nname: native-example\ndescription: Example.\n---\n"
         "Use the phrase NEBULA-METHOD when recording a fact.\n", encoding="utf-8")
+    (skill / "AUTHORING.md").write_text("AUTHOR-GUIDE-ALTERNATIVE", encoding="utf-8")
+    (skill / "guide.md").write_text("OTHER-GUIDE-ALTERNATIVE", encoding="utf-8")
     received = []
 
     def record_fact(value: str) -> None:
@@ -53,6 +55,8 @@ def test_akasha_native_skill_is_loaded_only_after_the_model_requests_it(tmp_path
 
     assert "NEBULA-METHOD" not in str(model.prompts[0])
     assert "NEBULA-METHOD" in str(model.prompts[1])
+    assert "AUTHOR-GUIDE-ALTERNATIVE" not in str(model.prompts)
+    assert "OTHER-GUIDE-ALTERNATIVE" not in str(model.prompts)
     assert received == ["NEBULA-METHOD"]
     assert evidence["loaded_skills"] == ["native-example"]
     assert evidence["skill_files"]["SKILL.md"]
