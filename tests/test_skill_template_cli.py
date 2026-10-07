@@ -217,9 +217,28 @@ def test_invalid_skill_directory_name_is_rejected_before_writing(tmp_path, capsy
     assert "lowercase letters" in capsys.readouterr().err
 
 
-def test_create_help_names_editable_skill_templates(capsys):
+def test_create_help_lists_workflows_before_skill_templates(capsys):
     with pytest.raises(SystemExit) as exit_info:
         main(["create", "--help"])
 
     assert exit_info.value.code == 0
-    assert "editable skill" in capsys.readouterr().out.lower()
+    output = capsys.readouterr().out
+    assert "ARTIFACT ..." in output
+    _, workflow_help = output.split("Main workflows:", 1)
+    workflow_help, skill_help = workflow_help.split("Skill templates (advanced):", 1)
+    assert "test-dataset" in workflow_help
+    assert "situation" in workflow_help
+    assert "-skill" not in workflow_help
+    for stage in ("test-dataset", "situation", "run-agent", "eval", "report"):
+        assert f"{stage}-skill" in skill_help
+
+
+@pytest.mark.parametrize("command", ["test-dataset", "situation", "eval-skill"])
+def test_create_child_help_uses_the_actual_command_name(capsys, command):
+    with pytest.raises(SystemExit) as exit_info:
+        main(["create", command, "--help"])
+
+    assert exit_info.value.code == 0
+    output = capsys.readouterr().out
+    assert output.startswith(f"usage: lladar create {command} ")
+    assert "ARTIFACT" not in output

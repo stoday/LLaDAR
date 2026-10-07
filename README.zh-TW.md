@@ -17,6 +17,8 @@ python -m pip install lladar
 
 支援 Python 3.11 與 3.12。預設模型 provider 會從 `.env` 或程序環境讀取憑證。
 
+使用 `lladar --version` 查看已安裝的版本。
+
 ## Record 格式
 
 JSONL 的每一行固定只有三個欄位：
@@ -30,6 +32,19 @@ JSONL 的每一行固定只有三個欄位：
 
 ## 快速開始
 
+準備知識文件與目標 Agent 專案後，依序執行：
+
+```bash
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
+lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
+lladar eval responses.jsonl --output evaluation.json
+lladar report evaluation.json --output report.md
+```
+
+開啟 `report.md` 檢視結果。瀏覽器測試、自訂評估需求與多輪情境的用法見下方說明。
+
+## 使用選項
+
 產生資料集：
 
 ```bash
@@ -42,19 +57,14 @@ probe。無須另外安裝 skill；會另產生
 `dataset.jsonl.generation.json` 與 `dataset.jsonl.graph.json` 保存原文引用與執行狀態。
 
 圖譜 probe 用來觀察目標模型如何把「正餐」等推論概念映射至來源實例，沒有唯一正解，
-會與答對率分開報告。合成人口統計控制是測試輸入，不是來源或人物主張，預設不產生。
-在終端可用 `--demographic-probes` 顯示受控維度清單後選擇；自動化腳本則用
-`--demographic-topics age,nationality`。不接受自由撰寫的人口統計 prompt，讓每一組
-pair 都維持可比較性。
+會與答對率分開報告。合成控制是測試輸入，不是來源或人物主張，預設不產生。
+在終端可用 `--controlled-variant-probes`，於圖譜階段列出已驗證維度後選擇；
+自動化腳本則用 `--controlled-variant-topics DIMENSION_ID`，指定同一份語料指紋下
+已記錄的維度 ID。只接受規劃器已驗證的維度，讓每一組 pair 都維持可比較性。
 
 需要 Akasha 1.8 以上。`--skill DIRECTORY` 可改用一個可信任的本地 skill；
 不需要額外 manifest，尚未加入 skill 安裝管理命令。內建方法不屬於可移除的使用者安裝項目。
 詳見 [skill 生成使用說明](docs/skill-generation.md)。
-
-相容性調整：資料集只透過 skill 生成，`create test-dataset` 不再接受 `--method`、
-`--chunk-size`、`--overlap`、`--strict`、`--prompt`、`--prompt-file`；Python
-`create_test_dataset()` 也不再接受對應的舊參數或 `provider`。所有階段都使用內建或
-本地 skill；`run-agent`、`eval` 不再接受 prompt 指引。
 
 執行目標 Agent。LLaDAR 會檢查專案副本，替真實公開流程建立暫時 adapter：
 
@@ -108,18 +118,16 @@ lladar run-agent dataset.jsonl --page-url https://example.test/chat --output res
 每次網站請求預設最多等待 60 分鐘（`--timeout 3600`）。
 瀏覽器啟動、首次導頁與重新導頁各自最多等 5 分鐘（300 秒）；
 `--timeout` 不會縮短或延長導頁等待時間。
-瀏覽器模式只保留一條答案抽取路徑：由沒有工具權限的模型讀取經同意的完整回應，
-還原原本的答案。不再產生 Python，也不保留內建答案規則、Monty、解析器快取或策略選項。
+瀏覽器模式由沒有工具權限的模型讀取經同意的完整回應，還原原本的答案。
 僅瀏覽器模式預設使用 `gemini:gemini-3.8-flash`，可用 `--model gemini:MODEL` 指定；
-模型是否可用仍取決於供應商帳號。專案探索及評分的模型預設不變。
+模型是否可用仍取決於供應商帳號。
 
 LLaDAR 開啟專用 Chromium 視窗，由你自行登入、原樣送出校正題，等答案完成才按 Enter。
 一次看完網站請求、模型目的地及預算後，輸入一次 `YES`，同時核准一次驗證題、
 畫面列出的資料集請求，以及將**真實回應內容（包含內部答案）**傳到
 `https://generativelanguage.googleapis.com`。請先確認組織允許這些內容外傳。
-`--confirm-browser-run` 與 `--allow-response-model-transfer` 仍只各自核准原有範圍；
+`--confirm-browser-run` 與 `--allow-response-model-transfer` 各自核准網站請求與回應傳送；
 只有一個旗標時仍缺另一項授權，兩者都提供才免授權提示，但不能跳過核對。
-舊的「只准網站請求」或「只傳合成證據」同意不能取代這次完整授權。
 
 模型從環境或 `--env-file` 讀取 `GEMINI_API_KEY`／`GOOGLE_API_KEY`，
 取得校正及同意後才初始化。若排程共有 N 次試跑（重複題也計次），模型最多呼叫 **N+2 次**：
@@ -153,8 +161,7 @@ run sidecar 只記錄安全狀態、模型與 prompt 版本、次數、時間及
 
 登入狀態沿用 `.lladar/browser-profiles`；`--fresh-browser-profile` 改用暫時的未登入 profile，
 不複製日常 Chrome／Edge。401/403、抽取失敗或超限會停止後續送題並保留已完成答案；
-需要重新登入、取得新同意再執行，不暗中重送。舊解析器旗標直接拒絕；
-既有私密快取不讀取、不遷移，也不刪除。
+需要重新登入、取得新同意再執行，不暗中重送。
 
 自動評估：
 
@@ -164,13 +171,13 @@ lladar eval responses.jsonl --output evaluation.json
 
 一般使用者用 `--criteria "描述要檢查什麼、什麼情況算符合"` 指定評估需求。
 進階使用者改用 `--skill ./skills/my-verdict` 提供完整方法；兩者互斥。
-都不指定時沿用答案正確性與 typed／probe 預設；明確指定其中一種時，所有完成回答
+都不指定時使用對應資料類型的預設評估；明確指定其中一種時，所有完成回答
 均依該方法評估。若存在 trials sidecar，eval 會讀取每次嘗試，Python 計算彙總；
 計畫包含 boolean `correct` 時才計算正確性穩定度。
 
-`create situation --instructions TEXT`（或 `--instructions-file PATH`）仍一次規劃
-生成、執行、停止與預設評估，保存完整 config。原本 `--observe`／`--observe-file`
-保留為別名。同批情境對話可保留原始 config，再指定 criteria 或 Skill 重新評估：
+`create situation --instructions TEXT`（或 `--instructions-file PATH`）一次規劃
+生成、執行、停止與預設評估，保存完整 config。同批情境對話可保留原始 config，
+再指定 criteria 或 Skill 重新評估：
 
 ```bash
 lladar eval transcripts.jsonl --situation-config situation.json --criteria "觀察目標詞，區分引用與直接使用；命中不等同偏見" --output terminology-evaluation.json
@@ -189,6 +196,18 @@ lladar report evaluation.json --output report.md
 `eval` 會讓一個 Agent 固定 boolean、categorical 或 numeric 評估維度，再逐筆判讀。
 筆數、比率與穩定性由 Python 計算。`report` 只解讀已儲存的事實，並附上逐次稽核表；
 可用 `--skill ./skills/my-report` 指定本地報告方法。
+
+## 作業紀錄
+
+在任何工作流程命令加上 `--log PATH`，將終端輸出同步保存為新的 UTF-8 檔案：
+
+```bash
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl --log logs/create.log
+```
+
+log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控制碼。
+`--no-verbose` 會同時減少終端和 log 的詳細訊息。自動建立上層目錄；既有 log
+會保留，每次執行請指定新檔名。
 
 ## 輸出
 

@@ -19,6 +19,8 @@ python -m pip install lladar
 Python 3.11 and 3.12 are supported. The default model provider reads its
 credentials from `.env` or the process environment.
 
+Check the installed version with `lladar --version`.
+
 ## Record format
 
 Every JSONL line has exactly three fields:
@@ -31,6 +33,20 @@ Every JSONL line has exactly three fields:
 string or `null`. There are no schema versions and unknown fields are rejected.
 
 ## Quick start
+
+Prepare your knowledge documents and target Agent project, then run:
+
+```bash
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
+lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
+lladar eval responses.jsonl --output evaluation.json
+lladar report evaluation.json --output report.md
+```
+
+Open `report.md` to review the results. See the workflow options below for
+browser targets, custom evaluation criteria, and multi-turn situations.
+
+## Workflow options
 
 Generate a dataset. `--output` accepts an explicit `.jsonl` path (as below),
 or a directory in which the CLI creates a timestamped dataset.
@@ -63,12 +79,6 @@ installation command. LLaDAR passes the one selected directory to Akasha as
 selected `SKILL.md` on demand. The bundled method is not a removable
 user-installed skill. See [skill generation](docs/skill-generation.md) for
 limits and Python usage.
-
-Migration: dataset creation now uses a skill only, so `create test-dataset` no
-longer accepts `--method`, `--chunk-size`, `--overlap`, `--strict`, `--prompt`, or
-`--prompt-file`. Python `create_test_dataset()` no longer accepts the corresponding
-legacy parameters or `provider`. Every stage now uses a bundled or local skill;
-`run-agent` and `eval` no longer accept prompt guidance.
 
 For knowledge-optional adaptive conversations, see the [multi-turn situation example](example_project/situation_demo/README.md). The project session adapter is calibrated with two turns and a fresh session before scored tests.
 
@@ -129,12 +139,10 @@ the browser. The approval flags do not remove this terminal requirement.
 Each website request may wait up to 60 minutes by default (`--timeout 3600`).
 Browser startup, initial page navigation and reload separately allow 5 minutes
 (300 seconds); `--timeout` does not shorten or extend navigation waits.
-Browser mode now has one answer-extraction path: a tool-free model reads the
-approved complete response and reconstructs its original answer. No generated
-Python, built-in answer rules, Monty, parser cache, or parser-policy option remains.
+In browser mode, a tool-free model reads the approved complete response and
+reconstructs its original answer.
 The browser-only default is `gemini:gemini-3.8-flash`; override it with
 `--model gemini:MODEL`. Model availability depends on your provider account.
-Project discovery and evaluation defaults are unchanged.
 
 LLaDAR opens its own visible Chromium profile. Sign in yourself, submit the exact
 calibration question, and wait until the answer is complete before pressing Enter.
@@ -145,7 +153,7 @@ sending **real response content, including internal answers**, to
 organization. `--confirm-browser-run` and
 `--allow-response-model-transfer` approve only their respective scopes for this run.
 Either flag alone still leaves the other scope unapproved; both skip the approval
-prompt, not review. Old website-only or synthetic-evidence consent is not sufficient.
+prompt, not review.
 
 The model needs `GEMINI_API_KEY` or `GOOGLE_API_KEY` from the environment or
 `--env-file`; credentials are loaded only after calibration and consent.
@@ -197,7 +205,6 @@ The local session is reused from `.lladar/browser-profiles`; use
 your ordinary Chrome/Edge profile. HTTP 401/403, extraction failure or size limits
 stop later dispatch; completed dataset answers remain. Sign in again and obtain
 new approval for another run; no hidden authentication retry is sent.
-Old parser flags are rejected, and old private caches are left untouched but unused.
 
 Evaluate automatically:
 
@@ -208,14 +215,14 @@ lladar eval responses.jsonl --output evaluation.json
 Use `--criteria "Describe what to check and what counts as evidence"` for ordinary
 evaluation requirements. Advanced users can instead supply a complete method
 with `--skill ./skills/my-verdict`; the two options are mutually exclusive.
-Without either, existing answer-correctness and typed/probe defaults remain.
+Without either, evaluation uses the default method for the record type.
 An explicit criteria or Skill evaluates all completed responses using that method.
 Eval reads the trials sidecar when present; Python calculates aggregates and
 correctness stability only when the plan includes boolean `correct`.
 
 `create situation --instructions TEXT` (or `--instructions-file PATH`) plans
-generation, execution, stopping and default evaluation in one config. The older
-`--observe` / `--observe-file` names remain aliases. To reevaluate saved dialogue,
+generation, execution, stopping and default evaluation in one config. To reevaluate
+saved dialogue,
 keep the original config and add `--criteria` or `--skill` to situation eval:
 
 ```bash
@@ -239,6 +246,20 @@ Use `--skill ./skills/my-report` to supply a local evidence-summary method.
 dimensions and judge each completed record. Counts, rates, distributions,
 means, medians, minima, and maxima are calculated by Python. `report` renders
 those saved facts and includes a record-level appendix.
+
+## Operation logs
+
+Add `--log PATH` to any workflow command to save its terminal output to a new
+UTF-8 file while continuing to display it:
+
+```bash
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl --log logs/create.log
+```
+
+The file includes emitted progress, Agent traces, summaries, and errors without
+ANSI color codes. `--no-verbose` suppresses detailed output in both the terminal
+and the log. Parent directories are created automatically; use a new filename
+for each run because existing logs are preserved.
 
 ## Copy-and-run walkthrough
 
