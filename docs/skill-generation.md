@@ -1,149 +1,105 @@
 # Skill-based dataset generation / Skill 生成資料集
 
-`create test-dataset` 預設使用隨套件提供的 `knowledge-point-qa` 方法：先依原文抽取
-附逐字證據的知識點，再由第一階段模型提出通用語意圖譜，最後由第二階段模型從
-已驗證圖譜提出 question／expected_answer。沒有安裝其他 skill 也可以執行。
+`create test-dataset` 透過隨套件提供或本地的 Akasha Skill 讀取知識段落並生成問答。
+Agent 依 Skill、來源與使用者選項選用直接問答或圖譜；主程式不強制建立圖譜。
+內建方法保留來源事實題及有來源支持的概念映射指引。
 
 ## 使用
 
-需要 Python 3.11／3.12、Akasha ≥1.8（本次驗證 1.8.3）及可用的模型憑證。
-內建 skill 位於套件的 `lladar/skill_assets/knowledge-point-qa/SKILL.md`，pip 安裝時一併提供。
+需要 Python 3.11／3.12、Akasha ≥1.8 與可用模型憑證。
 
-```bash
-lladar create test-dataset \
-  --knowledge ./knowledge \
-  --model gemini:gemini-2.5-flash \
-  --output dataset.jsonl
+```powershell
+lladar create test-dataset --knowledge .\knowledge --output dataset.jsonl
+lladar create test-dataset --knowledge .\knowledge --skill .\my-skill --output dataset.jsonl
 ```
 
-`--knowledge` 可重複指定，目錄掃描沿用 `.md`／`.txt` 支援格式。
-`--output` 可為 JSONL 檔案或目錄；目錄模式會建立含時間戳的檔名。
-以 `--skill DIRECTORY` 指定可信任的本地方法，可覆蓋內建預設。
-本地 skill 目錄必須含 Akasha 支援的 YAML frontmatter（name、description）及非空方法正文。
-`name` 必須符合 Akasha 命名規則且與目錄名稱一致。重複 `--skill` 會報錯。
-未指定 `--skill` 時使用內建方法；本地 `--skill` 用來覆蓋它，不需要 `--method`。
-內建方法屬於套件資源，不在未來使用者 skill 管理命令的移除範圍；若套件資源缺失，
-會報錯而不會默默退回其他方法。具備檔案系統權限者仍可手動修改或移除安裝檔案。
+`--knowledge` 可重複指定，支援 `.md`／`.txt` 檔案與目錄。
+`--output` 接受 `.jsonl` 檔案或用來建立時間戳檔名的目錄。
+本地方法必須有符合 Akasha 命名規則、與目錄同名的 frontmatter name、description
+及非空的 `SKILL.md` 正文。不需要額外 manifest 或方法選擇旗標。
 
-預設會產生來源事實題與安全的概念映射題。受控變體題預設不產生；它的維度由
-第二階段 planner 依已驗證圖譜提出，核心驗證其語意範圍、值關係與 pair 完整性：
+使用 `lladar create test-dataset-skill --output my-skill` 取得可編輯範本與
+`AUTHORING.md`。範本的參考例子不取代 `SKILL.md` 的有效方法。
+直接問答 Skill 可要求依文章順序閱讀、保留完整知識段落、每段一組自然問答；
+不必建立圖譜，也不必使用 Python。題數與知識段落的對應由方法定義。
 
-```bash
-# 終端顯示受控維度清單後選擇
-lladar create test-dataset --knowledge ./knowledge --controlled-variant-probes
+## 可選工具與交付
 
-# 非互動腳本指定同一 corpus fingerprint 的 graph sidecar 已記錄維度
-lladar create test-dataset --knowledge ./knowledge --controlled-variant-topics customer_context
+一次生成工作提供來源讀取、知識點、直接／題型化問答、圖譜與測試計畫工具。
+`read_source` 使用解碼後文本的零起算、尾端不包含的字元區間；分頁是傳輸限制，
+不是固定切分方法。長來源依 `next_start` 續讀。
+
+直接問答附知識段落 ID、問題、預期答案及可定位的原文引用，沒有圖譜也可成功。
+圖譜方法提交實體、事實、關係與推論概念，再產生依賴圖譜的題目。
+空圖譜不能通過驗證；一般直接事實圖譜可以沒有概念或關係邊。
+
+Agent 可使用 Akasha 原生 `python_execute` 探索、計算與修正候選，包括直接調整
+執行中的工作區。也可依 request 的 `candidate_contract`，直接寫入預先指定的
+`candidate_path` JSON。候選檔存在時代表完整交付快照，不是與工作區合併的增量；
+不掃描目錄猜測輸出。作者指南提供 reads、knowledge_points、qa、graph、plans
+及 method_reason 的欄位說明。
+
+結果不要求全部經工具提交。主程式收集並固定最終快照，再重新檢查原文位置、
+問題格式及適用的圖譜／probe 契約；不能沿用早期 accepted 當成免驗證證明。
+正式寫檔仍遵守輸出路徑、覆寫保護與發布復原規則。
+
+## 圖譜 probe 與題型
+
+概念映射觀察目標如何選擇來源支持的同位階候選，不併入一般題答對率。
+受控變體預設不產生，其維度由 Agent 提出並經驗證；不內建領域或人口統計分類。
+
+```powershell
+lladar create test-dataset --knowledge .\knowledge --controlled-variant-probes
+lladar create test-dataset --knowledge .\knowledge --controlled-variant-topics customer_context
 ```
 
-核心不內建人口統計或其他領域分類，也不接受自由撰寫的控制 prompt。每個 pair
-只變動一個已宣告、已驗證的控制維度；概念映射與受控變體結果是觀察訊號，不會
-被併入一般題的答對率。
+互動選項需要終端輸入；非互動選項使用已記錄、同一語料指紋的維度 ID。
+明確要求受控變體時，需要有效圖譜與可比較配對，不能悄悄改成一般問答。
+每對只改一個已宣告控制值，保留問題骨架、來源候選與答案契約。
 
-```python
-from lladar import create_test_dataset
-
-records = create_test_dataset(
-    "knowledge",
-    model="gemini:gemini-2.5-flash",
-    output="dataset.jsonl",
-)
-```
-
-Python 仍回傳三欄 records；未提供 `output` 時不寫檔。
-離線整合可注入 `skill_agent_factory`，不需要原本的文字 provider 支援 skill。
-
-## 方法與核心的界線
-
-`SKILL.md` 負責閱讀策略、知識點粒度、跨段上下文、通用圖譜候選與測試計畫。
-核心不先做固定或語意切分；`read_source` 的分頁只是單次傳輸限制。
-Skill 可續讀、重讀與引用多個已讀區間。核心定位所有相同引文的位置，
-使用解碼後文字的零起算、尾端不包含字元區間。
-
-抽取全部來源之後，第一階段只能讀取已驗證知識點並提交 graph；第二階段只能讀取
-已驗證 graph 並提交 plans。資料與引用須經工具提交驗證，agent 的最後一段自然語言
-不會被當作 dataset。
-沒有 `skill.json`、獨立版本檔、cache 或 resume。
-
-移除的 create CLI 參數：`--method`、`--chunk-size`、`--overlap`、`--strict`、
-`--prompt`、`--prompt-file`。Python `create_test_dataset()` 也不再接受 `method`、
-`provider`、`chunk_size`、`overlap`、`strict`、`prompt` 或 `prompt_file`。
-所有階段都走 skill；`run-agent` 與 `eval` 也不接受 `--prompt` 或
-`--prompt-file`，並可各自以 `--skill DIRECTORY` 指定本地方法。
+`--question-type` 契約不變。明確指定單選、複選或排序時，直接事實題須用 typed QA
+契約提交；來源必須支持選項與比較關係，不能用自由回答題充數。
 
 ## Count、重試與狀態
 
-- `--count 0`：materialize 全部已驗證 plans；正整數是去重後的全域上限。
-- 去重只正規化空白再精確比對，不做語意去重或大小寫折疊；pair 要麼完整保留，要麼略過。
-- 重讀同一 statement 與相同來源證據不新增知識點；保留各次 read 的關聯。
-- 每個 plan 對應一筆 JSONL 與穩定 plan ID；來源證據保留於 sidecar。
-- `--seed` 保留為重現選取順序的設定，不保證模型每次回覆相同。
-- 每個來源、圖譜或計畫 stage 最多三次嘗試；每次最多 40 次工具呼叫、30 個 agent 回合。
-- 提供的工具呼叫都算入上限；第一次模型呼叫前，host 會以完整指引與 request 的
-  序列化 UTF-8 byte 數作保守容量檢查，可能比模型實際 token 容量更早停止。
-  頁面上限為 `min(12000, max_input_tokens // 4)` 字元，至少一字元。
-- 模型失敗或容量不足可以重試；初始化、skill 載入、圖譜或計畫工具故障整體停止。
-- 至少一筆有效 plan 可發布 `partial`；未讀完或未完成抽取會列明。
-  完全沒有有效 plan 時失敗，不發布成功資料集。
+- `--count 0` 保留所有去重後候選；正整數是全域上限。
+- 去重正規化空白後精確比較問題與答案；配對題完整保留或完整略過。
+- 同段可有多題；重複交付不重複增加題數。來源耗盡與略過原因保存於紀錄。
+- 每次生成最多三次嘗試；每次最多 40 次 host 工具呼叫、30 個 Agent 回合。
+- request 的 existing_results 與 validation_errors 協助修正未完成資料。
+- Agent 交付後才發生回合上限等錯誤時，若最終快照有效，保留產物及錯誤紀錄，
+  不要求再次提交。初始化、Skill 載入失敗仍不能假裝成功。
+- 完成要求讀完來源並交付有效題目；早期拒絕保存於審核紀錄，修正後的最終快照重新驗證。最終驗證失敗不發布正式產物。
+- `--seed` 保存選取設定，不保證模型每次產生相同內容。
 
-修正錯誤候選後可以繼續工作。來源完成要求已讀完且沒有尚未補交的拒絕候選；
-此為格式處理檢查，不代表知道文章應有多少事實。
+## 輸出與下游
 
-## 輸出與安全
+正式 JSONL 每行只有 `question`、`expected_answer`、`actual_response: null`。
 
-Dataset 每行僅有 `question`、`expected_answer`、`actual_response: null`，
-可直接交給既有 `lladar run-agent`。資料集附帶兩個內部 sidecar：
+- `<output>.generation.json` 保持 v5 契約，新增逐題 generation_method、最終驗證、
+  方法理由與略過紀錄。保存來源、引用、執行錯誤及 dataset 雜湊。
+- `<output>.graph.json` 只在採用有效圖譜時產生。直接問答不產生占位空圖譜。
+- `--force` 用直接問答取代原有圖譜資料集時，一併移除該輸出的舊圖譜；發布失敗時復原。
+- run-agent 保留題型／probe metadata 的驗證與傳遞。
+- eval 不直接讀完整圖譜：一般問答比較問答與實際回答，圖譜 probe 使用 run sidecar
+  的候選與配對。report 繼續讀取 eval 結果，不需要原始圖譜。
+- 同次生成可混用直接與圖譜方法。經圖譜生成的直接事實題仍可走一般答案評估。
 
-- `<output>.generation.json` 使用唯一的 v5 契約，保存題型與 probe 的可驗證
-  lineage。只有有效 v5 sidecar 才會被 runner／eval 用於題型或 probe 統計。
-- `<output>.graph.json` 保存可審核的語意圖譜；它含來源引用與推論出的概念，
-  不需要使用者編輯。
+`--log PATH` 保存實際進度、trace、摘要與錯誤。完成摘要顯示 methods、graph_used
+與 validation。Sidecar 含原文與本機路徑，按原文的存取方式處理。
 
-generation sidecar 包含：
-
-- skill 實際使用檔案雜湊、模型與有效選項（不保存憑證）。
-- 來源路徑及載入文字雜湊、讀取紀錄、已讀／未讀區間。
-- 知識點與原文引用、圖譜、工作狀態、嘗試次數、拒絕與去重統計。
-- Akasha 原生載入的 skill 雜湊、dataset SHA-256、實體行號到 plan／知識點映射。
-- 每列的 `plan_type`；概念／受控變體 probe 另有候選實體、concept ID、pair ID、
-  控制維度聲明與答案契約。
-
-Sidecar 包含知識內容與本機路徑，應與原文採相同的存取保護。
-Dataset 有任何修改時必須重新核對雜湊；不可沿用不符的行號映射。
-已接受點的處理比例不是整篇文章的事實抽取完整率。
-
-模型工作前先檢查 dataset、generation sidecar 與 graph sidecar；任一已存在都需要
-`--force`。所有產物先序列化與暫存，再一併發布。
-一般發布失敗會復原舊檔；這不是跨檔案的原子交易。
-若程序被強制終止，可留下隱藏 `.bak`／`.generation.lock` 供人工檢查和復原，
-不要把缺少 sidecar 的 dataset 當成已完成且可追溯的輸出。
-
-此模式將唯一指定的 skill 目錄直接傳給 `akasha.agents(skills=[...])`。Akasha 先向
-模型提供 skill metadata 與 `load_skill`；模型呼叫後才載入 `SKILL.md` 全文，並可在
-載入後使用 `read_skill_resource` 按需讀取 skill 目錄內的文字資源。LLaDAR 不再有
-自訂 skill middleware 或 agent 子類別來取代這個流程。Akasha 原生 runtime 若提供
-`python_execute`，其行為與檔案界線由 Akasha 負責；LLaDAR 自己的來源與提交工具仍只
-在目前工作項目有效，skill 不能藉此取得更多 LLaDAR host 工具。
-工具只在目前工作項目有效，skill 不能自行取得更多執行能力。
-這是 LLaDAR agent 的工具權限限制，不是作業系統沙箱，也不影響其他 Akasha agent。
-請只載入信任的方法指引；若未來需要執行生成的 Python，必須另外設計隔離環境。
-
-驗證能檢查格式、ID、精確引文與來源位置，無法自動證明語意正確。
-數值、條件、否定與答案是否受原文支持，仍需檢閱。
+Python 保留目前執行方式，本案不新增隔離。來源文本是資料，不是指令。
+驗證可檢查結構、ID、精確引文與來源位置，不能自動證明自然語言語意正確或
+全文事實抽取完整；數值、條件與答案是否受原文支持仍須檢閱。
 
 ## 驗證與重跑
 
-本次 [驗收紀錄與脫敏證據](skill-first-acceptance/README.md) 包含 PRD 逐項對照、
-Python 3.11／3.12 測試結果，以及使用者確認的三組真實 QA。
-
-```bash
-pytest tests/test_generation_skills.py tests/test_question_types.py tests/test_semantic_graph_probes.py tests/test_skill_agent.py
-python scripts/verify_skill_generation_live.py --output /tmp/lladar-skill-live/dataset.jsonl
+```powershell
+uv run --extra test python -m pytest tests/test_agent_selected_generation.py tests/test_generation_skills.py tests/test_controlled_variant_dataset.py tests/test_semantic_graph_probes.py tests/test_skill_agent.py
+uv run python scripts/verify_skill_generation_live.py --output .lladar/live/dataset.jsonl
 ```
 
-第二個命令會呼叫真實模型並產生費用；使用固定、無敏感內容的文章，讀取 `.env`
-但不列印憑證。預設不覆寫；重跑同一路徑需明確加 `--force`。
-腳本通過代表自動檢查成功，不能取代人工語意驗收。
-本期不實作 skill 管理、多 skill、通用 graphify 或其他三個階段的 skill 外掛。
-語意圖譜不內建餐次、人口統計或其他領域本體；它只接受由本次來源與證據驗證過的
-實體、事實、關係與上位概念。
+真實模型驗收使用虛構來源，讀取 `.env` 而不列印憑證。可用 `--skill` 驗收本地方法。
+同一路徑重跑需要 `--force`；自動檢查不能取代人工語意驗收。
+早期 [Skill-first 驗收紀錄](skill-first-acceptance/README.md) 是當時流程的歷史證據，
+本次可選圖譜重構的離線與真實模型結果另見[驗收紀錄](agent-selected-generation-acceptance.md)。
