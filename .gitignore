@@ -47,3 +47,4 @@ akasha-repo
 
 # for testing
 .pytest-*
+.tmp
