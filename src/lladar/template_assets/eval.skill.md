@@ -20,7 +20,13 @@ plan, use
 `{"values": {"correct": true}, "reason": "The response gives the expected answer."}`
 when supported, or set `correct` to `false` and explain the mismatch.
 If the evidence does not determine the answer, use `null` with a reason.
-For mixed typed or semantic-probe input, the host may supply a fixed plan and
-accept a judgment containing only `correct`; it fills the other dimension
-with `null`.
+An explicitly selected Skill evaluates typed and semantic-probe responses using
+its own plan as well. Use the supplied frozen plan for all judgments.
 Finish only after the submission tool accepts the plan or judgment.
+
+For `situation_judgment`, customize this Skill with full observation standards
+before use. Submit exactly validity, behavior, evidence_turn_ids and reason,
+following judgment_contract. Cite actual turn IDs and preserve generation
+constraints. If this answer-correctness template is used without defining a
+situation standard, submit validity and behavior as indeterminate, an empty
+evidence_turn_ids list, and explain that no situation standard was defined.

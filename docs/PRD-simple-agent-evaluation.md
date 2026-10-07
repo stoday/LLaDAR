@@ -9,6 +9,12 @@ designs.
 
 ## Proposed extension
 
+The 2026-10-07 [evaluation criteria contract](PRD-evaluation-criteria.zh-TW.md)
+specifies mutually exclusive `eval --criteria` and `eval --skill` inputs,
+including situation reevaluation and evaluation-setting provenance. It takes
+precedence for explicit evaluation overrides; unchanged defaults retain their
+existing answer-correctness behavior.
+
 [Situation generation and multi-turn behavior evaluation](PRD-situation-generation.zh-TW.md)
 is a PRD proposal, not part of the accepted implementation contract below.
 It adds a situation artifact under create while keeping the four public command

@@ -34,7 +34,19 @@ _Avoid_: Answer generation, answer evaluation
 **Evaluation plan**
 
 A frozen set of boolean, categorical, or numeric dimensions proposed by the
-evaluator Agent or shaped by the user's evaluation prompt.
+evaluator Agent according to explicit criteria or a complete evaluation Skill.
+
+**Evaluation criteria**
+
+The user's requirements for what to judge and what qualifies as evidence.
+The built-in method executes these requirements. CLI criteria and Skill are
+mutually exclusive; an explicit selection replaces the default evaluation.
+
+**Evaluation settings**
+
+The saved effective mode and its criteria text/hash, Skill source/evidence,
+or config rubric snapshot. These identify the standard used for one evaluation,
+independently of the original dataset or situation-generation goal.
 
 **Judgment**
 
@@ -54,7 +66,7 @@ deterministically; Agent-written prose may interpret but not replace them.
 
 **Situation config**
 
-A reusable, frozen specification of one behavior to observe, how to vary its
+A reusable, frozen specification compiled from overall instructions: one behavior to observe, how to vary its
 test situations, when to stop, and how to judge the resulting dialogue.
 
 **Scenario instance**

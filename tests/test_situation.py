@@ -197,4 +197,5 @@ def test_situation_cli_rejects_conflicting_methods():
         main(["run-agent", "--situation-config", "s.json", "--num-scenarios", "1",
               "--skill", "custom"])
     with pytest.raises(SystemExit):
-        main(["eval", "r.jsonl", "--situation-config", "s.json", "--skill", "custom"])
+        main(["eval", "r.jsonl", "--situation-config", "s.json", "--skill", "custom",
+              "--criteria", "Observe behavior"])

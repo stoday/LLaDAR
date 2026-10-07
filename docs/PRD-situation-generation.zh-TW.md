@@ -4,6 +4,12 @@
 日期：2026-10-02
 所屬流程：create → run-agent → eval → report
 
+2026-10-07 修訂：[評估準則與完整 Skill 的互斥入口](PRD-evaluation-criteria.zh-TW.md)
+為本次實作的優先契約。情境建立以 `--instructions` 表達完整作業；
+`--observe` 保留為別名。情境 eval 可用互斥的 `--criteria` 或 `--skill`
+另行評估原始對話，無須修改原始 config；下文原先禁止 eval Skill
+及要求重評改 config 的條文由該修訂取代。run-agent 的限制維持。
+
 ## 1. 問題與目標
 
 目前 LLaDAR 的 create test-dataset 以知識文本建立單題問答資料；run-agent 對每筆題目取得一次回覆；eval RESPONSES 評估完成的單題紀錄。使用者希望另有一條情境流程：即使沒有知識文本，只要描述要觀察的行為及停止條件，就能生成具體情境，與本地專案或外部應用服務進行多輪對話，再根據完整對話評估該行為是否出現。

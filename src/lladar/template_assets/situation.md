@@ -1,29 +1,40 @@
 # Editing this situation-authoring Skill
 
-## 作者指南：何時使用與怎麼修改
+## Author guide: when to use it and what to change
 
-本檔供作者參考，執行方法在 `SKILL.md`。指南不會自動成為 Skill，但 Agent 可以主動讀取此資源。
-此 Skill 把「想觀察的行為」編成可重用的多輪情境設定，例如觀察 Agent 遇到資訊不足時是否追問。
-修改 `SKILL.md` 的變化軸、固定條件、三種方法與 rubric 設計規則。
-它產生後續流程使用的設定，不會在建立設定時呼叫受測 Agent。
+This guide is for Skill authors. The active rules are in `SKILL.md`.
+The guide is not automatically registered as another Skill, but an Agent can
+read it as a reference resource. Alternative examples do not replace the active
+method. When adopting an alternative, replace the original rule in `SKILL.md`
+and keep one consistent method. Editing only this guide does not change the rules.
 
-| 請求欄位 | 型態與意義 |
+This Skill turns a behavior to observe into a reusable multi-turn situation
+configuration, such as checking whether an Agent clarifies missing information.
+Edit variation axes, fixed constraints, the three methods, and rubric design
+rules in `SKILL.md`. Later stages use this configuration; authoring it does not
+invoke the target.
+
+| Request field | Type and meaning |
 | --- | --- |
 | `stage` | `create_situation` |
-| `observe` | 字串：想觀察的行為 |
-| `stop_criteria` | 字串：什麼觀察結果代表可以停止 |
-| `max_turns` | 正整數：多輪測試上限，由主程式保存與執行 |
-| `knowledge` | list，每項有 path、sha256、text；沒有來源時為空 list |
+| `observe` | A string describing the behavior to observe |
+| `stop_criteria` | A string describing when observations justify stopping |
+| `max_turns` | A positive integer bounding the test, saved and enforced by the host |
+| `knowledge` | A list of objects with path, sha256, text; empty without sources |
 
-唯一 LLaDAR 工具是 `submit_situation(value)`，value 是整個設定提案物件。
-observable_conditions 指具體可觀察訊號；fixed_constraints 指各變體保持不變的條件。
-variation_axes 指改變的維度及其 values；三個 method 分別定義生成起始情境、接續使用者訊息、評估對話的方法。
-rubric 的 observed_when 是觀察成立條件，invalid_when 是該判斷無效的條件。
-工具接受後回傳 `{"accepted": true}`；有驗證錯誤需修正，不能只輸出一段設定說明。
+The only LLaDAR tool is `submit_situation(value)`, taking the complete proposal.
+`observable_conditions` describes concrete signals; `fixed_constraints` describes
+conditions preserved across variants. `variation_axes` defines dimensions and
+values to change. The methods define initial situation generation, continuation
+of user messages, and dialogue evaluation. A rubric's `observed_when` states when
+an observation holds; `invalid_when` states when a judgment is invalid.
+The tool returns `{"accepted": true}` on acceptance. Correct validation errors;
+a plain-text explanation is not a submission.
 
-### 完整提案範例
+### Complete proposal example
 
-以下是呼叫 `submit_situation(value)` 的 value，供作者理解格式；實際提案須符合本次 observe 與來源。
+This `value` argument illustrates the format. Adapt the proposal to the current
+observation and source evidence.
 
 ```json
 {
@@ -50,14 +61,15 @@ rubric 的 observed_when 是觀察成立條件，invalid_when 是該判斷無效
 }
 ```
 
-同一變化軸至少兩個不同字串值；軸與 rubric 的 id 在各自集合內須唯一。
-每個方法的 id、version、instructions 都須為非空字串。
+Each axis needs at least two distinct string values. Axis IDs and rubric IDs are
+unique within their respective collections. Each method's id, version, and
+instructions are nonempty strings.
 
-## 執行契約
+## Execution contract
 
-Use `SKILL.md` with `lladar create situation --observe TEXT --stop-criteria TEXT
+Use `SKILL.md` with `lladar create situation --instructions TEXT --stop-criteria TEXT
 --max-turns 3 --skill DIRECTORY --output situation.json`. The request contains
-`stage: create_situation`, observation text, stopping criteria, maximum turns,
+`stage: create_situation`, overall instructions (and the legacy observe alias), stopping criteria, maximum turns,
 and optional knowledge documents with path, hash, and text.
 
 The one available tool is `submit_situation(value)`. Supply an object with:
@@ -71,6 +83,7 @@ The one available tool is `submit_situation(value)`. Supply an object with:
 
 The tool returns `{"accepted": true}` or a validation error. Completion is
 one accepted proposal. LLaDAR validates the schema and writes the frozen
-situation config. The later multi-turn `run-agent --situation-config` and
-`eval --situation-config` modes use that frozen method; they do not accept the
-ordinary `run-agent` or `eval` `--skill` option.
+situation config. The later `run-agent --situation-config` uses the frozen
+generation and run methods and rejects its scheduling `--skill` option.
+`eval --situation-config` uses the frozen evaluation by default; mutually exclusive
+`--criteria` or `--skill` can replace the evaluation without modifying the config.

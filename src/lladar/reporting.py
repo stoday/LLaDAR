@@ -46,38 +46,43 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         return _situation_report(evaluation, target, skill=skill, model=model,
                                  env_file=env_file, skill_agent_factory=skill_agent_factory)
     required = {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"}
-    if not isinstance(evaluation, dict) or set(evaluation) != required:
+    if not isinstance(evaluation, dict) or set(evaluation) not in (required, required | {"evaluation_settings"}):
         raise EvaluationError("evaluation JSON does not match the current contract")
     selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
     workspace = ReportWorkspace()
     evidence = invoke_skill(skill=selected_skill, tools={"submit_report": workspace.submit_report},
-                            request={"stage": "report", "facts": {key: evaluation[key] for key in ("plan", "summary", "aggregates", "stability")}},
+                            request={"stage": "report", "facts": {key: evaluation[key] for key in ("plan", "summary", "aggregates", "stability", "evaluation_settings") if key in evaluation}},
                             model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
                             agent_factory=skill_agent_factory)
     if workspace.narrative is None:
         raise EvaluationError("report skill did not submit a report")
     lines = ["# LLaDAR evaluation report", "", workspace.narrative["overview"], "", "## Summary", "", "| Metric | Value |", "| --- | ---: |"]
     lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in evaluation["summary"].items()]
+    lines += _evaluation_settings_lines(evaluation)
     lines += ["", "## Results", "", workspace.narrative["findings"], ""]
     for name, aggregate in evaluation["aggregates"].items():
         lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", "| Metric | Value |", "| --- | ---: |"]
         lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
-    type_rows = _question_type_rows(evaluation["items"])
+    has_correctness = any(d["name"] == "correct" and d["kind"] == "boolean"
+                          for d in evaluation["plan"]["dimensions"]) or any(
+        type(item.get("values", {}).get("correct")) is bool for item in evaluation["items"])
+    type_rows = _question_type_rows(evaluation["items"]) if has_correctness else []
     if type_rows:
         lines += ["", "## By question type", "", "| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for row in type_rows:
             lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
-    probe_rows = _semantic_probe_rows(evaluation["items"])
+    probe_rows = _semantic_probe_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
     if probe_rows:
         lines += ["", "## Semantic probes", "", "| Concept | Scheduled | Mapped | Synthesized | Unmapped |", "| --- | ---: | ---: | ---: | ---: |"]
         for row in probe_rows:
             lines.append("| {concept_id} | {scheduled} | {mapped} | {synthesized} | {unmapped} |".format(**{key: _value(value) for key, value in row.items()}))
-    controlled_rows = _controlled_variant_rows(evaluation["items"])
+    controlled_rows = _controlled_variant_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
     if controlled_rows:
         lines += ["", "## Controlled variants", "", "| Dimension | Pair | Scheduled | Mapped | Same | Different | Indeterminate |", "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
         for row in controlled_rows:
             lines.append("| {varied_dimension} | {pair_id} | {scheduled} | {mapped} | {same} | {different} | {indeterminate} |".format(**{key: _value(value) for key, value in row.items()}))
-    lines += ["", "## Stability", "", "| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
+    if evaluation["stability"]["records"]:
+        lines += ["", "## Stability", "", "| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
     for row in evaluation["stability"]["records"]:
         lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
     lines += ["", "## Limitations", "", workspace.narrative["limitations"], "", "## Trial appendix", "", "| Record | Trial | Question | Expected answer | Actual response | Status | Judgment | Reason |", "| ---: | ---: | --- | --- | --- | --- | --- | --- |"]
@@ -88,12 +93,26 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     return target
 
 
+def _evaluation_settings_lines(evaluation: dict[str, Any]) -> list[str]:
+    settings = evaluation.get("evaluation_settings")
+    if settings is None:
+        return []
+    lines = ["", "## Evaluation settings", "", f"Mode: {_escape(settings['mode'])}"]
+    if "criteria" in settings:
+        lines += ["", "Criteria: " + _escape(settings["criteria"]),
+                  "Criteria SHA-256: " + _escape(settings["criteria_sha256"])]
+    if "skill" in settings:
+        lines += ["", "Skill: " + _escape(settings["skill"]["path"]),
+                  "Skill SHA-256: " + _escape(settings["skill"]["sha256"])]
+    return lines
+
+
 def _situation_report(evaluation: dict[str, Any], target: Path, *,
                       skill: str | Path | None, model: str, env_file: str | Path,
                       skill_agent_factory: SkillAgentFactory | None) -> Path:
     required = {"kind", "source", "situation_config", "situation_sha256",
                 "evaluator_model", "method", "observe", "summary", "items"}
-    if set(evaluation) != required or not isinstance(evaluation["items"], list):
+    if set(evaluation) not in (required, required | {"evaluation_settings"}) or not isinstance(evaluation["items"], list):
         raise EvaluationError("situation evaluation JSON does not match the current contract")
     narrative = None
     if skill is not None:
@@ -103,6 +122,7 @@ def _situation_report(evaluation: dict[str, Any], target: Path, *,
                      request={"stage": "report", "facts": {
                          "observe": evaluation["observe"], "summary": evaluation["summary"],
                          "method": evaluation["method"],
+                         "evaluation_settings": evaluation.get("evaluation_settings"),
                          "trial_evidence": [
                              {key: item[key] for key in (
                                  "scenario_id", "status", "validity", "behavior",
@@ -122,6 +142,7 @@ def _situation_report(evaluation: dict[str, Any], target: Path, *,
              "## Summary", "", "| Metric | Value |", "| --- | ---: |"]
     lines += [f"| {_escape(key)} | {_value(value)} |"
               for key, value in evaluation["summary"].items()]
+    lines += _evaluation_settings_lines(evaluation)
     lines += ["", "## Trial evidence", "",
               "| Scenario | Status | Turns | Validity | Behavior | Evidence turns | Reason |",
               "| --- | --- | ---: | --- | --- | --- | --- |"]

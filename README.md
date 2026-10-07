@@ -205,8 +205,27 @@ Evaluate automatically:
 lladar eval responses.jsonl --output evaluation.json
 ```
 
-Use `--skill ./skills/my-verdict` to supply a local evaluation method. Eval reads
-the trials sidecar when present and Python calculates per-record stability.
+Use `--criteria "Describe what to check and what counts as evidence"` for ordinary
+evaluation requirements. Advanced users can instead supply a complete method
+with `--skill ./skills/my-verdict`; the two options are mutually exclusive.
+Without either, existing answer-correctness and typed/probe defaults remain.
+An explicit criteria or Skill evaluates all completed responses using that method.
+Eval reads the trials sidecar when present; Python calculates aggregates and
+correctness stability only when the plan includes boolean `correct`.
+
+`create situation --instructions TEXT` (or `--instructions-file PATH`) plans
+generation, execution, stopping and default evaluation in one config. The older
+`--observe` / `--observe-file` names remain aliases. To reevaluate saved dialogue,
+keep the original config and add `--criteria` or `--skill` to situation eval:
+
+```bash
+lladar eval transcripts.jsonl --situation-config situation.json --criteria "Observe target terms and distinguish quotation from direct use" --output terminology-evaluation.json
+```
+
+The evaluation saves `evaluation_settings` with the effective mode, criteria text
+and hash, or Skill source and file evidence. Reevaluation does not modify the
+config or captured answers. Knowledge supplied to situation creation guides the
+test generator; configure the target Agent's own knowledge separately.
 
 Render the report:
 

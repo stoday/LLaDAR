@@ -162,8 +162,23 @@ run sidecar 只記錄安全狀態、模型與 prompt 版本、次數、時間及
 lladar eval responses.jsonl --output evaluation.json
 ```
 
-可用 `--skill ./skills/my-verdict` 指定本地評估方法。若存在 trials sidecar，eval 會讀取
-每次嘗試並由 Python 計算逐題穩定性。
+一般使用者用 `--criteria "描述要檢查什麼、什麼情況算符合"` 指定評估需求。
+進階使用者改用 `--skill ./skills/my-verdict` 提供完整方法；兩者互斥。
+都不指定時沿用答案正確性與 typed／probe 預設；明確指定其中一種時，所有完成回答
+均依該方法評估。若存在 trials sidecar，eval 會讀取每次嘗試，Python 計算彙總；
+計畫包含 boolean `correct` 時才計算正確性穩定度。
+
+`create situation --instructions TEXT`（或 `--instructions-file PATH`）仍一次規劃
+生成、執行、停止與預設評估，保存完整 config。原本 `--observe`／`--observe-file`
+保留為別名。同批情境對話可保留原始 config，再指定 criteria 或 Skill 重新評估：
+
+```bash
+lladar eval transcripts.jsonl --situation-config situation.json --criteria "觀察目標詞，區分引用與直接使用；命中不等同偏見" --output terminology-evaluation.json
+```
+
+結果的 `evaluation_settings` 保存實際模式、準則全文與雜湊，或 Skill 來源與資源證據。
+重評不修改 config 或原始回答。情境建立的 `--knowledge` 提供給測試生成器；
+受測 Agent 使用的知識仍須另外配置。
 
 產生報告：
 

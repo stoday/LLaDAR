@@ -136,11 +136,15 @@ def build_parser() -> argparse.ArgumentParser:
         "situation", help="Compile a knowledge-optional multi-turn behavior test.",
         formatter_class=_HelpFormatter,
     )
-    observe = situation.add_mutually_exclusive_group(required=True)
-    observe.add_argument("--observe", metavar="TEXT",
-                         help="Behavior to observe, as inline text (required unless --observe-file is given; no default).")
-    observe.add_argument("--observe-file", metavar="PATH",
-                         help="UTF-8 file containing the behavior to observe (required unless --observe is given; no default).")
+    instructions = situation.add_mutually_exclusive_group(required=True)
+    instructions.add_argument("--instructions", metavar="TEXT",
+                              help="Overall instructions for generation, execution and default evaluation; choose one text/file input (required; no default).")
+    instructions.add_argument("--instructions-file", metavar="PATH",
+                              help="UTF-8 file containing the overall situation instructions (required unless another instruction input is given; no default).")
+    instructions.add_argument("--observe", metavar="TEXT",
+                              help="Legacy alias for --instructions; mutually exclusive with other instruction inputs (default: none).")
+    instructions.add_argument("--observe-file", metavar="PATH",
+                              help="Legacy alias for --instructions-file (default: none).")
     stopping = situation.add_mutually_exclusive_group(required=True)
     stopping.add_argument("--stop-criteria", metavar="TEXT",
                           help="When the conversation should stop, as inline text (required unless --stop-criteria-file is given; no default).")
@@ -290,10 +294,13 @@ def build_parser() -> argparse.ArgumentParser:
                             help="Responses JSONL from run-agent (required; no default).")
     evaluation.add_argument("--output", default="evaluation.json", metavar="PATH",
                             help="Destination evaluation JSON (default: evaluation.json).")
-    evaluation.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
-                            help="Local single-question evaluation skill directory containing SKILL.md (default: bundled eval-answer-verdict; unavailable with --situation-config).")
+    evaluation_method = evaluation.add_mutually_exclusive_group()
+    evaluation_method.add_argument("--criteria", metavar="TEXT",
+                                   help="Evaluation requirements for the built-in method; mutually exclusive with --skill (default: saved situation rubric or answer correctness).")
+    evaluation_method.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
+                                   help="Complete local evaluation method containing SKILL.md; mutually exclusive with --criteria (default: built-in method).")
     evaluation.add_argument("--situation-config", metavar="PATH",
-                            help="Evaluate multi-turn transcripts against this frozen situation JSON (default: single-question evaluation; cannot combine with --skill).")
+                            help="Verify the original situation/run identity and use its rubric unless --criteria or --skill overrides evaluation (default: single-question evaluation).")
     evaluation.add_argument("--model", default=DEFAULT_EVALUATION_MODEL, metavar="MODEL",
                             help=f"Model used for evaluation judgments (default: {DEFAULT_EVALUATION_MODEL}).")
     evaluation.add_argument("--env-file", default=".env", metavar="PATH",
@@ -330,6 +337,7 @@ def main(
     skill_agent_factory: Callable[..., Any] | None = None,
     browser_target_factory: Callable[..., Any] | None = None,
     extraction_provider_factory: Callable[..., Any] | None = None,
+    situation_provider_factory: Callable[..., Any] | None = None,
 ) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -352,7 +360,7 @@ def main(
                 destination = create_skill_template(stage, args.output, force=args.force)
                 uses = {
                     "test-dataset": "lladar create test-dataset --knowledge KNOWLEDGE --skill {skill} --output DATASET.jsonl",
-                    "situation": "lladar create situation --observe TEXT --stop-criteria TEXT --max-turns 3 --skill {skill} --output situation.json",
+                    "situation": "lladar create situation --instructions TEXT --stop-criteria TEXT --max-turns 3 --skill {skill} --output situation.json",
                     "run-agent": "lladar run-agent DATASET.jsonl --project PROJECT --skill {skill} --output responses.jsonl",
                     "eval": "lladar eval RESPONSES --skill {skill} --output evaluation.json",
                     "report": "lladar report EVALUATION --skill {skill} --output report.md",
@@ -364,10 +372,12 @@ def main(
                 print("Use: " + uses[stage].format(skill=skill_arg))
                 return 0
             if args.create_command == "situation":
-                observe = args.observe if args.observe is not None else Path(args.observe_file).read_text(encoding="utf-8")
+                instructions = args.instructions if args.instructions is not None else args.observe
+                if instructions is None:
+                    instructions = Path(args.instructions_file or args.observe_file).read_text(encoding="utf-8")
                 stop = args.stop_criteria if args.stop_criteria is not None else Path(args.stop_criteria_file).read_text(encoding="utf-8")
                 create_situation(
-                    observe=observe, stop_criteria=stop, max_turns=args.max_turns,
+                    instructions=instructions, stop_criteria=stop, max_turns=args.max_turns,
                     knowledge=args.knowledge, output=args.output, skill=args.skill,
                     model=args.model, env_file=args.env_file,
                     skill_agent_factory=skill_agent_factory, force=args.force,
@@ -478,12 +488,13 @@ def main(
             return 0
         if args.command == "eval":
             if args.situation_config:
-                if args.skill is not None:
-                    parser.error("--situation-config cannot be combined with --skill")
                 result = evaluate_situation(
                     args.responses, args.situation_config, output=args.output,
                     model=args.model, env_file=args.env_file, strict=args.strict,
                     force=args.force,
+                    criteria=args.criteria, skill=args.skill,
+                    skill_agent_factory=skill_agent_factory,
+                    provider_factory=situation_provider_factory,
                 )
                 print(f"Evaluated {result['summary']['valid_determinate']} situation trial(s) at {args.output}")
                 return 0
@@ -491,10 +502,12 @@ def main(
                 args.responses,
                 output=args.output,
                 skill=args.skill,
+                criteria=args.criteria,
                 model=args.model,
                 env_file=args.env_file,
                 strict=args.strict,
                 force=args.force,
+                skill_agent_factory=skill_agent_factory,
             )
             print(f"Evaluated {result['summary']['evaluated']} record(s) at {args.output}")
             return 0
