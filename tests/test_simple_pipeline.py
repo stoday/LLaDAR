@@ -457,8 +457,10 @@ def test_safe_browser_cli_errors_keep_actionable_instructions(tmp_path: Path, ca
     assert "fixture-internal-secret" not in captured.out + captured.err
 
 
-def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path):
+@pytest.mark.parametrize("save_log", [False, True])
+def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log):
     source, output = tmp_path / "dataset.jsonl", tmp_path / "responses.jsonl"
+    log = tmp_path / "runner.log"
     make_dataset(source, count=1)
 
     with browser_cli_terminal():
@@ -466,12 +468,16 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path):
             [
                 "run-agent", str(source), "--page-url", "https://example.test/chat",
                 "--output", str(output), "--no-verbose",
+                *(["--log", str(log)] if save_log else []),
             ],
             skill_agent_factory=StrategySkillAgent,
             browser_target_factory=lambda **_options: BrowserFixtureTarget(),
         )
 
     assert exit_code == 0 and read_records(output)[0]["actual_response"] == "browser:question-1"
+    assert log.exists() is save_log
+    if save_log:
+        assert "Answered 1 record(s)" in log.read_text(encoding="utf-8")
 
 
 def test_browser_preparation_blocker_writes_safe_run_evidence_without_response_files(tmp_path: Path):

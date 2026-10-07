@@ -9,9 +9,11 @@ import sys
 from typing import Callable, Any
 from collections.abc import Sequence
 from datetime import datetime
+from importlib import metadata
 from pathlib import Path
 
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
+from .command_log import command_log
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
@@ -63,29 +65,60 @@ def _resolve_dataset_output(destination: str | Path) -> Path:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    log_options = argparse.ArgumentParser(add_help=False)
+    log_options.add_argument(
+        "--log", metavar="PATH", default=argparse.SUPPRESS,
+        help="Also save emitted progress, traces, summaries and errors to a new UTF-8 log file (default: off; existing files are kept).",
+    )
     parser = argparse.ArgumentParser(
         prog="lladar",
         description="Generate questions, run a target Agent, evaluate responses, and report results.",
         formatter_class=_HelpFormatter,
+        parents=[log_options],
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {metadata.version('lladar')}",
+        help="Show the installed package version and exit.",
     )
     commands = parser.add_subparsers(
         dest="command", required=True, metavar="COMMAND",
         help="Choose a command (required; no default).",
     )
 
+    workflow_commands = {
+        "test-dataset": "Generate question and expected-answer records from knowledge.",
+        "situation": "Compile a knowledge-optional multi-turn behavior test.",
+    }
+    skill_commands = {
+        f"{stage}-skill": f"Create an editable {stage} skill."
+        for stage in ("test-dataset", "situation", "run-agent", "eval", "report")
+    }
     create = commands.add_parser(
         "create", help="Create a test dataset, situation, or editable skill template.",
+        usage="%(prog)s [-h] [--log PATH] ARTIFACT ...",
         description="Create a test dataset, situation configuration, or editable skill template.",
         formatter_class=_HelpFormatter,
+        parents=[log_options],
+        epilog="\n\n".join(
+            f"{title}:\n" + "\n".join(
+                f"  {name:<20} {description}"
+                for name, description in entries.items()
+            )
+            for title, entries in (
+                ("Main workflows", workflow_commands),
+                ("Skill templates (advanced)", skill_commands),
+            )
+        ),
     )
     create_commands = create.add_subparsers(
-        dest="create_command", required=True, metavar="ARTIFACT",
-        help="Choose the artifact to create (required; no default).",
+        dest="create_command", required=True, metavar="ARTIFACT", prog=create.prog,
+        help=argparse.SUPPRESS,
     )
     for stage in ("test-dataset", "situation", "run-agent", "eval", "report"):
         template = create_commands.add_parser(
-            f"{stage}-skill", help=f"Create an editable {stage} skill.",
+            f"{stage}-skill", help=skill_commands[f"{stage}-skill"],
             formatter_class=_HelpFormatter,
+            parents=[log_options],
         )
         template.add_argument(
             "--output", metavar="DIRECTORY",
@@ -97,8 +130,9 @@ def build_parser() -> argparse.ArgumentParser:
         )
     dataset = create_commands.add_parser(
         "test-dataset",
-        help="Generate question and expected-answer records from knowledge.",
+        help=workflow_commands["test-dataset"],
         formatter_class=_HelpFormatter,
+        parents=[log_options],
     )
     dataset.add_argument("--knowledge", action="append", required=True, metavar="PATH",
                          help="Source knowledge file or directory; repeat for multiple inputs (required; no default).")
@@ -133,8 +167,9 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Show LLaDAR progress and the dataset-generation Akasha trace; --no-verbose hides them (default: on).")
 
     situation = create_commands.add_parser(
-        "situation", help="Compile a knowledge-optional multi-turn behavior test.",
+        "situation", help=workflow_commands["situation"],
         formatter_class=_HelpFormatter,
+        parents=[log_options],
     )
     instructions = situation.add_mutually_exclusive_group(required=True)
     instructions.add_argument("--instructions", metavar="TEXT",
@@ -167,6 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     runner = commands.add_parser(
         "run-agent",
+        parents=[log_options],
         help="Fill actual_response by running a target Agent.",
         description=(
             "Run one-question DATASET records through an inspected project or calibrated website, "
@@ -287,6 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     evaluation = commands.add_parser(
         "eval",
+        parents=[log_options],
         help="Judge saved single-question responses or multi-turn situation transcripts.",
         formatter_class=_HelpFormatter,
     )
@@ -312,6 +349,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = commands.add_parser(
         "report",
+        parents=[log_options],
         help="Render an evidence-bounded Markdown report.",
         formatter_class=_HelpFormatter,
     )
@@ -353,6 +391,30 @@ def main(
                 "Run directly in a terminal without piping input or redirecting stderr; no interaction flag is needed."
             )
         args.interactive = True
+    try:
+        with command_log(getattr(args, "log", None)):
+            return _execute(
+                args, parser, runs_root=runs_root,
+                skill_agent_factory=skill_agent_factory,
+                browser_target_factory=browser_target_factory,
+                extraction_provider_factory=extraction_provider_factory,
+                situation_provider_factory=situation_provider_factory,
+            )
+    except OSError as error:
+        print(f"lladar: cannot write log: {error}", file=sys.stderr)
+        return 2
+
+
+def _execute(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+    *,
+    runs_root,
+    skill_agent_factory,
+    browser_target_factory,
+    extraction_provider_factory,
+    situation_provider_factory,
+) -> int:
     try:
         if args.command == "create":
             if args.create_command.endswith("-skill"):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -214,3 +215,38 @@ def test_create_cli_reports_graph_and_controlled_variant_summary(generation_inpu
     assert "concepts=0" in summary
     assert "controlled_dimensions=0" in summary
     assert "controlled_records=0" in summary
+
+
+@pytest.mark.parametrize("verbose", [True, False])
+def test_cli_log_captures_generation_progress_and_agent_trace(
+    generation_inputs, tmp_path, capsys, verbose,
+):
+    source, skill = generation_inputs
+    log = tmp_path / "logs" / "作業.log"
+    original_streams = sys.stdout, sys.stderr
+
+    class TracingAgent(SourceGraphAgent):
+        def __init__(self, *, verbose, **options):
+            super().__init__(**options)
+            self.verbose = verbose
+
+        def __call__(self, request):
+            if self.verbose:
+                print("\x1b[36m[agent.trace] 執行階段\x1b[0m", flush=True)
+            return super().__call__(request)
+
+    assert main([
+        "create", "test-dataset", "--knowledge", str(source), "--skill", str(skill),
+        "--output", str(tmp_path / "out"), "--log", str(log),
+        "--verbose" if verbose else "--no-verbose",
+    ], skill_agent_factory=TracingAgent) == 0
+
+    captured = capsys.readouterr()
+    saved = log.read_text(encoding="utf-8")
+    for marker in ("[KNOWLEDGE_POINTS]", "[SEMANTIC_GRAPH]", "[TEST_PLANS]", "執行階段"):
+        assert (marker in saved) is verbose
+        assert (marker in captured.out + captured.err) is verbose
+    assert "Generated 3 record(s)" in saved
+    assert "Generated 3 record(s)" in captured.out
+    assert "\x1b" not in saved
+    assert (sys.stdout, sys.stderr) == original_streams

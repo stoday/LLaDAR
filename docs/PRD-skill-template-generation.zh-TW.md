@@ -25,6 +25,8 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 
 成功時印出實際建立的目錄及使用該目錄的完整 --skill 命令。目的目錄已存在時預設停止；五種範本命令均接受 `--force`，明確覆寫 `SKILL.md` 與 `AUTHORING.md`，保留其餘檔案。覆寫失敗時嘗試還原原檔。產生命令本身不需要 provider 憑證，也不執行受測 Agent。
 
+`lladar create --help` 將建立命令分成兩類：先列出 Main workflows（test-dataset、situation），再列出 Skill templates (advanced)（五個 Skill 範本命令）。兩類清單分開呈現，不改變子命令名稱、引數或實際操作方式。
+
 ## User Stories
 
 1. 身為第一次自訂 LLaDAR 方法的使用者，我希望用一條命令取得可運作的 Skill，讓我從已知可用的內容開始修改。

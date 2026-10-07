@@ -37,6 +37,22 @@ LLaDAR has exactly four public command workflows:
 There are no public benchmark, experiment, method, resume, configuration, skill,
 or compatibility commands.
 
+The global `lladar --version` option prints `lladar VERSION` to stdout and exits
+successfully without a workflow command or model credentials. It reads the
+installed `lladar` distribution metadata, generated from `[project].version`
+in `pyproject.toml`; CLI source must not contain a separate version number.
+
+The optional `--log PATH` CLI argument records the current workflow's Python
+stdout and stderr in one UTF-8 text file while preserving terminal output and
+terminal detection. It can appear before the command or on a workflow command.
+The file contains emitted progress, Agent traces, summaries, and handled errors;
+`--no-verbose` suppresses detailed messages in both destinations. ANSI color
+codes are removed from the file. Parent directories are created as needed;
+existing log files are rejected before workflow execution, including with
+`--force`. Streams and file handles are restored on success, failure, and
+cancellation. This is a CLI output record, not Akasha structured `keep_logs` or
+a capture of child-process output that bypasses Python stdout/stderr.
+
 ## Record contract
 
 Every JSONL line has exactly three fields:
