@@ -49,6 +49,7 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 ## Implementation Decisions
 
 - 作者指南須列出用途、可修改規則、參數資料結構、完整階段工具清單、回傳值及完整提交範例。不能只把現行內建指令複製給使用者。
+- 五種範本產生的 `AUTHORING.md` 統一使用英文，保留工具名稱、參數、範例與執行契約。
 - run-agent 分別說明 Agent 工具與 Python 策略入口，定義 `cases`、案例屬性、`schedule`、回傳值與重複排程累加行為，提供全量、抽樣及條件選取範例，列出受限 Python 環境提供的函數。
 - `AUTHORING.md` 承擔人類撰寫指南的角色，不新增重複的 guide.md。它不會自動註冊為 Skill，但仍可被 Agent 作為參考資源讀取；檔名不能作為執行隔離。明確標示範例為替代方案，實際行為以 SKILL.md 的單一策略為準。
 
