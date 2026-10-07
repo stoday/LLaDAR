@@ -29,8 +29,8 @@ class GenericGraphSkillAgent:
     dimension_exclusivity = "declared"
 
     def __call__(self, request):
-        if request["stage"] == "knowledge_points":
-            page = self.tools["read_source"](request["source_id"])
+        if request["stage"] == "generation":
+            page = self.tools["read_source"]("source_001")
             self.tools["submit_knowledge_points"]([
                 {
                     "statement": fact,
@@ -39,7 +39,7 @@ class GenericGraphSkillAgent:
                 }
                 for fact in SOURCE_FACTS
             ])
-        elif request["stage"] == "semantic_graph":
+        if request["stage"] == "generation":
             points = {point["statement"]: point["id"] for point in self.tools["list_knowledge_points"]()}
             self.tools["submit_semantic_graph"]({
                 "nodes": [
@@ -70,7 +70,7 @@ class GenericGraphSkillAgent:
                      "origin": "inferred", "evidence_refs": [points[SOURCE_FACTS[0]], points[SOURCE_FACTS[1]]]},
                 ],
             })
-        elif request["stage"] == "test_plans":
+        if request["stage"] == "generation":
             self.tools["submit_test_plans"]([
                 {
                     "type": "direct_fact",
@@ -173,7 +173,7 @@ def test_create_dataset_rejects_a_controlled_pair_with_unknown_value_relationshi
     class UnknownValueRelationshipAgent(GenericGraphSkillAgent):
         dimension_exclusivity = "unknown"
 
-    with pytest.raises(DatasetValidationError, match="semantic test planning did not produce valid plans"):
+    with pytest.raises(DatasetValidationError, match="valid questions"):
         create_test_dataset(
             source,
             skill=skill,

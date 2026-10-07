@@ -55,19 +55,18 @@ or a directory in which the CLI creates a timestamped dataset.
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
-The bundled Akasha `knowledge-point-qa` skill stores source documents and
-source metadata through LlamaIndex. After source-grounded fact extraction, its
-two model stages propose a domain-independent evidence graph, then propose
-direct-fact, concept-mapping, and optional controlled-variant questions from
-that verified graph. It is included in pip installs and writes
-`dataset.jsonl.generation.json` plus `dataset.jsonl.graph.json` with evidence
-and processing status.
+The bundled Akasha `knowledge-point-qa` skill reads source passages and generates
+source-grounded questions. The Agent follows the selected skill and chooses
+direct QA or an evidence graph for concept and controlled-variant probes; graphs
+are optional. Python can also produce or repair candidates. Final results are
+validated before publishing. Every dataset includes `dataset.jsonl.generation.json`;
+`dataset.jsonl.graph.json` is written only when a valid graph is used.
 
 Graph probes observe how a target maps an inferred concept such as “meal” to
 source-backed peers; they do not have a single correct answer and are reported
 separately from correctness. Synthetic controls are test inputs, not claims
 about the source or people. They are off by default. Use
-`--controlled-variant-probes` in a terminal after the graph stage lists its
+`--controlled-variant-probes` in a terminal after generation lists its
 validated dimensions, or use `--controlled-variant-topics DIMENSION_ID` in a
 script with an ID recorded for the same corpus fingerprint. The core accepts
 only planner-validated dimensions, so every pair remains comparable.
@@ -286,7 +285,7 @@ copy-and-run instructions in Chinese.
 
 ## Outputs
 
-- `create test-dataset`: three-field JSONL with `actual_response: null`; also writes `<output>.generation.json` and `<output>.graph.json`
+- `create test-dataset`: three-field JSONL with `actual_response: null` and `<output>.generation.json`; `<output>.graph.json` only when a valid graph is used
 - `run-agent`: completed three-field JSONL, `<output>.trials.jsonl`, and `<output>.run.json`
 - `eval`: evaluation plan, judgments, coverage, and aggregates in JSON
 - `report`: Markdown tables, interpretation, limitations, and audit appendix
@@ -324,7 +323,7 @@ LLaDAR/
 ├── src/lladar/                 # Installable Python package
 │   ├── cli.py                  # CLI arguments and command dispatch
 │   ├── api.py                  # Python API for creating test datasets
-│   ├── skill_generation.py     # Source evidence, graph/planning stages, and dataset output
+│   ├── skill_generation.py     # Source evidence, optional graphs, final validation, and dataset output
 │   ├── skill_agent.py          # Thin adapter to Akasha's native dynamic skill loading
 │   ├── method_skill.py         # Shared skill resolution and invocation for run/eval/report
 │   ├── skill_assets/           # Bundled skills and supporting resources

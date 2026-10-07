@@ -2,6 +2,12 @@
 
 ## 狀態與決策請求
 
+2026-10-07 後續規格：[由 Agent 選用生成工具的問答測試集](PRD-agent-selected-dataset-generation.zh-TW.md)
+提出取消圖譜必經流程、保留 Python 自主處理並在正式輸出前驗證最終結果。
+其方法選擇與結果交付規格優先於本文的固定圖譜階段要求；
+本文的圖譜、概念映射及受控變體契約仍適用於採用該方法的題目。
+實作及驗收狀態見[驗收紀錄](agent-selected-generation-acceptance.md)。
+
 **狀態：已實作餐次熱量 MVP；本文件定義下一階段的通用化重構。**
 
 本文件定義 `lladar create test-dataset --knowledge ...` 的下一代預設生成

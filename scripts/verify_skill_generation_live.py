@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("/tmp/lladar-skill-live/dataset.jsonl"))
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--model", default="gemini:gemini-2.5-flash")
+    parser.add_argument("--skill", type=Path, help="Optional local method; bundled method is the default.")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -28,24 +29,25 @@ def main() -> int:
         rows = create_test_dataset(
             source, output=args.output,
             model=args.model, env_file=args.env_file, max_input_tokens=32000,
-            max_output_tokens=4096, verbose=False, force=args.force,
+            max_output_tokens=4096, verbose=False, force=args.force, skill=args.skill,
         )
         provenance = json.loads(Path(str(args.output) + ".generation.json").read_text(encoding="utf-8"))
         assert provenance["status"] == "complete"
+        assert provenance["validation"]["status"] == "passed"
         assert read_records(args.output) == rows
         assert provenance["dataset"]["sha256"] == hashlib.sha256(args.output.read_bytes()).hexdigest()
         assert len(provenance["knowledge_points"]) >= 3
         assert len(rows) >= 3
         for execution in provenance["executions"]:
-            assert execution["loaded_skills"] == ["knowledge-point-qa"]
+            assert execution["loaded_skills"] == [args.skill.name if args.skill else "knowledge-point-qa"]
             assert execution["skill_files"]["SKILL.md"]
-            assert execution["tool_events"]
-            assert "python_execute" not in execution["tool_names"]
         original = source.read_text(encoding="utf-8")
         for point in provenance["knowledge_points"]:
             for evidence in point["evidence"]:
                 assert original[evidence["start_char"]:evidence["end_char"]] == evidence["quote"]
         print(json.dumps({"status": "automated_checks_passed", "records": len(rows),
+                          "graph_used": Path(str(args.output) + ".graph.json").exists(),
+                          "methods": sorted({line["generation_method"] for line in provenance["dataset"]["lines"]}),
                           "output": str(args.output), "semantic_review_required": True}))
         return 0
     except Exception as error:
