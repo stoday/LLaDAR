@@ -1425,7 +1425,7 @@ wheels = [
 
 [[package]]
 name = "lladar"
-version = "0.9.0"
+version = "0.9.1"
 source = { editable = "." }
 dependencies = [
     { name = "akasha-terminal" },
