@@ -51,14 +51,14 @@ lladar report evaluation.json --output report.md
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
-預設使用隨套件安裝的 Akasha `knowledge-point-qa` skill，先抽取知識點，再逐點產生 QA。
-若存在已驗證的早餐／午餐／晚餐熱量同位階事實，也會建立可審核的語意圖譜、概念映射
-probe。無須另外安裝 skill；會另產生
-`dataset.jsonl.generation.json` 與 `dataset.jsonl.graph.json` 保存原文引用與執行狀態。
+預設使用隨套件安裝的 Akasha `knowledge-point-qa` skill，讀取知識段落並生成有來源依據的問答。
+Agent 依選定 skill 選擇直接問答，或使用圖譜產生概念映射及受控變體 probe；圖譜不是必經流程。
+也可使用 Python 產生或修正候選結果，正式輸出前會驗證最終資料。
+每份資料集附有 `dataset.jsonl.generation.json`；只有使用有效圖譜時才產生 `dataset.jsonl.graph.json`。
 
 圖譜 probe 用來觀察目標模型如何把「正餐」等推論概念映射至來源實例，沒有唯一正解，
 會與答對率分開報告。合成控制是測試輸入，不是來源或人物主張，預設不產生。
-在終端可用 `--controlled-variant-probes`，於圖譜階段列出已驗證維度後選擇；
+在終端可用 `--controlled-variant-probes`，於生成工作列出已驗證維度後選擇；
 自動化腳本則用 `--controlled-variant-topics DIMENSION_ID`，指定同一份語料指紋下
 已記錄的維度 ID。只接受規劃器已驗證的維度，讓每一組 pair 都維持可比較性。
 
@@ -211,7 +211,7 @@ log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控�
 
 ## 輸出
 
-- `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL；另有 `<output>.generation.json` 與 `<output>.graph.json`
+- `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL 及 `<output>.generation.json`；使用有效圖譜時另有 `<output>.graph.json`
 - `run-agent`：完成後的三欄 JSONL、`<output>.trials.jsonl` 與 `<output>.run.json`
 - `eval`：包含評估計畫、逐筆判讀、覆蓋率與統計彙整的 JSON
 - `report`：包含固定表格、解讀、限制與逐筆附錄的 Markdown

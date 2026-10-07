@@ -1,36 +1,39 @@
 # Editing this test-dataset Skill
 
-## Author guide: purpose, customization, and tool selection
+## Purpose and active instructions
 
-This guide is for Skill authors. The active rules are in `SKILL.md`.
-The guide is not automatically registered as another Skill, but an Agent can
-read it as a reference resource. Alternative examples do not replace the active
-method. When adopting an alternative, replace the original rule in `SKILL.md`
-and keep one consistent method. Editing only this guide does not change the rules.
+SKILL.md defines the active method. This guide supplies contracts and replacement
+examples; reading it does not override the active Skill. Replace the relevant
+method in SKILL.md when choosing an alternative, and keep both files consistent.
 
-Edit the relevant stage's steps in `SKILL.md`: use a customer support tone,
-emphasize conditions and exceptions, or choose source-supported test types.
-The host still owns citations, validation, IDs, and file writing.
+The request's stage is `generation`. All generation tools are available together.
+The host does not require separate knowledge_points, semantic_graph, or test_plans
+stages. Choose direct QA, a graph, or a mixture according to the active Skill.
+A requested controlled-variant workflow still requires a valid graph and pairs.
 
-### Which tools to use in each situation
+## Tools and completion
 
-| Stage | Use case | Complete LLaDAR tool list |
-| --- | --- | --- |
-| `knowledge_points` | Find independently answerable source facts | `list_sources`, `read_source`, `submit_knowledge_points` |
-| `semantic_graph` | Organize facts into entities, attributes, concepts | `list_knowledge_points`, `submit_semantic_graph` |
-| `test_plans` | Generate direct questions, concept questions, controlled comparisons | `read_semantic_graph`, `submit_test_plans` |
-| `qa` | Generate a candidate question for an assigned point | `read_knowledge_point`, `list_knowledge_points`, `submit_qa` |
+| Capability | Tools |
+| --- | --- |
+| Read declared sources | list_sources, read_source |
+| Retain meaningful passages | submit_knowledge_points, list_knowledge_points, read_knowledge_point |
+| Generate direct or typed questions | submit_qa |
+| Optional graph and probes | submit_semantic_graph, read_semantic_graph, submit_test_plans |
+| Record why the method was selected | record_method |
 
-The host chooses `stage`; a Skill cannot switch stages or access another stage's
-tools. `source_id` identifies a source, `read_id` a read operation, and
-`knowledge_point_id` an accepted fact. Use actual IDs from tools or the request,
-not IDs copied from examples.
+Read all declared sources. Character ranges start at zero and exclude the end.
+Follow read_source.next_start until null. Point evidence uses actual read IDs
+and verbatim quotes. A meaningful passage may contain several related facts;
+keep its necessary conditions and exceptions together.
 
-### Minimal submissions: knowledge point, graph, direct-fact question
+Completion means valid final questions, source evidence, and any graph/probe
+contracts required by the method and request. The host freezes and revalidates
+results before publishing. More than one QA may refer to the same point.
 
-Each block is a JSON tool argument for its own stage. Assume the source says
-`Service A keeps data for 30 days.`. After reading the assigned source, use the
-returned `read_id` in `submit_knowledge_points(points)`:
+## Minimal point, optional graph, graph plan, and direct QA
+
+Assume the source is `Service A keeps data for 30 days.` and its read ID is
+`read_000001`. Submit this list through submit_knowledge_points(points):
 
 ```json
 [
@@ -39,13 +42,8 @@ returned `read_id` in `submit_knowledge_points(points)`:
 ]
 ```
 
-The tool returns `accepted` (ID list) and `rejected` (list with index and error).
-Correct rejections; finish after reading all ranges and resolving every rejection.
-`read_source` positions are zero-based character offsets, not line numbers.
-Long sources are paginated; follow `next_start` until null.
-
-In the graph stage, `list_knowledge_points()` returns objects with id, statement,
-topic, evidence. Assuming `kp_000001` was accepted, call `submit_semantic_graph(graph)`:
+Use the returned point IDs. For the optional graph method, assuming kp_000001
+was accepted, submit_semantic_graph(graph) takes:
 
 ```json
 {
@@ -61,17 +59,14 @@ topic, evidence. Assuming `kp_000001` was accepted, call `submit_semantic_graph(
 }
 ```
 
-Define node IDs; evidence IDs must identify accepted points. Node types are
-`entity`, `attribute`, `concept`; concepts need `member_ids` for at least two
-distinct entities. Origin is `source` or `inferred`; inferred concepts still need
-source evidence. Each entity has at most one comparable fact; `unit` may be empty.
-A complete relation edge is
-`{"from":"node-a","relation":"belongs-to","to":"node-b","origin":"source","evidence_refs":["kp_000001"]}`.
-Both endpoints must be submitted node IDs, with evidence supporting the relation.
-Acceptance returns `accepted: true` and node and fact counts.
+Nodes and facts must be non-empty. Node types are entity, attribute, concept.
+Concepts require at least two distinct entity member_ids. Origins are source
+or inferred, with supporting point IDs. Facts refer to entity nodes, matching
+labels and their evidence references. Each entity has one comparable fact.
+Edges have from, relation, to, origin, evidence_refs; both endpoints must exist.
+An empty edge list is valid. An empty graph is not a successful graph method.
 
-In the plan stage, call `read_semantic_graph()` for the verified graph with nodes,
-edges, facts, evidence, then `submit_test_plans(plans)`:
+After reading the graph, submit_test_plans(plans) accepts:
 
 ```json
 [
@@ -80,92 +75,89 @@ edges, facts, evidence, then `submit_test_plans(plans)`:
 ]
 ```
 
-`expected_answer` equals the fact's value combined with its unit. The host generates
-the dataset after acceptance. A concept question has exactly `type: concept_mapping`,
-`concept_id`, `question`, `expected_answer`. Its answer is the complete
-source-supported candidate set for all concept members, not one member.
+The answer equals the graph fact's value and unit. A concept_mapping plan has
+type, concept_id, question, expected_answer; its answer is the complete verified
+candidate set, such as `Starter: 10 seats; Growth: 25 seats`.
 
-### When to use controlled comparisons
-
-Use `controlled_invariance` only when the source leaves the relevant condition
-unspecified, to compare responses after changing one condition. A group needs at
-least two plans. Complete fields: `type`, `pair_id`, `source_concept`,
-`source_support: group_unspecified`, `answer_contract: invariant`,
-`varied_dimension`, `control_value`, `question_template`, `question`, `expected_answer`.
-`varied_dimension` is an object: `id`, `label`, `semantic_scope`,
-`mutual_exclusivity` are nonempty strings; `coexists_with` is a list of dimension
-ID strings. `mutual_exclusivity` cannot be `unknown`. Each question contains its
-control_value; question_template equals question. Replacing control_value with
-the same placeholder must yield the same question skeleton. Within a group,
-source_concept, dimension, and complete candidate answer match; control_value differs.
-This is an advanced method; start with direct_fact for ordinary questions.
-
-### Minimal `qa` tool argument
-
-`read_knowledge_point(knowledge_point_id)` returns the assigned point object.
-Use `list_knowledge_points()` to compare facts. A free-response `record` argument
-to `submit_qa(record)` is:
+For direct QA, skip graph and plans entirely and call submit_qa(record):
 
 ```json
-{"knowledge_point_id": "kp_000001", "question": "How long does Service A keep data?", "expected_answer": "30 days"}
+{
+  "knowledge_point_id": "kp_000001",
+  "question": "How long does Service A keep data?",
+  "expected_answer": "30 days"
+}
 ```
 
-The ID identifies the assigned point. Typed answers have additional question-type
-contracts; the free-response example does not cover them.
+For a direct-reading Skill, replace the graph-method instructions with:
+Read sources in order, identify meaningful passages, and generate natural
+standalone questions and source-supported answers. Retain exact source evidence.
+Use direct QA; a graph and Python are not required for this method.
 
-## Stage execution contracts
+## Typed QA
 
-`SKILL.md` contains the active method. Run it with
-`lladar create test-dataset --knowledge KNOWLEDGE --skill DIRECTORY --output DATASET.jsonl`.
-The host sends a request with a `stage` for each work item. Tools expire after
-that work item; use only those available in the current stage.
+For an explicit single-choice, multiple-choice, or ranking request, free graph
+fact plans do not satisfy the requested type. Use submit_qa with these fields:
+knowledge_point_id, knowledge_point_ids, question, expected_answer, question_type,
+answer_protocol, options, correct_option_ids. Each option has id (A, B, ...),
+text (the referenced point's exact statement), and knowledge_point_id. Referenced
+points share a topic; every option maps once to a known point and is shown in
+the question as `A. statement`.
 
-## `knowledge_points` stage
+| Type | Options | Correct IDs | Protocol | Expected answer |
+| --- | --- | --- | --- | --- |
+| single_choice | 2–5 | One | one_option_id | B |
+| multiple_choice | 3–6 | Multiple, not all | option_id_list | A,C |
+| ranking | 3–5 | Every option once | ordered_option_ids | B>A>C |
 
-The request names one `source_id` and reports unread source ranges. Available
-tools:
+Ranking also requires ranking_axis and direction (ascending or descending).
+Use source-supported relations and complete candidates, not invented distractors.
 
-- `list_sources()` returns each source ID, name, and text length.
-- `read_source(source_id, start_char=0, end_char=None)` returns source text,
-  `read_id`, character range, and `next_start`. Follow `next_start` to cover
-  the source.
-- `submit_knowledge_points(points)` takes a list of objects with `statement`,
-  `topic`, and `evidence: [{read_id, quote}]`. Each quote must appear in a read
-  page. It returns accepted IDs and rejected indexes with reasons. Correct
-  rejected points before finishing.
+## Controlled comparisons
 
-Completion: all source ranges were read and no rejection remains unresolved.
+A controlled_invariance plan has type, pair_id, source_concept,
+source_support (group_unspecified), answer_contract (invariant), varied_dimension,
+control_value, question_template, question, expected_answer. varied_dimension
+has id, label, semantic_scope, mutual_exclusivity, coexists_with (ID list).
+Unknown value relationships do not qualify.
 
-## `semantic_graph` stage
+A pair has at least two distinct control values and preserves one concept,
+dimension, source candidate set, and answer contract. Each question contains its
+control value; question_template equals question. Replacing the control values
+with one placeholder yields the same question skeleton. The host selects the
+requested dimensions and keeps pairs whole when deduplicating or applying count.
 
-- `list_knowledge_points()` returns accepted fact IDs and statements.
-- `submit_semantic_graph(graph)` accepts one object with `nodes`, `edges`, and
-  `facts`. Every source item must cite accepted fact evidence. It returns the
-  accepted graph summary or a validation error.
+## Python and candidate-file delivery
 
-Completion: one evidence-backed graph was accepted.
+Python may explore, calculate, read files, and repair the active workspace.
+Results need not all pass through submission tools. Every delivery path faces
+final source, format, graph, and probe validation.
 
-## `test_plans` stage
+The request declares candidate_path and candidate_contract. A present JSON file
+is the complete authoritative candidate snapshot, not an addition to workspace
+results. Use only that declared delivery path; the host does not discover files
+by scanning directories. Include these fields:
 
-- `read_semantic_graph()` returns the verified graph for this work item.
-- `submit_test_plans(plans)` accepts a nonempty list of `direct_fact`,
-  `concept_mapping`, or `controlled_invariance` plans. A direct fact plan has
-  `type`, `entity_id`, `question`, and `expected_answer`; the answer must match
-  the graph fact. The tool returns accepted and pair counts or a validation
-  error. The selected Skill describes the additional concept and pair rules.
+- reads: objects with read_id, source_id, start_char, end_char. The host reconstructs
+  text from its loaded source. Include complete source reading ranges.
+- knowledge_points: objects with id, statement, topic, evidence containing read_id
+  and quote. IDs may be author-chosen, unique, and consistent with references.
+- qa: the same raw direct/typed QA records described above.
+- graph: optional raw nodes, edges, facts. Omit it for a direct method.
+- plans: optional raw graph plans. These require a valid graph.
+- method_reason: a brief explanation of the selected method.
 
-Completion: the host accepts the plans. The host assigns IDs, validates
-evidence and paired variations, and writes the dataset and provenance.
+Read candidate_contract from the actual request for the active delivery format.
+You may also adjust workspace candidates directly; the host rechecks their final
+snapshot rather than trusting an earlier accepted tool result. It validates
+structure and source positions; this alone does not prove natural-language
+entailment or complete fact coverage.
 
-## `qa` stage
+## Recovery
 
-When the host requests question candidates, use `read_knowledge_point(id)` for
-the assigned point, `list_knowledge_points()` for comparison context, and
-`submit_qa(record)` with `knowledge_point_id`, `question`, and
-`expected_answer`. Typed answer protocols require additional fields described
-by the selected question type. The host validates each candidate and returns
-acceptance or an error.
-
-The Skill controls how source facts become questions. LLaDAR controls source
-evidence, graph validation, question contracts, deduplication, record writing,
-and the requested count. Test changes on a small knowledge file first.
+The request's validation_errors identifies final-result problems. existing_results
+reports accepted question/plan counts, graph presence, and source coverage.
+Repair incomplete work. If the Agent reaches its round limit after valid delivery,
+the host can preserve the result while recording that execution error.
+A completion summary alone is not candidate data. Normal CLI output protection,
+force, log, count, and question-type contracts remain in effect.

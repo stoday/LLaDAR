@@ -1,4 +1,4 @@
-"""Public generation contracts for the graph-and-plan skill workflow."""
+"""Public generation contracts for the optional graph-and-plan skill method."""
 
 from __future__ import annotations
 
@@ -49,14 +49,14 @@ class SourceGraphAgent:
         self.tools = tools
 
     def __call__(self, request):
-        if request["stage"] == "knowledge_points":
-            page = self.tools["read_source"](request["source_id"])
+        if request["stage"] == "generation":
+            page = self.tools["read_source"](self.tools["list_sources"]()[0]["source_id"])
             accepted = self.tools["submit_knowledge_points"]([
                 {"statement": fact, "topic": "Service", "evidence": [{"read_id": page["read_id"], "quote": fact}]}
                 for fact in FACTS
             ])
             assert len(accepted["accepted"]) == len(FACTS)
-        elif request["stage"] == "semantic_graph":
+        if request["stage"] == "generation":
             points = {point["statement"]: point["id"] for point in self.tools["list_knowledge_points"]()}
             self.tools["submit_semantic_graph"]({
                 "nodes": [
@@ -71,7 +71,7 @@ class SourceGraphAgent:
                     {"entity_id": "entity_support", "label": "Support", "value": "09:00.", "unit": "", "evidence_ref": points[FACTS[2]]},
                 ],
             })
-        elif request["stage"] == "test_plans":
+        if request["stage"] == "generation":
             self.tools["submit_test_plans"]([
                 {"type": "direct_fact", "entity_id": "entity_service_a", "question": QUESTIONS[0], "expected_answer": ANSWERS[0]},
                 {"type": "direct_fact", "entity_id": "entity_service_b", "question": QUESTIONS[1], "expected_answer": ANSWERS[1]},
@@ -93,7 +93,7 @@ def test_create_cli_rejects_retired_generation_options(option):
         build_parser().parse_args(["create", "test-dataset", "--knowledge", "notes.md", option, "value"])
 
 
-def test_create_dataset_uses_graph_and_plan_stages_for_direct_facts(generation_inputs, tmp_path):
+def test_graph_skill_can_publish_source_fact_questions(generation_inputs, tmp_path):
     source, skill = generation_inputs
     output = tmp_path / "dataset.jsonl"
 
@@ -126,8 +126,8 @@ def test_rejected_source_candidate_can_be_corrected_before_graph_generation(gene
 
     class CorrectingAgent(SourceGraphAgent):
         def __call__(self, request):
-            if request["stage"] == "knowledge_points":
-                page = self.tools["read_source"](request["source_id"])
+            if request["stage"] == "generation":
+                page = self.tools["read_source"]("source_001")
                 rejected = self.tools["submit_knowledge_points"]([
                     {"statement": "Invented", "topic": "Service", "evidence": [{"read_id": page["read_id"], "quote": "missing"}]},
                 ])
@@ -164,43 +164,34 @@ def test_missing_graph_or_plan_never_publishes_an_output(generation_inputs, tmp_
 
     class NoGraphAgent(SourceGraphAgent):
         def __call__(self, request):
-            if request["stage"] == "semantic_graph":
+            if request["stage"] == "generation":
                 return {"loaded_skills": [self.name], "skill_files": {"SKILL.md": hashlib.sha256((self.skill / "SKILL.md").read_bytes()).hexdigest()}}
             return super().__call__(request)
 
-    with pytest.raises(DatasetValidationError, match="semantic graph"):
+    with pytest.raises(DatasetValidationError, match="no valid question"):
         create_test_dataset(source, skill=skill, output=output, force=True,
                             skill_agent_factory=NoGraphAgent, verbose=False)
     assert output.read_text(encoding="utf-8") == "previous"
 
 
-def test_generation_stage_tools_are_scoped_and_expire_between_stages(generation_inputs):
+def test_generation_agent_can_read_all_declared_sources_and_select_its_method(generation_inputs, tmp_path):
     source, skill = generation_inputs
-    held = []
+    additional = tmp_path / "zz-additional.md"
+    additional.write_text("A second source.", encoding="utf-8")
 
     class CapabilityAgent(SourceGraphAgent):
         def __call__(self, request):
-            if request["stage"] == "knowledge_points":
-                held.append(self.tools["read_source"])
-                assert set(self.tools) == {"list_sources", "read_source", "submit_knowledge_points"}
-            elif request["stage"] == "semantic_graph":
-                with pytest.raises(ValueError, match="expired"):
-                    held[0](request.get("source_id", "source_001"))
-                assert set(self.tools) == {"list_knowledge_points", "submit_semantic_graph"}
-            elif request["stage"] == "test_plans":
-                assert set(self.tools) == {"read_semantic_graph", "submit_test_plans"}
+            self.tools["read_source"]("source_002")
             return super().__call__(request)
 
-    assert len(create_test_dataset(source, skill=skill, skill_agent_factory=CapabilityAgent, verbose=False)) == 3
+    assert len(create_test_dataset([source, additional], skill=skill, skill_agent_factory=CapabilityAgent, verbose=False)) == 3
 
 
-def test_verbose_generation_reports_graph_and_plan_stages(generation_inputs, capsys):
+def test_verbose_generation_reports_actual_generation_work(generation_inputs, capsys):
     source, skill = generation_inputs
     create_test_dataset(source, skill=skill, skill_agent_factory=SourceGraphAgent, verbose=True)
     captured = capsys.readouterr()
-    assert "[KNOWLEDGE_POINTS]" in captured.err
-    assert "[SEMANTIC_GRAPH]" in captured.err
-    assert "[TEST_PLANS]" in captured.err
+    assert "[GENERATION]" in captured.err
 
 
 def test_create_cli_reports_graph_and_controlled_variant_summary(generation_inputs, tmp_path, capsys):
@@ -243,7 +234,7 @@ def test_cli_log_captures_generation_progress_and_agent_trace(
 
     captured = capsys.readouterr()
     saved = log.read_text(encoding="utf-8")
-    for marker in ("[KNOWLEDGE_POINTS]", "[SEMANTIC_GRAPH]", "[TEST_PLANS]", "執行階段"):
+    for marker in ("[GENERATION]", "執行階段"):
         assert (marker in saved) is verbose
         assert (marker in captured.out + captured.err) is verbose
     assert "Generated 3 record(s)" in saved

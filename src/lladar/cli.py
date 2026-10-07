@@ -137,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--knowledge", action="append", required=True, metavar="PATH",
                          help="Source knowledge file or directory; repeat for multiple inputs (required; no default).")
     dataset.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
-                         help="Local method directory containing SKILL.md; only one is supported (default: bundled knowledge-point-qa).")
+                         help="Local method directory containing SKILL.md; selects direct QA or optional graph generation. Only one is supported (default: bundled knowledge-point-qa).")
     dataset.add_argument("--output", default=".", metavar="PATH",
                          help=f"Output directory or explicit .jsonl path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
@@ -477,7 +477,8 @@ def _execute(
                 verbose=args.verbose,
             )
             metadata = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
-            graph = json.loads(Path(str(output) + ".graph.json").read_text(encoding="utf-8"))
+            graph_path = Path(str(output) + ".graph.json")
+            graph = json.loads(graph_path.read_text(encoding="utf-8")) if graph_path.exists() else {}
             concept_count = sum(node.get("type") == "concept" for node in graph.get("nodes", []))
             dimensions = graph.get("control_dimensions", [])
             selected_controls = sum(
@@ -485,7 +486,9 @@ def _execute(
                 for line in metadata["dataset"]["lines"]
             )
             status = (
-                f" (status={metadata['status']}; concepts={concept_count}; "
+                f" (status={metadata['status']}; graph_used={str(bool(graph)).lower()}; "
+                f"methods={','.join(sorted({line.get('generation_method', 'graph') for line in metadata['dataset']['lines']}))}; "
+                f"validation={metadata.get('validation', {}).get('status', 'unknown')}; concepts={concept_count}; "
                 f"controlled_dimensions={len(dimensions)}; controlled_records={selected_controls}; "
                 f"provenance={output}.generation.json)"
             )
