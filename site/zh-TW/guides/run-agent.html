@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a class="active" href="run-agent.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../guides/run-agent.html" lang="en">English</a></nav></header>
-  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html">建立測試資料</a><a href="run-agent.html" aria-current="page">執行 Agent</a><a href="evaluate.html">評估回答</a><a href="report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html">建立測試資料</a><a href="run-agent.html" aria-current="page">執行 Agent</a><a href="situations.html">多輪情境</a><a href="evaluate.html">評估回答</a><a href="report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
   <main class="wrap">
     <section class="hero compact"><p class="eyebrow">使用指南</p><h1>讓 Agent 回答測試題</h1><p class="lead">把一組測試題交給既有 Agent，並把每一題的實際回答存下來，供後面檢查。</p></section>
     <section id="choose-target">
@@ -62,6 +62,7 @@
       <p>沿用專用的 <code>.lladar/browser-profiles</code>，或以 <code>--fresh-browser-profile</code> 使用暫時未登入 profile；不複製日常 Chrome／Edge。401/403 或抽取失敗會停止後續送題，保留已完成答案；需重新登入並取得新同意，不自動重試。舊解析器旗標拒絕使用，既有私密快取不讀取也不刪除。</p>
       <p><code>--page-url</code> 不能與 <code>--project</code> 或 <code>--service-url</code> 合用。若你也有專案原始碼，可回到<a href="#choose-target">目標選擇表</a>判斷適合的方式。</p>
     </section>
+    <section><h2>多輪情境模式</h2><p>使用 <code>run-agent --situation-config situation.json --project PATH --num-scenarios N</code> 生成情境並執行對話。自帶或自動產生的 session adapter 必須先通過同一 session 兩輪和新 session 隔離校準。此模式保存完整對話及不同的 sidecar，不能同時傳入 <code>DATASET</code> 或 <code>--skill</code>。詳見<a href="situations.html">多輪情境指南</a>。</p></section>
     <section>
       <h2>跑完後要看哪些檔案？</h2>
       <table><thead><tr><th>檔案</th><th>你可以從中確認什麼？</th></tr></thead><tbody>

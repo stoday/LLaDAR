@@ -9,7 +9,7 @@
 </head>
 <body>
   <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">使用指南</a><a class="active" href="support-demo-agent.html">範例</a><a class="language" href="../../examples/support-demo-agent.html" lang="en">English</a></nav></header>
-  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">建立測試資料</a><a href="../guides/run-agent.html">執行 Agent</a><a href="../guides/evaluate.html">評估回答</a><a href="../guides/report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="support-demo-agent.html" aria-current="page">客服 Agent 範例</a></div></nav>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">建立測試資料</a><a href="../guides/run-agent.html">執行 Agent</a><a href="../guides/situations.html">多輪情境</a><a href="../guides/evaluate.html">評估回答</a><a href="../guides/report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="support-demo-agent.html" aria-current="page">客服 Agent 範例</a></div></nav>
   <main class="wrap">
     <section class="hero compact"><p class="eyebrow">範例</p><h1>客服 Agent：把政策測成一套自動化檢查</h1><p class="lead">這個範例假設你有一個客服 Agent，想確認它會不會依退貨、出貨和退款政策回答。它提供一個可立即執行的小型 Agent，示範完整流程。</p></section>
     <section>
@@ -29,17 +29,17 @@
     <section>
       <h2>做法一：讓 LLaDAR 直接讀取範例專案</h2>
       <p>這是最適合第一次嘗試的做法。LLaDAR 會自行讀取專案、找出如何執行 Agent，先試跑確認後再回答所有題目。</p>
-      <pre><code>lladar create test-dataset --knowledge examples/support-demo-agent/knowledge.md --output artifacts/support-demo/dataset.json
-lladar run-agent --project examples/support-demo-agent --dataset artifacts/support-demo/dataset.json --output artifacts/support-demo/run.json --no-interactive
-lladar eval --dataset artifacts/support-demo/dataset.json --run artifacts/support-demo/run.json --output artifacts/support-demo/evaluation.json
-lladar report --evaluation artifacts/support-demo/evaluation.json --output artifacts/support-demo/report.md</code></pre>
+      <pre><code>lladar create test-dataset --knowledge examples/support-demo-agent/knowledge.md --output artifacts/support-demo/dataset.jsonl
+lladar run-agent artifacts/support-demo/dataset.jsonl --project examples/support-demo-agent --output artifacts/support-demo/responses.jsonl --no-interactive
+lladar eval artifacts/support-demo/responses.jsonl --output artifacts/support-demo/evaluation.json
+lladar report artifacts/support-demo/evaluation.json --output artifacts/support-demo/report.md</code></pre>
     </section>
     <section>
       <h2>做法二：先啟動服務，再指定服務網址</h2>
       <p>這個做法適合你的 Agent 已經由團隊啟動成測試服務。先在一個終端機啟動範例服務：</p>
       <pre><code>python examples/support-demo-agent/server.py --port 8765</code></pre>
       <p>接著在另一個終端機執行測試：</p>
-      <pre><code>lladar run-agent --project examples/support-demo-agent --service-url http://127.0.0.1:8765 --dataset artifacts/support-demo/dataset.json --output artifacts/support-demo/run.json</code></pre>
+      <pre><code>lladar run-agent artifacts/support-demo/dataset.jsonl --project examples/support-demo-agent --service-url http://127.0.0.1:8765 --output artifacts/support-demo/service-responses.jsonl</code></pre>
       <p>這種方式下，服務由你負責啟動和停止；LLaDAR 只會呼叫你指定的網址。</p>
     </section>
     <section>

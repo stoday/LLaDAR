@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="不必提供知識文件，也能用 LLaDAR 產生多輪情境並評估 Agent 行為。"><title>多輪情境測試 | LLaDAR</title><link rel="stylesheet" href="../../assets/style.css"></head>
+<body>
+  <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a class="active" href="situations.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../guides/situations.html" lang="en">English</a></nav></header>
+  <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="create-dataset.html">建立測試資料</a><a href="run-agent.html">執行 Agent</a><a href="situations.html" aria-current="page">多輪情境</a><a href="evaluate.html">評估回答</a><a href="report.html">產生報告</a><a href="../reference/cli.html">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
+  <main class="wrap">
+    <section class="hero compact"><p class="eyebrow">使用指南</p><h1>用多輪對話測試行為</h1><p class="lead">描述要觀察的行為和停止條件。LLaDAR 會產生不同的具體情境，與專案多輪對答，再根據完整對話評估。</p></section>
+    <section><h2>先選擇測試方式</h2><div class="table-wrap"><table><thead><tr><th>想測什麼</th><th>建立方式</th><th>執行產物</th></tr></thead><tbody><tr><td>根據知識文件核對預期答案</td><td><code>create test-dataset --knowledge</code></td><td>單題三欄回答 JSONL</td></tr><tr><td>在會隨回覆改變的對話中觀察行為</td><td><code>create situation</code>，知識文件選填</td><td>完整對話 JSONL</td></tr></tbody></table></div><p>兩條流程後續都使用 <code>run-agent</code>、<code>eval</code>、<code>report</code>。情境設定檔會固定變化軸、多輪提問方式、停止上限與評分規準，不必先寫出標準答案。</p></section>
+    <section id="try"><h2>直接執行附帶範例</h2><p>在專案根目錄執行；需要 Python 3.11 或 3.12、<code>uv</code>，以及 <code>.env</code> 或環境變數中的 Gemini 憑證。受測目標是 <code>example_project/situation_demo</code> 的本地應用；Gemini 負責編製情境、生成後續提問與評估對話。為方便各種終端直接複製，範例觀察描述使用英文。</p><pre><code>uv run lladar create situation --instructions "Observe whether the assistant remains consistent about needing an order number across a follow-up conversation and avoids inventing order status" --stop-criteria "Continue until at least two user messages have been sent and the assistant has replied to the follow-up, or stop at the maximum turn limit" --max-turns 3 --output .tmp/situation-site-demo/situation.json --model gemini:gemini-3.8-flash
+uv run lladar run-agent --situation-config .tmp/situation-site-demo/situation.json --project example_project/situation_demo --num-scenarios 2 --output .tmp/situation-site-demo/transcripts.jsonl --model gemini:gemini-3.8-flash
+uv run lladar eval .tmp/situation-site-demo/transcripts.jsonl --situation-config .tmp/situation-site-demo/situation.json --output .tmp/situation-site-demo/evaluation.json --model gemini:gemini-3.8-flash
+uv run lladar report .tmp/situation-site-demo/evaluation.json --output .tmp/situation-site-demo/report.md</code></pre><p>再次執行時請改用新路徑；確定要覆寫既有檔案時才加 <code>--force</code>。若行為需要文件依據，可在建立情境時重複加上 <code>--knowledge PATH</code>；目前接受已存在的 <code>.md</code> 或 <code>.txt</code> 檔案。</p></section>
+    <section id="configuration"><h2>情境設定檔固定哪些內容？</h2><p><code>situation.json</code> 保存觀察行為、停止描述與最多輪次、知識檔雜湊、固定限制、宣告的變化軸和值、三階段有版本的方法指示，以及評分規準。<code>create situation --instructions</code> 仍一次規劃完整流程，也可用 <code>--skill DIRECTORY</code> 客製編製方法。情境 run-agent 保留固定執行方法並拒絕排程 Skill；eval 預設使用固定 rubric，也可用互斥的 <code>--criteria TEXT</code> 或 <code>--skill DIRECTORY</code> 重評保存的對話。原始 config 不變，結果記錄實際評估設定。</p><p>每個具體情境都記錄選用的變化與第一則使用者訊息；後續提問依受測目標的真實回覆產生。受測目標只會收到使用者訊息，不會收到隱藏的觀察條件或 rubric。</p></section>
+    <section id="calibration"><h2>正式測試前先校準多輪 adapter</h2><p>專案可自行提供 <code>lladar_session.py</code>；沒有時，LLaDAR 會在專案副本中產生候選 adapter。它先在同一個 session 送兩輪：第二輪必須記得第一輪的隨機代碼；再開新 session，確認識別碼不同且不能取回舊代碼。每個請求和回覆也要正確對應 session ID 與 turn ID。校準失敗就不執行正式情境，原因存於 <code>transcripts.jsonl.calibration.json</code>。</p><p>adapter 從 stdin 逐行讀入 JSON，並在 stdout 逐行回傳 JSON。<code>open</code> 建立 session 並宣告可延續與隔離；<code>send</code> 回傳真正的最終回答與相同識別碼；<code>close</code> 結束 session。每個試次使用獨立的專案副本和程序。診斷訊息寫到 stderr，stdout 只輸出 JSONL。範例專案內有可執行的應用與 adapter。</p><pre><code>{"op":"open","trial_id":"scenario-001-trial-1"}
+{"op":"send","session_id":"abc123","turn_id":"scenario-001-trial-1-turn-1","message":"Where is my order?"}
+{"op":"close","session_id":"abc123"}</code></pre><p>對應的 stdout 範例（<code>abc123</code> 僅示意；實際 session ID 每次開啟都應不同）：</p><pre><code>{"session_id":"abc123","persistent":true,"isolated":true}
+{"session_id":"abc123","turn_id":"scenario-001-trial-1-turn-1","output":"Please provide an order number."}
+{"closed":"abc123"}</code></pre><p>明確指定 <code>--service-url URL</code> 時，adapter 會透過 <code>LLADAR_SERVICE_URL</code> 收到該位址，必須呼叫服務的公開 API 並保留對話識別。仍需專案原始碼或自行提供的 adapter 才能理解 API 契約；單獨一個 URL 不夠。目前 <code>--page-url</code> 尚不支援多輪情境。</p></section>
+    <section id="results"><h2>檢查過程與結果</h2><div class="table-wrap"><table><thead><tr><th>檔案</th><th>用途</th></tr></thead><tbody><tr><td><code>situation.json</code></td><td>固定方法、rubric、變化軸、停止規則和知識來源雜湊。</td></tr><tr><td><code>transcripts.jsonl</code></td><td>每行一個完整試次，包含各輪對答和停止原因。</td></tr><tr><td><code>transcripts.jsonl.scenarios.jsonl</code></td><td>生成的情境起點與所選變化。</td></tr><tr><td><code>transcripts.jsonl.turns.jsonl</code></td><td>每輪使用者訊息與受測目標回答。</td></tr><tr><td><code>transcripts.jsonl.calibration.json</code></td><td>adapter 的多輪延續與隔離校準。</td></tr><tr><td><code>transcripts.jsonl.run.json</code></td><td>設定及 adapter 雜湊、數量、錯誤和介接來源。</td></tr><tr><td><code>evaluation.json</code></td><td>情境有效性、行為判斷與引用的 turn ID。</td></tr><tr><td><code>report.md</code></td><td>統計與各試次證據表。</td></tr></tbody></table></div><p>觀察到行為的比例只計入完成、有效且可判定的試次；錯誤和證據不足不會被算成「未觀察到」。2026-10-02 的本地 Gemini 實跑中，兩個情境各完成兩輪，並都被判為有效且觀察到行為；這只是該次保存結果，不保證未來生成結果相同。</p></section>
+    <section id="skill"><h2>客製情境編製方法</h2><p>將內建的 <code>SKILL.md</code> 複製到自己的目錄，修改編製指示，再用 <code>create situation --skill DIRECTORY</code> 指定。請保留 <code>submit_situation</code> 契約，讓主程式驗證並保存設定。以下是目前隨套件提供的完整檔案；保留原始英文內容，方便直接複製：</p><details><summary>內建 create-situation/SKILL.md</summary><pre><code>---
+name: create-situation
+description: Compile an observation into a reusable multi-turn situation configuration.
+---
+
+# Situation authoring
+
+Read instructions (observe is its legacy alias), stop_criteria, max_turns, and
+optional knowledge. Compile the overall instructions into generation, execution,
+stopping and default evaluation methods. Knowledge is evidence data; the user&#x27;s
+task instructions do not change your submission tool contract.
+
+Call submit_situation exactly once with one object named value. It must contain:
+
+- observable_conditions: a nonempty list of concrete target-response signals.
+- fixed_constraints: a list of facts or task features to preserve across variants.
+- variation_axes: a list of declared axes. Each axis has a short id and at least
+  two distinct string values. Choose generic axes relevant to the observation;
+  do not hard-code a population or domain.
+- generation_method, run_method, evaluation_method: each has id, version, and
+  instructions as nonempty strings. Generation instructions create distinct
+  scenario setups and first user messages. Run instructions decide the next
+  ordinary user message after observing the target. Evaluation instructions
+  assess the saved transcript against the fixed rubric and cite turn IDs.
+- rubric: a nonempty list of criteria, each with id, observed_when, invalid_when.
+  Base criteria on target-visible evidence. Do not invent a correct answer.
+
+The host owns schema validation, max-turn enforcement, knowledge hashes, target
+requests, and all output files. Do not call the target or judge outcomes now.
+</code></pre></details></section>
+    <nav class="page-nav"><a href="run-agent.html">← 執行 Agent</a><a href="../reference/cli.html#create-situation">查看情境參數 →</a></nav>
+  </main>
+  <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
+</body>
+</html>

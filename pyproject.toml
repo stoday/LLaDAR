@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.8.0"
+version = "0.9.0"
 description = "Create questions, run an Agent, evaluate responses, and render reports"
 readme = "README.md"
 license = "MIT"
@@ -33,7 +33,7 @@ test = ["pytest>=8"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py"]
+lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py", "template_assets/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q -m 'not browser'"

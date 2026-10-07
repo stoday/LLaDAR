@@ -7,6 +7,20 @@ schema-v3, schema-v4, BFS, benchmark, experiment, Method Pack, and compatibility
 designs. LLaDAR is not required to read or migrate artifacts produced by those
 designs.
 
+## Proposed extension
+
+The 2026-10-07 [evaluation criteria contract](PRD-evaluation-criteria.zh-TW.md)
+specifies mutually exclusive `eval --criteria` and `eval --skill` inputs,
+including situation reevaluation and evaluation-setting provenance. It takes
+precedence for explicit evaluation overrides; unchanged defaults retain their
+existing answer-correctness behavior.
+
+[Situation generation and multi-turn behavior evaluation](PRD-situation-generation.zh-TW.md)
+is a PRD proposal, not part of the accepted implementation contract below.
+It adds a situation artifact under create while keeping the four public command
+workflows. Its CLI and data contracts must not be described as implemented
+until the proposal is built and verified.
+
 ## Product scope
 
 LLaDAR has exactly four public command workflows:
