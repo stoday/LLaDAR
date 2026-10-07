@@ -199,6 +199,11 @@ lladar report evaluation.json --output report.md
 
 ## 作業紀錄
 
+Verbose 出題時會即時顯示逐筆提交的候選預覽，以及最終採用的問句與標準答案；
+若 Agent 一次交付整批檔案，則在交付後顯示。`run-agent` 在每次測試前顯示問句與
+標準答案，收到回應後立即顯示回應答案；沒有回應就省略。彩色終端的問句為青色、
+標準答案為綠色、回應答案為紫色。輸出會立即刷新，方便確認方向並按 Ctrl+C 中止。
+
 在任何工作流程命令加上 `--log PATH`，將終端輸出同步保存為新的 UTF-8 檔案：
 
 ```bash
@@ -208,6 +213,15 @@ lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl --log 
 log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控制碼。
 `--no-verbose` 會同時減少終端和 log 的詳細訊息。自動建立上層目錄；既有 log
 會保留，每次執行請指定新檔名。
+
+瀏覽器失敗會在 verbose 與 log 顯示安全診斷：失敗階段、原因、有觀察到的 HTTP
+狀態碼或逾時上限，以及是否嘗試請求。後續被封鎖的試跑會顯示
+`reason=extraction_blocked request_attempted=false blocked_by=...`。
+診斷也會存入 trials／run 紀錄；診斷欄位不包含原始例外、URL、headers 或回應內容。
+
+串流失敗會區分 `stream_read_failed`（讀取失敗）與 `utf8_decode_failed`（UTF-8
+解碼失敗）。`received_bytes` 是瀏覽器 reader 已收到的 HTTP 解壓後位元組數，
+包含無法解碼的資料；`elapsed_seconds` 從啟動 fetch 算到失敗，不含模型抽取時間。
 
 ## 輸出
 

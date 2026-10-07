@@ -20,6 +20,9 @@ _COLORS = {
     "WRITE": "\x1b[36m",
     "WARN": "\x1b[33m",
     "DONE": "\x1b[32m",
+    "QUESTION": "\x1b[36m",
+    "EXPECTED": "\x1b[32m",
+    "RESPONSE": "\x1b[35m",
 }
 _RESET = "\x1b[0m"
 
@@ -60,6 +63,21 @@ class ProgressReporter:
     def pair(self, completed: int, total: int, message: str) -> None:
         """Report legacy pair/runner progress."""
         self._progress("PAIR", completed, total, message)
+
+    def record(self, record: dict[str, Any], *, context: str) -> None:
+        """Flush readable QA details as soon as a record becomes available."""
+        self.emit("ITEM", context)
+        self.answer("QUESTION", record.get("question"))
+        self.answer("EXPECTED", record.get("expected_answer"))
+        self.answer("RESPONSE", record.get("actual_response"))
+
+    def answer(self, label: str, value: str | None) -> None:
+        if not self.enabled or value is None:
+            return
+        # Color both the label and all content, including multiline answers.
+        if self.use_color:
+            value = f"{_COLORS.get(label, '')}{value}{_RESET}"
+        self.emit(label, value)
 
     def session(self, completed: int, total: int, message: str) -> None:
         self._progress("SESSION", completed, total, message)

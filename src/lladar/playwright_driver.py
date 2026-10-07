@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import math
 import time
 from typing import Callable
 from urllib.parse import parse_qsl, urlsplit
@@ -11,6 +12,8 @@ from urllib.parse import parse_qsl, urlsplit
 from .browser_target import (
     CHROMIUM_SETUP_MESSAGE, BrowserAuthenticationRequired, BrowserResponseLimitExceeded,
     CapturedInteraction, RequestTemplate,
+    BrowserRequestFailure,
+    BrowserRequestTimeout,
 )
 from .answer_extraction import ExtractionError
 from .response_capture import ObservedResponse, ResponseObservationSource
@@ -151,9 +154,15 @@ _STREAM_CAPTURE_SCRIPT = r"""
     done: Boolean(record.done),
     timedOut: Boolean(record.timedOut),
     failed: Boolean(record.failed),
+    failureReason: record.failureReason || '',
+    receivedBytes: record.receivedBytes || 0,
+    elapsedMs: typeof record.startedAt === 'number'
+      ? Math.max(0, (record.finishedAt ?? performance.now()) - record.startedAt) : 0,
     overLimit: Boolean(record.overLimit),
   });
   const consume = async (response, record) => {
+    if (typeof record.startedAt !== 'number') record.startedAt = performance.now();
+    record.receivedBytes = 0;
     record.contentType = response.headers.get('content-type') || '';
     record.status = response.status;
     record.ok = response.ok;
@@ -164,26 +173,34 @@ _STREAM_CAPTURE_SCRIPT = r"""
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8', {fatal: true});
     record.reader = reader;
-    let receivedBytes = 0;
+    let failureReason = 'stream_read_failed';
     try {
       while (!record.stopped) {
+        failureReason = 'stream_read_failed';
         const part = await reader.read();
         if (record.stopped) return;
         if (part.done) break;
-        receivedBytes += part.value.byteLength;
-        if (receivedBytes > responseByteLimit) {
+        record.receivedBytes += part.value.byteLength;
+        if (record.receivedBytes > responseByteLimit) {
           record.overLimit = true;
           record.body = '';
           stop(record);
           return;
         }
+        failureReason = 'utf8_decode_failed';
         record.body += decoder.decode(part.value, {stream: true});
       }
       if (record.stopped) return;
+      failureReason = 'utf8_decode_failed';
       record.body += decoder.decode();
       record.done = true;
     } catch (error) {
-      if (!record.stopped && !record.timedOut) record.failed = true;
+      if (!record.stopped && !record.timedOut) {
+        record.failed = true;
+        record.failureReason = failureReason;
+      }
+    } finally {
+      record.finishedAt = performance.now();
     }
   };
   const stop = record => {
@@ -224,6 +241,8 @@ _STREAM_CAPTURE_SCRIPT = r"""
         done: false,
         timedOut: false,
         failed: false,
+        receivedBytes: 0,
+        startedAt: performance.now(),
         controller,
       };
       state.replays.set(key, record);
@@ -247,8 +266,10 @@ _STREAM_CAPTURE_SCRIPT = r"""
             if (!record.stopped) record.timedOut = true;
           } else {
             record.failed = true;
+            record.failureReason = 'transport_failed';
           }
         } finally {
+          if (typeof record.finishedAt !== 'number') record.finishedAt = performance.now();
           if (record.timer) clearTimeout(record.timer);
         }
       })();
@@ -302,6 +323,21 @@ _STREAM_CAPTURE_SCRIPT = r"""
   };
 })();
 """.replace("__LLADAR_RESPONSE_BYTE_LIMIT__", str(_RESPONSE_BYTE_LIMIT))
+
+
+def _snapshot_metrics(snapshot: dict) -> dict:
+    """Translate only numeric reader telemetry; never copy browser-supplied text."""
+    milliseconds = snapshot.get("elapsedMs")
+    seconds = (milliseconds / 1000 if type(milliseconds) in {int, float}
+               and math.isfinite(milliseconds) and milliseconds >= 0 else None)
+    return {"received_bytes": snapshot.get("receivedBytes"), "elapsed_seconds": seconds}
+
+
+def _stream_failure(snapshot: dict) -> BrowserRequestFailure:
+    reason = snapshot.get("failureReason")
+    if reason not in ("stream_read_failed", "utf8_decode_failed"):
+        reason = "transport_failed"
+    return BrowserRequestFailure(reason, http_status=snapshot.get("status"), **_snapshot_metrics(snapshot))
 
 
 class PlaywrightBrowserDriver:
@@ -444,11 +480,11 @@ class PlaywrightBrowserDriver:
                     capture_page, snapshot = captures[0]
                     last_snapshot = snapshot
                     if snapshot["status"] in {401, 403}:
-                        raise BrowserAuthenticationRequired("Manual calibration requires sign-in")
+                        raise BrowserAuthenticationRequired("Manual calibration requires sign-in", http_status=snapshot["status"])
                     if snapshot["failed"]:
-                        raise ExtractionError("completion_unconfirmed")
+                        raise _stream_failure(snapshot)
                     if snapshot["status"] and not snapshot["ok"]:
-                        raise RuntimeError("Calibration response failed; no partial response accepted")
+                        raise BrowserRequestFailure("http_error", http_status=snapshot["status"])
                     observation = capture.observe(
                         content_type=snapshot["contentType"],
                         body=snapshot["body"],
@@ -472,9 +508,9 @@ class PlaywrightBrowserDriver:
                     response = request.response()
                     if response is not None:
                         if response.status in {401, 403}:
-                            raise BrowserAuthenticationRequired("Manual calibration requires sign-in")
+                            raise BrowserAuthenticationRequired("Manual calibration requires sign-in", http_status=response.status)
                         if not response.ok:
-                            raise RuntimeError("Calibration response failed")
+                            raise BrowserRequestFailure("http_error", http_status=response.status)
                         response_budget.check(request)
                         try:
                             self.page = request.frame.page
@@ -556,6 +592,22 @@ class PlaywrightBrowserDriver:
         request_id: str,
         *, timeout_seconds: float | None = None,
     ) -> ObservedResponse:
+        from playwright.sync_api import Error, TimeoutError as PlaywrightTimeoutError
+
+        try:
+            return self._replay(template, question, request_id, timeout_seconds=timeout_seconds)
+        except PlaywrightTimeoutError:
+            raise TimeoutError("Browser operation timed out") from None
+        except Error:
+            raise BrowserRequestFailure("browser_context_failed") from None
+
+    def _replay(
+        self,
+        template: RequestTemplate,
+        question: str,
+        request_id: str,
+        *, timeout_seconds: float | None = None,
+    ) -> ObservedResponse:
         timeout_ms = self.timeout_ms if timeout_seconds is None else min(self.timeout_ms, max(1, int(timeout_seconds * 1000)))
         capture = self._observations.begin_request(request_id)
         self.page.evaluate(
@@ -570,6 +622,7 @@ class PlaywrightBrowserDriver:
             },
         )
         deadline = time.monotonic() + timeout_ms / 1000
+        result = None
         try:
             while time.monotonic() < deadline:
                 self.page.wait_for_timeout(min(25, self.timeout_ms))
@@ -582,17 +635,19 @@ class PlaywrightBrowserDriver:
                 if result["overLimit"]:
                     raise BrowserResponseLimitExceeded()
                 if result["timedOut"]:
-                    raise TimeoutError("Browser replay timed out")
+                    raise BrowserRequestTimeout(timeout_seconds=timeout_ms / 1000, http_status=result["status"],
+                                                **_snapshot_metrics(result))
                 if result["failed"]:
-                    raise RuntimeError("Browser replay failed before a response was available")
+                    raise _stream_failure(result)
                 if not result["status"]:
                     continue
                 if result["status"] in {401, 403}:
                     raise BrowserAuthenticationRequired(
-                        f"Browser replay returned HTTP {result['status']}; manual sign-in is required"
+                        f"Browser replay returned HTTP {result['status']}; manual sign-in is required",
+                        http_status=result["status"],
                     )
                 if not result["ok"]:
-                    raise RuntimeError(f"Browser replay returned HTTP {result['status']}")
+                    raise BrowserRequestFailure("http_error", http_status=result["status"], **_snapshot_metrics(result))
                 observation = capture.observe(
                     content_type=result["contentType"],
                     body=result["body"],
@@ -600,12 +655,21 @@ class PlaywrightBrowserDriver:
                 )
                 if result["done"]:
                     return observation
-            raise TimeoutError("Browser replay timed out")
+            raise BrowserRequestTimeout(timeout_seconds=timeout_ms / 1000,
+                                        http_status=result["status"] if result else None,
+                                        **_snapshot_metrics(result or {}))
         finally:
-            self.page.evaluate(
-                "key => globalThis.__lladarStreams.stopReplay(key)",
-                request_id,
-            )
+            # A closed page during cleanup must not replace the original HTTP/timeout failure.
+            import sys
+
+            pending_error = sys.exc_info()[0] is not None
+            try:
+                self.page.evaluate(
+                    "key => globalThis.__lladarStreams.stopReplay(key)", request_id,
+                )
+            except Exception:
+                if not pending_error:
+                    raise
 
     def show_for_manual_login(self) -> None:
         self.page.bring_to_front()

@@ -178,3 +178,42 @@ def test_multipart_calibration_is_blocked_instead_of_replayed_as_raw_text():
             ),
             marker,
         )
+
+
+def test_request_budget_failure_after_success_does_not_claim_another_request():
+    from types import SimpleNamespace
+    from lladar.answer_extraction import ExtractionError
+    from lladar.browser_target import BrowserTarget, browser_failure_diagnostic
+
+    calls = []
+    target = BrowserTarget.__new__(BrowserTarget)
+    target.evidence = {"status": "verified", "stage": "ready"}
+    target._template, target._remaining_requests = object(), 1
+    target._extractor = SimpleNamespace(check_budget=lambda: None, remaining_seconds=lambda: 60,
+                                        extract=lambda *args, **kwargs: "answer")
+    target.driver = SimpleNamespace(replay=lambda *args, **kwargs: calls.append(args))
+    assert target.answer("question", "first") == "answer"
+    with pytest.raises(ExtractionError) as caught:
+        target.answer("question", "second")
+    assert caught.value.reason == "extraction_budget_exhausted"
+    diagnostic = target.evidence["diagnostic"]
+    assert diagnostic["stage"] == "dataset_preflight"
+    assert diagnostic["request_attempted"] is False and len(calls) == 1
+    with pytest.raises(ExtractionError) as blocked:
+        target.answer("question", "third")
+    assert browser_failure_diagnostic(blocked.value, target.evidence)["blocked_by"] == "extraction_budget_exhausted"
+
+
+def test_diagnostics_reject_remote_strings_in_metadata():
+    from lladar.browser_target import BrowserRequestFailure, BrowserRequestTimeout, browser_failure_diagnostic
+
+    evidence = {"stage": "fixture-secret-url", "failure_reason": "fixture-secret-token"}
+    errors = [BrowserRequestFailure("fixture-secret-reason", http_status="fixture-secret-status",
+                                   received_bytes="fixture-secret-bytes", elapsed_seconds="fixture-secret-time"),
+              BrowserRequestTimeout(timeout_seconds=float("inf"), http_status=True,
+                                    received_bytes=True, elapsed_seconds=float("nan"))]
+    for error in errors:
+        diagnostic = browser_failure_diagnostic(error, evidence)
+        assert "http_status" not in diagnostic and "timeout_seconds" not in diagnostic
+        assert "received_bytes" not in diagnostic and "elapsed_seconds" not in diagnostic
+        assert "fixture-secret" not in str(diagnostic)

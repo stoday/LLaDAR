@@ -32,6 +32,19 @@
 
 ## Problem Statement
 
+2026-10-07 安全診斷補充：browser mode 的失敗須在 CLI verbose、`--log`、
+trials 與 run sidecar 提供相同的宿主固定分類及失敗階段。HTTP 失敗可記錄數字
+狀態碼；逾時與傳輸失敗須分開。工作階段封鎖後的試跑須標示未嘗試網站請求，
+並保留首次封鎖原因。不得輸出原始例外、traceback、完整 URL、headers、Cookie、
+請求／回應內容或登入狀態。此補充不新增重試、不改變三欄資料及評分契約。
+
+串流診斷須進一步區分 `stream_read_failed`（讀取回應串流失敗）與
+`utf8_decode_failed`（包含最後 flush 的 UTF-8 解碼失敗）。記錄
+`received_bytes`（瀏覽器 reader 已收到的解壓後位元組，包含無法解碼的資料）及
+`elapsed_seconds`（本次重播從啟動 fetch 至失敗的耗時，不含模型抽取）。
+只輸出固定分類與經檢查的數字，不輸出瀏覽器例外文字或部分回應；封鎖的後續試跑
+不得把首次請求的位元組數／耗時當成本次資料。
+
 使用者可能只知道一個能登入、提問並取得回答的網站，沒有可讀取的目標專案、OpenAPI
 或 Python 入口。要求他們從 DevTools 提供 method、Cookie、payload、JSON path 或
 SSE event 規則，會把整合工作轉嫁給使用者。
