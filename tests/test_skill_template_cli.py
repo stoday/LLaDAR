@@ -3,6 +3,8 @@
 from pathlib import Path
 import json
 import re
+import shlex
+from types import SimpleNamespace
 
 import pytest
 
@@ -129,12 +131,29 @@ def test_failed_write_does_not_leave_a_partial_skill(tmp_path, monkeypatch, caps
     assert "disk write failed" in capsys.readouterr().err
 
 
-def test_printed_use_command_quotes_a_skill_path_with_spaces(tmp_path, capsys):
-    skill = tmp_path / "folder with spaces" / "custom-eval"
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+@pytest.mark.parametrize("folder", ["folder with spaces", "folder's files"])
+def test_printed_use_command_quotes_a_skill_path_with_spaces(
+    tmp_path, capsys, monkeypatch, platform, folder,
+):
+    import lladar.cli as cli
+
+    # Select only the CLI's quoting branch; pathlib must retain the host OS.
+    monkeypatch.setattr(cli, "os", SimpleNamespace(name=platform))
+    skill = tmp_path / folder / "custom-eval"
 
     assert main(["create", "eval-skill", "--output", str(skill)]) == 0
 
-    assert f'--skill "{skill.resolve()}"' in capsys.readouterr().out
+    output = capsys.readouterr().out
+    use_command, = [line.removeprefix("Use: ") for line in output.splitlines()
+                   if line.startswith("Use: ")]
+    if platform == "nt":
+        assert f'--skill "{skill.resolve()}"' in use_command
+    else:
+        assert shlex.split(use_command) == [
+            "lladar", "eval", "RESPONSES", "--skill", str(skill.resolve()),
+            "--output", "evaluation.json",
+        ]
 
 
 def test_existing_skill_directory_keeps_user_edits(tmp_path, capsys):
