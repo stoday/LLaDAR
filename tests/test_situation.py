@@ -51,6 +51,68 @@ class Provider:
                 "reason": "The app requested the order number."}
 
 
+@pytest.mark.parametrize("model,expected_input,expected_output", [
+    ("gemini:gemini-3.7-flash", 1_048_576, 65_536),
+    ("other:model", 16_384, 8_192),
+])
+def test_situation_authoring_uses_lladar_model_budget(tmp_path, model, expected_input, expected_output):
+    received = {}
+
+    def factory(**options):
+        received.update(options)
+        return AuthoringAgent(**options)
+
+    destination = tmp_path / "situation.json"
+    create_situation(instructions="觀察回答是否出現指定詞彙", stop_criteria="出現指定詞彙",
+                     max_turns=1, knowledge=[], output=destination,
+                     model=model, skill_agent_factory=factory)
+
+    # Missing limits make Akasha default to 1,024 output tokens, which caused
+    # the live model to end with MALFORMED_FUNCTION_CALL without a proposal.
+    assert received.get("max_output_tokens") == expected_output
+    assert received.get("max_input_tokens") == expected_input
+    assert json.loads(destination.read_text(encoding="utf-8"))["stop"]["max_turns"] == 1
+
+
+@pytest.mark.parametrize("flags,expected_input,expected_output", [
+    (["--max-input-tokens", "16384", "--max-output-tokens", "8192"], 16384, 8192),
+    (["--max-input-tokens", "16384"], 16384, 65536),
+    (["--max-output-tokens", "8192"], 1048576, 8192),
+])
+def test_situation_cli_overrides_model_budget(tmp_path, flags, expected_input, expected_output):
+    received = {}
+
+    def factory(**options):
+        received.update(options)
+        return AuthoringAgent(**options)
+
+    destination = tmp_path / "situation.json"
+    assert main(["create", "situation", "--instructions", "觀察指定詞彙",
+                 "--stop-criteria", "出現指定詞彙", "--max-turns", "1",
+                 "--model", "gemini:gemini-3.7-flash", "--output", str(destination),
+                 *flags], skill_agent_factory=factory) == 0
+    assert received["max_input_tokens"] == expected_input
+    assert received["max_output_tokens"] == expected_output
+    saved = json.loads(destination.read_text(encoding="utf-8"))
+    assert saved["created_with"]["max_input_tokens"] == expected_input
+    assert saved["created_with"]["max_output_tokens"] == expected_output
+
+
+@pytest.mark.parametrize("flag", ["--max-input-tokens", "--max-output-tokens"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_situation_cli_rejects_nonpositive_budget_before_model_work(tmp_path, capsys, flag, value):
+    def forbidden_factory(**options):
+        pytest.fail("Invalid budget must be rejected before model work")
+
+    destination = tmp_path / "situation.json"
+    assert main(["create", "situation", "--instructions", "Observe terms",
+                 "--stop-criteria", "Term appears", "--max-turns", "1",
+                 "--output", str(destination), flag, value],
+                skill_agent_factory=forbidden_factory) == 2
+    assert "must be greater than 0" in capsys.readouterr().err
+    assert not destination.exists()
+
+
 def test_situation_end_to_end_with_three_target_turns(tmp_path):
     config = tmp_path / "situation.json"
     create_situation(observe="Asks for identifier", stop_criteria="After three turns",

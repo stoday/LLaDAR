@@ -224,6 +224,11 @@ An explicit criteria or Skill evaluates all completed responses using that metho
 Eval reads the trials sidecar when present; Python calculates aggregates and
 correctness stability only when the plan includes boolean `correct`.
 
+For situation creation, `--max-input-tokens N` and `--max-output-tokens N`
+independently override the authoring model's token budgets with positive integers.
+Omitted budgets use the selected model profile; the effective values are saved
+in `created_with`. These options apply to config creation only.
+
 `create situation --instructions TEXT` (or `--instructions-file PATH`) plans
 generation, execution, stopping and default evaluation in one config. To reevaluate
 saved dialogue,

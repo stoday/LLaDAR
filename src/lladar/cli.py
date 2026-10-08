@@ -197,6 +197,10 @@ def build_parser() -> argparse.ArgumentParser:
                            help=f"Model used to compile the situation (default: {DEFAULT_DATASET_MODEL}).")
     situation.add_argument("--env-file", default=".env", metavar="PATH",
                            help="Environment file for the model provider (default: .env).")
+    situation.add_argument("--max-input-tokens", type=int, metavar="N",
+                           help="Override the situation-authoring model input budget; must be positive (default: selected model profile).")
+    situation.add_argument("--max-output-tokens", type=int, metavar="N",
+                           help="Override the situation-authoring model output budget; must be positive (default: selected model profile).")
     situation.add_argument("--force", action="store_true",
                            help="Replace an existing situation JSON (default: off).")
 
@@ -446,6 +450,8 @@ def _execute(
                     instructions=instructions, stop_criteria=stop, max_turns=args.max_turns,
                     knowledge=args.knowledge, output=args.output, skill=args.skill,
                     model=args.model, env_file=args.env_file,
+                    max_input_tokens=args.max_input_tokens,
+                    max_output_tokens=args.max_output_tokens,
                     skill_agent_factory=skill_agent_factory, force=args.force,
                 )
                 print(f"Created situation configuration at {args.output}")

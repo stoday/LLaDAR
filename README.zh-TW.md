@@ -179,6 +179,10 @@ lladar eval responses.jsonl --output evaluation.json
 均依該方法評估。若存在 trials sidecar，eval 會讀取每次嘗試，Python 計算彙總；
 計畫包含 boolean `correct` 時才計算正確性穩定度。
 
+建立情境時可用 `--max-input-tokens N` 與 `--max-output-tokens N` 分別覆寫
+編製模型的 token 額度，兩者須為正整數；省略者使用所選模型的 profile 預設。
+設定檔的 `created_with` 保存實際額度。這兩個引數只作用於建立設定。
+
 `create situation --instructions TEXT`（或 `--instructions-file PATH`）一次規劃
 生成、執行、停止與預設評估，保存完整 config。同批情境對話可保留原始 config，
 再指定 criteria 或 Skill 重新評估：

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .exceptions import LladarError
+from .model_profiles import resolve_model_profile
 
 
 SkillAgentFactory = Callable[..., Any]
@@ -33,14 +34,19 @@ def invoke_skill(
     env_file: str | Path,
     system_prompt: str,
     agent_factory: SkillAgentFactory | None = None,
+    max_input_tokens: int | None = None,
+    max_output_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Run one native Akasha local skill and require its recorded evidence."""
     if agent_factory is None:
         from .skill_agent import AkashaSkillAgent
         agent_factory = AkashaSkillAgent
+    profile = resolve_model_profile(model, max_input_tokens=max_input_tokens,
+                                    max_output_tokens=max_output_tokens)
     agent = agent_factory(
         skills=[str(skill)], tools=tools, model=model, env_file=str(env_file),
-        system_prompt=system_prompt,
+        system_prompt=system_prompt, max_input_tokens=profile.max_input_tokens,
+        max_output_tokens=profile.max_output_tokens,
     )
     evidence = agent(request)
     if not isinstance(evidence, dict) or skill.name not in evidence.get("loaded_skills", []):
