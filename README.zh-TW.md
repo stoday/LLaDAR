@@ -72,7 +72,9 @@ Agent 依選定 skill 選擇直接問答，或使用圖譜產生概念映射及�
 lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 ```
 
-若要測試無知識文本的多輪情境，請參閱[可直接執行的情境範例](example_project/situation_demo/README.md)。正式測試前會先用同一個 session 進行兩輪校準，再開新 session 檢查隔離。
+若要測試無知識文本的情境，請參閱[可直接執行的情境範例](example_project/situation_demo/README.md)。兩種專案模式共用 coding Agent 的探索、工具與實跑修復；`max_turns=1` 校準只驗證單輪真實回答，多輪設定才額外驗證前文記憶與新 session 隔離。
+
+兩種專案模式都可加上 `--adapt PATH_TO_ADAPTER.py --project PATH` 重用既有 adapter。LLaDAR 跳過探索與生成，在專案副本中重新驗證所選協定；失敗就停止，不改寫指定的 adapter。仍需 `--project`，因為 adapter 依賴應用程式來源及執行環境。
 
 該選哪個目標參數？
 
@@ -172,6 +174,10 @@ run sidecar 只記錄安全狀態、模型與 prompt 版本、次數、時間及
 ```bash
 lladar eval responses.jsonl --output evaluation.json
 ```
+
+`eval` 預設顯示設定、逐題進度、模型等待提示與結果。用 `--no-verbose` 關閉進度，或 `--log eval.log` 保存。
+
+兩種評估模式都支援 `--max-input-tokens N` 與 `--max-output-tokens N`（正整數）。未指定時使用所選模型 profile，評估 JSON 保存實際上限。
 
 一般使用者用 `--criteria "描述要檢查什麼、什麼情況算符合"` 指定評估需求。
 進階使用者改用 `--skill ./skills/my-verdict` 提供完整方法；兩者互斥。

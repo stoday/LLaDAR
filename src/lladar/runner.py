@@ -129,6 +129,7 @@ def run_agent(
     interactive: bool | None = None,
     graphify: bool = True,
     graphify_python: str | Path | None = None,
+    adapt: str | Path | None = None,
     service_url: str | None = None,
     interface_selector: Callable[[dict], str] | None = None,
     strategy_agent_factory: SkillAgentFactory | None = None,
@@ -143,6 +144,8 @@ def run_agent(
     """Fill actual_response in a new JSONL file without evaluating it."""
     if sum(value is not None for value in (answer, project, page_url)) != 1:
         raise ValueError("provide exactly one of answer, project, or page_url")
+    if adapt is not None and project is None:
+        raise ValueError("--adapt requires --project")
     if page_url is not None and service_url is not None:
         raise ValueError("--service-url applies only to a project target")
     if project is None and interface_selector is not None:
@@ -241,13 +244,19 @@ def run_agent(
                     graphify_python=graphify_python,
                     service_url=service_url,
                 )
-                automatic.prepare(
-                    probes,
-                    interactive=interactive,
-                    interface_selector=interface_selector,
-                )
+                if adapt is not None:
+                    automatic.prepare_existing(adapt, probes)
+                else:
+                    automatic.prepare(
+                        probes,
+                        interactive=interactive,
+                        interface_selector=interface_selector,
+                    )
                 if automatic.source is not None:
                     adapter_sha256 = hashlib.sha256(automatic.source).hexdigest()
+                    target_evidence.update(adapter_sha256=adapter_sha256,
+                                           builder_evidence=str(automatic.evidence),
+                                           reused_adapter=automatic.report.get("reused_adapter"))
             elif page_url is not None and schedule:
                 from functools import partial
                 from .answer_extraction import ExtractionOptions

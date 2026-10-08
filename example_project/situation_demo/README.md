@@ -1,6 +1,6 @@
 # Multi-turn situation example
 
-This example tests a small stateful local application through LLaDAR's situation workflow. app.py is the application. lladar_session.py is a supplied session adapter: it calls the public OrderAssistant.chat method and keeps one instance for a whole trial. If a project has no session adapter, LLaDAR generates a candidate in a project copy, calibrates it, and uses it only when calibration passes.
+This example tests a small stateful local application through LLaDAR's situation workflow. app.py is the application. lladar_session.py is a supplied session adapter: it calls the public OrderAssistant.chat method and keeps one instance for a whole trial. If a project has no session adapter, LLaDAR uses the same coding-agent discovery, source/search/graph tools and repair flow as DATASET mode to generate a candidate in a project copy, calibrates it, and uses it only when calibration passes.
 
 Run from the LLaDAR repository root with Gemini credentials in .env:
 
@@ -14,7 +14,7 @@ Run from the LLaDAR repository root with Gemini credentials in .env:
 
 Add --knowledge PATH to create situation for a .md or .txt document. Omit it for this example. The configuration fixes the generation, conversation, and judging methods. To change any of them, create a new configuration; run-agent and eval do not accept --skill with --situation-config.
 
-Before generating scored scenarios, run-agent calibrates the adapter with two messages in one session and a third message in a fresh session. It checks turn correlation, memory of a random token, and absence of that token in the fresh session. A failed calibration stops the run. Inspect transcripts.jsonl.calibration.json for the result.
+For max_turns=1, calibration checks one real answer without requiring memory; persistent may be false. For multi-turn settings, before generating scored scenarios, run-agent calibrates the adapter with two messages in one session and a third message in a fresh session. It checks turn correlation, memory of a random token, and absence of that token in the fresh session. A failed calibration stops the run. Inspect transcripts.jsonl.calibration.json for the result.
 
 The adapter reads newline-delimited JSON from stdin and writes one JSON object per request to stdout. open receives trial_id and returns session_id, persistent: true, and isolated: true. send receives session_id, turn_id, and message, and returns the same session_id and turn_id plus a nonempty output. close ends the session. Each trial runs in its own project copy and process. Target logs belong on stderr.
 

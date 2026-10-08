@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from lladar.providers import AkashaProvider
 
@@ -121,3 +122,52 @@ def test_akasha_provider_forwards_verbose_to_the_agent():
     )
 
     assert captured["verbose"] is True
+
+
+def test_streamed_provider_collects_only_answer_and_routes_trace_to_stderr(capsys):
+    captured = {}
+
+    class Agent:
+        def __call__(self, prompt):
+            def events():
+                print("[agent.trace] start", flush=True)
+                yield {"type": "progress", "data": "not part of the answer"}
+                yield {"type": "thinking", "data": "not part of the answer"}
+                yield {"type": "tool", "data": {"output": "not part of the answer"}}
+                yield {"type": "answer", "data": '{"ok":'}
+                print("[agent.trace] finish", flush=True)
+                yield {"type": "answer", "data": 'true}'}
+            return events()
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return Agent()
+
+    provider = AkashaProvider(agent_factory=factory, verbose=True, stream=True)
+    assert provider.generate_structured("request", model="custom:model", temperature=0) == {"ok": True}
+    logs = capsys.readouterr()
+    assert logs.out == ""
+    assert "[agent.trace] start" in logs.err
+    assert "[agent.trace] finish" in logs.err
+    assert "not part of the answer" not in logs.err
+    assert captured["thinking"] is False
+    assert captured["stream"] is True
+    assert captured["verbose"] is True
+
+
+@pytest.mark.parametrize("event,message", [
+    ({"type": "error", "data": "private-provider-details"}, "generation stream failed"),
+    ({"type": "answer", "data": None}, "answer chunks must be text"),
+    ({"type": "progress", "data": "private-provider-details"}, "response was empty"),
+])
+def test_streamed_provider_rejects_failed_or_empty_answers(event, message):
+    from lladar.exceptions import ProviderError
+
+    class Agent:
+        def __call__(self, prompt):
+            return iter([event])
+
+    provider = AkashaProvider(agent_factory=lambda **_: Agent(), stream=True)
+    with pytest.raises(ProviderError, match=message) as failure:
+        provider.generate_text("request", model="custom:model", temperature=0)
+    assert "private-provider-details" not in str(failure.value)
