@@ -245,6 +245,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Question website opened in a visible browser for manual sign-in, calibration and replay (default: project mode; unavailable with --situation-config).",
     )
     runner.add_argument(
+        "--calibration-question", metavar="TEXT",
+        help="Use this exact question for both manual browser calibration and automatic verification; requires --page-url (default: separate random LLaDAR calibration/verification questions).",
+    )
+    runner.add_argument(
         "--output", default="responses.jsonl", metavar="PATH",
         help="Destination responses JSONL (default: responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
     )
@@ -495,6 +499,8 @@ def _execute(
             print(f"Generated {len(records)} record(s) at {output}{status}")
             return 0
         if args.command == "run-agent":
+            if args.calibration_question is not None and args.page_url is None:
+                parser.error("--calibration-question requires --page-url")
             if args.situation_config:
                 if args.dataset is not None or args.skill is not None:
                     parser.error("--situation-config cannot be combined with DATASET or --skill")
@@ -526,6 +532,7 @@ def _execute(
                 args.output,
                 project=project,
                 page_url=args.page_url,
+                calibration_question=args.calibration_question,
                 env_file=args.env_file,
                 force=args.force,
                 verbose=args.verbose,

@@ -19,6 +19,29 @@ from .terminal_review import TerminalReview
 from .progress import ProgressReporter
 
 
+def request_body_marker_count(body: str, media_type: str, marker: str) -> int:
+    """Count replaceable values after transport decoding, excluding JSON keys."""
+    if not marker:
+        return 0
+    if media_type == "application/x-www-form-urlencoded":
+        return sum(value.count(marker) for _name, value in parse_qsl(body, keep_blank_values=True))
+    if media_type == "application/json" or media_type.endswith("+json"):
+        def count(value: Any) -> int:
+            if isinstance(value, str):
+                return value.count(marker)
+            if isinstance(value, list):
+                return sum(count(item) for item in value)
+            if isinstance(value, dict):
+                return sum(count(item) for item in value.values())
+            return 0
+
+        try:
+            return count(json.loads(body))
+        except (ValueError, RecursionError):
+            return 0
+    return body.count(marker)
+
+
 _SAFE_PATH_WORDS = {"api", "ask", "chat", "graphql", "messages", "projects", "query", "responses"}
 CHROMIUM_SETUP_MESSAGE = "Playwright Chromium is unavailable; run: python -m playwright install chromium"
 _EXTRACTION_ERRORS = {
@@ -88,13 +111,7 @@ class RequestTemplate:
             value.count(marker)
             for _name, value in parse_qsl(urlsplit(interaction.url).query, keep_blank_values=True)
         )
-        if content_type == "application/x-www-form-urlencoded":
-            body_count = sum(value.count(marker) for _name, value in parse_qsl(
-                interaction.request_body,
-                keep_blank_values=True,
-            ))
-        else:
-            body_count = interaction.request_body.count(marker)
+        body_count = request_body_marker_count(interaction.request_body, content_type, marker)
         if query_count + body_count != 1:
             raise ValueError("Calibration request must contain the marker exactly once")
         return cls(
@@ -329,6 +346,7 @@ class BrowserTarget:
         timeout: float,
         runs_root: str | Path | None = None,
         verbose: bool = True,
+        calibration_question: str | None = None,
         driver: Any | None = None,
         driver_factory: Callable[..., Any] | None = None,
         input_fn: Callable[[str], str] = input,
@@ -339,6 +357,11 @@ class BrowserTarget:
         review_stream: TextIO | None = None,
     ) -> None:
         parsed = validate_browser_page_url(page_url)
+        if calibration_question is not None and (
+            not isinstance(calibration_question, str) or not calibration_question.strip()
+        ):
+            raise ValueError("--calibration-question must be a non-empty question")
+        self.calibration_question = calibration_question
         self.page_url = page_url
         self.timeout = timeout
         self.verbose = verbose
@@ -462,7 +485,7 @@ class BrowserTarget:
             interactive = sys.stdin.isatty()
         self._interactive = interactive
         self.evidence["stage"] = "calibration_capture"
-        marker = "LLaDAR calibration " + secrets.token_hex(12)
+        marker = self.calibration_question if self.calibration_question is not None else "LLaDAR calibration " + secrets.token_hex(12)
         try:
             with self._progress.waiting("Capturing calibration request and website response"):
                 interaction = self.driver.capture_calibration(marker, self._manual_calibration)
@@ -503,8 +526,10 @@ class BrowserTarget:
                 self._extractor.extract(interaction.response, request_id=receipt.request_id if receipt else "")
             self._extractor.check_budget()
             self.evidence["stage"] = "verification_request"
+            verification_question = (self.calibration_question if self.calibration_question is not None
+                                     else "LLaDAR verification " + secrets.token_hex(12))
             with self._progress.waiting("Waiting for verification website response"):
-                verification = self.driver.replay(template, "LLaDAR verification " + secrets.token_hex(12), "browser-verification",
+                verification = self.driver.replay(template, verification_question, "browser-verification",
                                                   timeout_seconds=self._extractor.remaining_seconds())
             self._response_progress(verification)
             self.evidence["stage"] = "verification_extraction"

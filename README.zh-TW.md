@@ -110,6 +110,10 @@ python -m playwright install chromium
 lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl
 ```
 
+可加上 `--calibration-question "你們的客服服務時間是什麼？"`，讓手動校準與自動驗證
+原樣使用同一句正常問句，不附加識別碼。未指定時保留原有隨機 `LLaDAR` 校準與驗證
+問句。此引數僅適用於 `--page-url`，不可為空或全空白。
+
 網站模式固定引導你完成登入、校正、授權與 `MATCH`，不必選擇互動模式。
 不要加 `--interactive` 或 `--no-interactive`：這兩個旗標僅供專案模式使用，
 與 `--page-url` 合用會被拒絕。請直接在 stdin、stderr 都連接終端的環境執行；

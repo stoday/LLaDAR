@@ -145,6 +145,11 @@ The browser-only default is `gemini:gemini-3.8-flash`; override it with
 
 LLaDAR opens its own visible Chromium profile. Sign in yourself, submit the exact
 calibration question, and wait until the answer is complete before pressing Enter.
+Optionally set `--calibration-question "What are your support hours?"` to use
+the same normal question for manual calibration and automatic verification,
+without appending an identifier. If omitted, the original random `LLaDAR`
+calibration and verification questions remain the default. This option requires
+`--page-url`; blank questions are rejected.
 Review the website requests, model destination and budgets together. One `YES`
 approves both one verification question plus the displayed dataset trials AND
 sending **real response content, including internal answers**, to

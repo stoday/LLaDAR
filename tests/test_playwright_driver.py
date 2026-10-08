@@ -34,6 +34,35 @@ from lladar.runner import run_agent
 pytestmark = pytest.mark.browser
 
 
+@pytest.mark.parametrize("duplicates", [False, True])
+def test_custom_calibration_question_capture_decodes_json_values(duplicates):
+    from lladar.playwright_driver import _STREAM_CAPTURE_SCRIPT
+
+    question = '客服 "週末"\n幾點開？'
+    payload = {"question": question}
+    if duplicates:
+        payload["history"] = [question]
+    with playwright_sync.sync_playwright() as engine:
+        browser = engine.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.evaluate("globalThis.fetch = async () => new Response('Calibration', {status: 200})")
+            page.evaluate(_STREAM_CAPTURE_SCRIPT)
+            page.evaluate("marker => globalThis.__lladarStreams.setMarker(marker)", question)
+            page.evaluate("""async body => {
+                const response = await fetch(new Request('https://fixture.test/ask', {
+                    method: 'POST', headers: {'content-type': 'application/json'}, body,
+                }));
+                await response.text();
+            }""", json.dumps(payload))
+            snapshots = page.evaluate("globalThis.__lladarStreams.captureSnapshots()")
+            assert len(snapshots) == (0 if duplicates else 1)
+            if snapshots:
+                assert snapshots[0]["marker"] == question
+        finally:
+            browser.close()
+
+
 @pytest.mark.parametrize("mode,reason,expected_bytes", [
     ("read_error", "stream_read_failed", 3),
     ("invalid_utf8", "utf8_decode_failed", 4),
