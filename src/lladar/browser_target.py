@@ -16,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .answer_extraction import ExtractionError, ExtractionOptions, ResponseExtractor, response_input
 from .response_capture import ObservedResponse
 from .terminal_review import TerminalReview
+from .progress import ProgressReporter
 
 
 _SAFE_PATH_WORDS = {"api", "ask", "chat", "graphql", "messages", "projects", "query", "responses"}
@@ -341,6 +342,7 @@ class BrowserTarget:
         self.page_url = page_url
         self.timeout = timeout
         self.verbose = verbose
+        self._progress = ProgressReporter(verbose)
         self.input_fn = input_fn
         self.output_fn = output_fn
         self.confirmed = confirmed
@@ -375,11 +377,12 @@ class BrowserTarget:
                 self.profile_mode = (
                     "reused" if profile_dir.is_dir() and any(profile_dir.iterdir()) else "new"
                 )
-            driver = driver_factory(
-                page_url=page_url,
-                profile_dir=profile_dir,
-                timeout=timeout,
-            )
+            with self._progress.waiting("Opening browser and loading page"):
+                driver = driver_factory(
+                    page_url=page_url,
+                    profile_dir=profile_dir,
+                    timeout=timeout,
+                )
         self.driver = driver
         self.evidence: dict[str, Any] = {
             "mode": "browser",
@@ -461,8 +464,11 @@ class BrowserTarget:
         self.evidence["stage"] = "calibration_capture"
         marker = "LLaDAR calibration " + secrets.token_hex(12)
         try:
-            interaction = self.driver.capture_calibration(marker, self._manual_calibration)
-            template = RequestTemplate.from_interaction(interaction, marker)
+            with self._progress.waiting("Capturing calibration request and website response"):
+                interaction = self.driver.capture_calibration(marker, self._manual_calibration)
+            self._response_progress(interaction.response)
+            with self._progress.waiting("Parsing captured request"):
+                template = RequestTemplate.from_interaction(interaction, marker)
         except BaseException as error:
             self._block(error)
             raise
@@ -493,13 +499,17 @@ class BrowserTarget:
             self.evidence["extraction"] = self._extractor.evidence
             receipt = interaction.response._receipt
             self.evidence["stage"] = "calibration_extraction"
-            self._extractor.extract(interaction.response, request_id=receipt.request_id if receipt else "")
+            with self._progress.waiting("Extracting calibration answer with model"):
+                self._extractor.extract(interaction.response, request_id=receipt.request_id if receipt else "")
             self._extractor.check_budget()
             self.evidence["stage"] = "verification_request"
-            verification = self.driver.replay(template, "LLaDAR verification " + secrets.token_hex(12), "browser-verification",
-                                              timeout_seconds=self._extractor.remaining_seconds())
+            with self._progress.waiting("Waiting for verification website response"):
+                verification = self.driver.replay(template, "LLaDAR verification " + secrets.token_hex(12), "browser-verification",
+                                                  timeout_seconds=self._extractor.remaining_seconds())
+            self._response_progress(verification)
             self.evidence["stage"] = "verification_extraction"
-            text = self._extractor.extract(verification, request_id="browser-verification")
+            with self._progress.waiting("Extracting verification answer with model"):
+                text = self._extractor.extract(verification, request_id="browser-verification")
             self.evidence["stage"] = "verification_review"
             reference = (options.reference_reader(verification, "browser-verification")
                          if options.reference_reader is not None else self._review.review(
@@ -513,6 +523,7 @@ class BrowserTarget:
             self.evidence["status"] = "verified"
             self.evidence["verification"] = "independent_local_reference"
             self.evidence["stage"] = "ready"
+            self._progress.emit("BROWSER", "Verification passed; ready for dataset requests")
         except BrowserConfirmationRequired:
             self.evidence["status"] = "confirmation_required"
             raise
@@ -538,13 +549,23 @@ class BrowserTarget:
                 raise ExtractionError("extraction_budget_exhausted")
             self._remaining_requests -= 1
             self.evidence["stage"] = "dataset_request"
-            observation = self.driver.replay(self._template, question, request_id,
-                                             timeout_seconds=self._extractor.remaining_seconds())
+            progress = getattr(self, "_progress", None) or ProgressReporter(getattr(self, "verbose", False))
+            with progress.waiting("Waiting for dataset website response"):
+                observation = self.driver.replay(self._template, question, request_id,
+                                                 timeout_seconds=self._extractor.remaining_seconds())
+            self._response_progress(observation)
             self.evidence["stage"] = "dataset_extraction"
-            return self._extractor.extract(observation, request_id=request_id)
+            with progress.waiting("Extracting dataset answer with model"):
+                return self._extractor.extract(observation, request_id=request_id)
         except BaseException as error:
             self._block(error)
             raise
+
+    def _response_progress(self, response: ObservedResponse) -> None:
+        progress = getattr(self, "_progress", None)
+        if progress is not None and isinstance(response, ObservedResponse):
+            body = response.body.encode("utf-8") if isinstance(response.body, str) else response.body
+            progress.emit("BROWSER", f"Website response received bytes={len(body)}")
 
     def close(self) -> None:
         try:

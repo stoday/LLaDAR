@@ -7,6 +7,7 @@ import pytest
 from lladar.browser_target import BrowserTarget, CapturedInteraction, RequestTemplate
 from lladar.response_capture import ObservedResponse, ResponseObservationSource
 from fixture_extraction import fixture_options, FixtureTerminal
+from lladar.command_log import command_log
 
 class FixtureBrowserDriver:
     def __init__(self):
@@ -20,6 +21,55 @@ class FixtureBrowserDriver:
         return self.source.begin_request(request_id).observe("application/json", '{"answer":"Verification"}')
     def close(self):
         pass
+
+
+@pytest.mark.parametrize("verbose", [True, False])
+def test_browser_stages_are_logged_before_blocking_work(tmp_path, verbose):
+    from fixture_extraction import FixtureProvider
+    from lladar.answer_extraction import ExtractionOptions
+
+    log = tmp_path / "progress.log"
+    calls = []
+
+    def expect(message):
+        assert (message in log.read_text(encoding="utf-8")) == verbose
+
+    class Driver(FixtureBrowserDriver):
+        def capture_calibration(self, marker, prompt):
+            expect("Capturing calibration request and website response started")
+            return super().capture_calibration(marker, prompt)
+
+        def replay(self, template, question, request_id, **kwargs):
+            stage = "verification" if request_id == "browser-verification" else "dataset"
+            expect(f"Waiting for {stage} website response started")
+            calls.append(request_id)
+            return super().replay(template, question, request_id, **kwargs)
+
+    class Provider(FixtureProvider):
+        def extract(self, request, **kwargs):
+            stage = ("calibration", "verification", "dataset")[len(self.calls)]
+            expect(f"Extracting {stage} answer with model started")
+            return super().extract(request, **kwargs)
+
+    with command_log(log):
+        target = BrowserTarget(
+            page_url="https://example.test/chat?token=private-path",
+            timeout=5, verbose=verbose, driver=Driver(), confirmed=True,
+            input_fn=lambda _prompt: "MATCH", output_fn=lambda _message: None,
+            review_stream=FixtureTerminal(),
+            extraction_options=ExtractionOptions(provider_factory=Provider, transfer_approved=True),
+        )
+        try:
+            target.prepare([], interactive=True, record_count=1, request_count=1)
+            assert target.answer("Question", "dataset-1") == "Verification"
+        finally:
+            target.close()
+    saved = log.read_text(encoding="utf-8")
+    assert ("Website response received bytes=" in saved) == verbose
+    assert ("Verification passed; ready for dataset requests" in saved) == verbose
+    assert calls == ["browser-verification", "dataset-1"]
+    assert "private-path" not in saved
+    assert '"answer"' not in saved
 
 def test_reusable_site_profile_is_reported_as_new_then_reused(tmp_path: Path):
     runs_root = tmp_path / ".lladar" / "runs"

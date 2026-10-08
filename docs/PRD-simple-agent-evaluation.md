@@ -64,6 +64,14 @@ optional log immediately so users can inspect direction and cancel with Ctrl+C.
 Non-TTY output and `NO_COLOR` remain plain text; log files never contain ANSI
 codes. `--no-verbose` suppresses these details in both destinations.
 
+Every LLaDAR progress event, including each effective configuration entry,
+includes local date/time to millisecond precision, the UTC offset, and cumulative
+elapsed seconds from that reporter's start (`[+12.345s]`). Elapsed time uses a
+monotonic clock so wall-clock adjustments cannot alter durations. Browser wait
+messages additionally name the current operation's duration as `stage_elapsed`.
+The same time markers are retained in `--log`; third-party traces and ordinary
+stdout retain their original formatting.
+
 ## Record contract
 
 Every JSONL line has exactly three fields:

@@ -214,6 +214,12 @@ log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控�
 `--no-verbose` 會同時減少終端和 log 的詳細訊息。自動建立上層目錄；既有 log
 會保留，每次執行請指定新檔名。
 
+`--page-url` 的 verbose 輸出會顯示瀏覽器載入、校準擷取、請求解析、等待網站回應與
+模型答案擷取。長時間等待每 5 秒顯示已等待時間，收到完整回應時顯示位元組數。
+這些進度也會寫入 `--log`；`--no-verbose` 會隱藏。
+每則 LLaDAR 進度附上含毫秒與 UTC 時差的本地日期時間，以及累計耗時（`[+12.345s]`）。
+瀏覽器等待訊息另以 `stage_elapsed` 顯示當前階段耗時；log 保留相同時間標示。
+
 瀏覽器失敗會在 verbose 與 log 顯示安全診斷：失敗階段、原因、有觀察到的 HTTP
 狀態碼或逾時上限，以及是否嘗試請求。後續被封鎖的試跑會顯示
 `reason=extraction_blocked request_attempted=false blocked_by=...`。

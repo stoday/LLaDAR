@@ -267,6 +267,14 @@ ANSI color codes. `--no-verbose` suppresses detailed output in both the terminal
 and the log. Parent directories are created automatically; use a new filename
 for each run because existing logs are preserved.
 
+With `--page-url`, verbose output shows browser loading, calibration capture,
+request parsing, website response waits, and model answer extraction. Long waits
+show elapsed time every five seconds; completed responses show their byte count.
+These progress messages also reach `--log`; `--no-verbose` hides them.
+Each LLaDAR progress message includes local time with milliseconds and a UTC
+offset, plus cumulative elapsed seconds (`[+12.345s]`). Browser waits also show
+the current stage's duration (`stage_elapsed`); the log retains the same markers.
+
 Browser failures include safe diagnostics in verbose output and the log: the
 failure stage, reason, observed HTTP status or timeout limit when available, and
 whether a request was attempted. Later blocked trials show
