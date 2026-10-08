@@ -14,6 +14,7 @@ from .browser_target import (
     CapturedInteraction, RequestTemplate,
     BrowserRequestFailure,
     BrowserRequestTimeout,
+    request_body_marker_count,
 )
 from .answer_extraction import ExtractionError
 from .response_capture import ObservedResponse, ResponseObservationSource
@@ -138,6 +139,16 @@ _STREAM_CAPTURE_SCRIPT = r"""
       let total = 0;
       for (const value of new URLSearchParams(body).values()) total += count(value, marker);
       return total;
+    }
+    if (mediaType === 'application/json' || mediaType.endsWith('+json')) {
+      const countValues = value => {
+        if (typeof value === 'string') return count(value, marker);
+        if (value && typeof value === 'object') {
+          return Object.values(value).reduce((total, item) => total + countValues(item), 0);
+        }
+        return 0;
+      };
+      try { return countValues(JSON.parse(body)); } catch (_) { return 0; }
     }
     return count(body, marker);
   };
@@ -398,11 +409,7 @@ class PlaywrightBrowserDriver:
     def _marker_count(request, marker: str) -> int:
         body = request.post_data or ""
         media_type = request.headers.get("content-type", "").partition(";")[0].strip().lower()
-        body_count = (
-            sum(value.count(marker) for _name, value in parse_qsl(body, keep_blank_values=True))
-            if media_type == "application/x-www-form-urlencoded"
-            else body.count(marker)
-        )
+        body_count = request_body_marker_count(body, media_type, marker)
         query_count = sum(
             value.count(marker)
             for _name, value in parse_qsl(urlsplit(request.url).query, keep_blank_values=True)

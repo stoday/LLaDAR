@@ -1,6 +1,7 @@
 """Request-template and local profile boundaries shared across extraction modes."""
 from pathlib import Path
 import json
+import re
 from urllib.parse import parse_qs, urlsplit
 import pytest
 
@@ -21,6 +22,66 @@ class FixtureBrowserDriver:
         return self.source.begin_request(request_id).observe("application/json", '{"answer":"Verification"}')
     def close(self):
         pass
+
+
+@pytest.mark.parametrize("question", [None, '  客服幾點開？\n包含 "週末" 嗎？  '])
+def test_custom_calibration_question_is_reused_with_new_verification_response(question):
+    captured, replayed = [], []
+
+    class Driver(FixtureBrowserDriver):
+        def capture_calibration(self, marker, prompt):
+            captured.append(marker)
+            return super().capture_calibration(marker, prompt)
+
+        def replay(self, template, text, request_id, **kwargs):
+            replayed.append((text, request_id))
+            assert json.loads(template.render_body(text))["question"] == text
+            return super().replay(template, text, request_id, **kwargs)
+
+    target = BrowserTarget(
+        page_url="https://example.test/chat", timeout=5, driver=Driver(), verbose=False,
+        calibration_question=question, confirmed=True, input_fn=lambda _prompt: "MATCH",
+        output_fn=lambda _message: None, review_stream=FixtureTerminal(),
+        extraction_options=fixture_options(),
+    )
+    try:
+        target.prepare([], interactive=True, record_count=1, request_count=1)
+        assert len(replayed) == 1 and replayed[0][1] == "browser-verification"
+        if question is None:
+            assert re.fullmatch(r"LLaDAR calibration [0-9a-f]{24}", captured[0])
+            assert re.fullmatch(r"LLaDAR verification [0-9a-f]{24}", replayed[0][0])
+        else:
+            assert captured == [question] and replayed[0][0] == question
+        assert target.answer("Dataset question", "dataset-1") == "Verification"
+        assert replayed[1] == ("Dataset question", "dataset-1")
+        assert target._extractor.evidence["calls"] == 3
+        assert target.evidence["verification"] == "independent_local_reference"
+    finally:
+        target.close()
+
+
+@pytest.mark.parametrize("question", ["", " \t\n", 123])
+def test_invalid_calibration_question_is_rejected_before_browser_opens(question):
+    def forbidden_driver(**kwargs):
+        pytest.fail("Invalid question must not open a browser")
+
+    with pytest.raises(ValueError, match="non-empty question"):
+        BrowserTarget(page_url="https://example.test/chat", timeout=5,
+                      calibration_question=question, driver_factory=forbidden_driver)
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"input": {"question": '客服 "週末"\n幾點開？'}}, 1),
+    ({"history": ['客服 "週末"\n幾點開？'], "question": '客服 "週末"\n幾點開？'}, 2),
+    ({'客服 "週末"\n幾點開？': "value"}, 0),
+])
+def test_encoded_calibration_question_counts_only_replaceable_json_values(payload, expected):
+    from types import SimpleNamespace
+    from lladar.playwright_driver import PlaywrightBrowserDriver
+
+    request = SimpleNamespace(url="https://example.test/ask", post_data=json.dumps(payload),
+                              headers={"content-type": "application/json"})
+    assert PlaywrightBrowserDriver._marker_count(request, '客服 "週末"\n幾點開？') == expected
 
 
 @pytest.mark.parametrize("verbose", [True, False])

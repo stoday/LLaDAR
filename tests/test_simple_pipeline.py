@@ -566,10 +566,15 @@ def test_safe_browser_cli_errors_keep_actionable_instructions(tmp_path: Path, ca
 
 
 @pytest.mark.parametrize("save_log", [False, True])
-def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log):
+@pytest.mark.parametrize("calibration_question", [None, "客服幾點開？"])
+def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, calibration_question):
     source, output = tmp_path / "dataset.jsonl", tmp_path / "responses.jsonl"
     log = tmp_path / "runner.log"
     make_dataset(source, count=1)
+
+    def target_factory(**options):
+        assert options["calibration_question"] == calibration_question
+        return BrowserFixtureTarget()
 
     with browser_cli_terminal():
         exit_code = main(
@@ -577,15 +582,30 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log):
                 "run-agent", str(source), "--page-url", "https://example.test/chat",
                 "--output", str(output), "--no-verbose",
                 *(["--log", str(log)] if save_log else []),
+                *(["--calibration-question", calibration_question] if calibration_question is not None else []),
             ],
             skill_agent_factory=StrategySkillAgent,
-            browser_target_factory=lambda **_options: BrowserFixtureTarget(),
+            browser_target_factory=target_factory,
         )
 
     assert exit_code == 0 and read_records(output)[0]["actual_response"] == "browser:question-1"
     assert log.exists() is save_log
     if save_log:
         assert "Answered 1 record(s)" in log.read_text(encoding="utf-8")
+
+
+def test_calibration_question_requires_browser_target_before_execution(tmp_path):
+    with pytest.raises(ValueError, match="requires --page-url"):
+        run_agent(tmp_path / "missing.jsonl", tmp_path / "responses.jsonl",
+                  answer=lambda _question: "unused", calibration_question="客服幾點開？")
+    assert not (tmp_path / "responses.jsonl").exists()
+
+
+@pytest.mark.parametrize("question", ["", " \t\n"])
+def test_blank_calibration_question_is_rejected_before_dataset_read(tmp_path, question):
+    with pytest.raises(ValueError, match="non-empty question"):
+        run_agent(tmp_path / "missing.jsonl", tmp_path / "responses.jsonl",
+                  page_url="https://example.test/chat", calibration_question=question)
 
 
 def test_browser_preparation_blocker_writes_safe_run_evidence_without_response_files(tmp_path: Path):

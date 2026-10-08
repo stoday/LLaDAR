@@ -133,6 +133,7 @@ def run_agent(
     interface_selector: Callable[[dict], str] | None = None,
     strategy_agent_factory: SkillAgentFactory | None = None,
     page_url: str | None = None,
+    calibration_question: str | None = None,
     browser_target_factory: Callable[..., Any] | None = None,
     confirm_browser_run: bool = False,
     fresh_browser_profile: bool = False,
@@ -150,6 +151,11 @@ def run_agent(
         raise ValueError("--confirm-browser-run requires --page-url")
     if page_url is None and fresh_browser_profile:
         raise ValueError("--fresh-browser-profile requires --page-url")
+    if calibration_question is not None:
+        if page_url is None:
+            raise ValueError("--calibration-question requires --page-url")
+        if not isinstance(calibration_question, str) or not calibration_question.strip():
+            raise ValueError("--calibration-question must be a non-empty question")
     if page_url is None and (extraction_provider_factory is not None or allow_response_model_transfer):
         raise ValueError("response extraction options require --page-url")
     from .answer_extraction import DEFAULT_EXTRACTION_MODEL
@@ -263,6 +269,7 @@ def run_agent(
                     verbose=verbose,
                     confirmed=confirm_browser_run,
                     fresh_profile=fresh_browser_profile,
+                    calibration_question=calibration_question,
                     extraction_options=extraction_options,
                 )
                 try:

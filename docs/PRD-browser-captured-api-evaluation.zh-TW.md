@@ -333,6 +333,16 @@ Browser 測試在明確配置 Chromium 的專用 CI job 執行；非 browser 測
 
 ## Further Notes
 
+### 自訂校準問句
+
+`run-agent --page-url` 可選用 `--calibration-question TEXT`。指定時，手動校準及
+自動驗證均原樣使用同一問句，不附加隨機識別碼；未指定時保留原有
+`LLaDAR calibration <random>` 與 `LLaDAR verification <random>` 問句。
+自訂問句不可為空或全空白，且此引數僅適用於 `--page-url`。
+兩步仍各自取得新請求與回應，維持唯一問句位置檢查、請求身分與完成檢查，
+以及既有 YES 授權與 MATCH 核對。兩次網站答案不需相同；MATCH 核對第二次
+實際網站回應與其抽取結果。不得重用第一次回應或增加驗證呼叫數。
+
 ### 等待中的即時進度
 
 `--verbose` 在瀏覽器啟動／載入、校準擷取、請求解析、網站回應等待與模型答案擷取
