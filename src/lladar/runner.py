@@ -162,7 +162,7 @@ def run_agent(
     ) if project is not None else None
     page_origin = None
     if page_url is not None:
-        from .browser_target import validate_browser_page_url
+        from .browser_target import browser_failure_diagnostic, validate_browser_page_url
 
         browser_page = validate_browser_page_url(page_url)
         page_origin = f"{browser_page.scheme}://{browser_page.netloc}"
@@ -273,6 +273,11 @@ def run_agent(
                         request_count=sum(item.repeats for item in schedule),
                     )
                 except (Exception, KeyboardInterrupt) as error:
+                    diagnostic = browser_failure_diagnostic(error, browser_target.evidence)
+                    reporter.emit("WARN", "phase=browser_prepare " + " ".join(
+                        f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+                        for key, value in diagnostic.items()
+                    ))
                     target_evidence = dict(browser_target.evidence)
                     blocked_run = {
                         "run_id": datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f"),
@@ -286,7 +291,8 @@ def run_agent(
                         "errors": [],
                         "blocker": {
                             "stage": "browser_prepare",
-                            "error_type": type(error).__name__,
+                            "error_type": diagnostic["error_type"],
+                            "diagnostic": diagnostic,
                         },
                         "target": target_evidence,
                         "skill": strategy.evidence,
@@ -314,6 +320,7 @@ def run_agent(
                         "adapter_sha256": adapter_sha256,
                     }
                     started = time.perf_counter()
+                    reporter.record(record, context=f"line={item.case.record_index} trial={trial}")
                     try:
                         if browser_cancelled:
                             raise RuntimeError("Browser run cancelled")
@@ -331,6 +338,7 @@ def run_agent(
                             raise RuntimeError("target adapter was not prepared")
                         response_text = response if isinstance(response, str) else str(response)
                         trial_result.update(status="ok", actual_response=response_text)
+                        reporter.answer("RESPONSE", response_text)
                         if result["actual_response"] is None:
                             result["actual_response"] = response_text
                     except (Exception, KeyboardInterrupt) as error:
@@ -344,9 +352,23 @@ def run_agent(
                             else f"{type(error).__name__}: {error}"
                         )
                         trial_result.update(error=message)
-                        errors.append({"line": item.case.record_index, "trial": trial, "error": message})
+                        error_record = {"line": item.case.record_index, "trial": trial, "error": message}
+                        detail = f"line={item.case.record_index} trial={trial} error_type={type(error).__name__}"
+                        if browser_target is not None:
+                            diagnostic = browser_failure_diagnostic(error, browser_target.evidence)
+                            message = (f"{diagnostic['error_type']}: browser request failed "
+                                       f"({diagnostic['reason']}); private diagnostics withheld")
+                            trial_result["error"] = message
+                            error_record["error"] = message
+                            trial_result["diagnostic"] = diagnostic
+                            error_record["diagnostic"] = diagnostic
+                            detail = f"line={item.case.record_index} trial={trial} " + " ".join(
+                                f"{key}={str(value).lower() if isinstance(value, bool) else value}"
+                                for key, value in diagnostic.items()
+                            )
+                        errors.append(error_record)
                         reporter.emit(
-                            "WARN", f"line={item.case.record_index} trial={trial} error_type={type(error).__name__}"
+                            "WARN", detail
                         )
                     trial_result["duration_seconds"] = time.perf_counter() - started
                     trials.append(trial_result)

@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime
+from threading import Event, Thread
 from typing import Any, TextIO
 
 
@@ -20,6 +22,10 @@ _COLORS = {
     "WRITE": "\x1b[36m",
     "WARN": "\x1b[33m",
     "DONE": "\x1b[32m",
+    "QUESTION": "\x1b[36m",
+    "EXPECTED": "\x1b[32m",
+    "RESPONSE": "\x1b[35m",
+    "BROWSER": "\x1b[36m",
 }
 _RESET = "\x1b[0m"
 
@@ -42,24 +48,64 @@ class ProgressReporter:
             return
         self.emit("CONFIG", "effective settings")
         for key, value in values.items():
-            print(
-                f"  {key:<20} {_display(value)}",
-                file=self.stream,
-                flush=True,
-            )
+            self.emit("CONFIG", f"{key:<20} {_display(value)}")
 
     def emit(self, label: str, message: str) -> None:
         if not self.enabled:
             return
-        timestamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now().astimezone()
+        timestamp = f"{now:%Y-%m-%d %H:%M:%S}.{now.microsecond // 1000:03d} {now:%z}"
+        elapsed = max(0.0, time.perf_counter() - self.started_at)
         marker = f"[{label}]"
         if self.use_color:
             marker = f"{_COLORS.get(label, '')}{marker}{_RESET}"
-        print(f"{timestamp} {marker} {message}", file=self.stream, flush=True)
+        print(f"{timestamp} [+{elapsed:.3f}s] {marker} {message}", file=self.stream, flush=True)
 
     def pair(self, completed: int, total: int, message: str) -> None:
         """Report legacy pair/runner progress."""
         self._progress("PAIR", completed, total, message)
+
+    def record(self, record: dict[str, Any], *, context: str) -> None:
+        """Flush readable QA details as soon as a record becomes available."""
+        self.emit("ITEM", context)
+        self.answer("QUESTION", record.get("question"))
+        self.answer("EXPECTED", record.get("expected_answer"))
+        self.answer("RESPONSE", record.get("actual_response"))
+
+    def answer(self, label: str, value: str | None) -> None:
+        if not self.enabled or value is None:
+            return
+        # Color both the label and all content, including multiline answers.
+        if self.use_color:
+            value = f"{_COLORS.get(label, '')}{value}{_RESET}"
+        self.emit(label, value)
+
+    @contextmanager
+    def waiting(self, message: str, *, interval: float = 5.0):
+        """Report synchronous work without moving browser operations off-thread."""
+        if not self.enabled:
+            yield
+            return
+        stopped = Event()
+        started = time.perf_counter()
+        self.emit("BROWSER", f"{message} started")
+
+        def heartbeat() -> None:
+            while not stopped.wait(interval):
+                self.emit("BROWSER", f"{message} still working stage_elapsed={_duration(time.perf_counter() - started)}")
+
+        thread = Thread(target=heartbeat, name="lladar-progress", daemon=True)
+        thread.start()
+        status = "finished"
+        try:
+            yield
+        except BaseException:
+            status = "interrupted"
+            raise
+        finally:
+            stopped.set()
+            thread.join()
+            self.emit("BROWSER", f"{message} {status} stage_elapsed={_duration(time.perf_counter() - started)}")
 
     def session(self, completed: int, total: int, message: str) -> None:
         self._progress("SESSION", completed, total, message)

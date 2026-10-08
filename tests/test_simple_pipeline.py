@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,91 @@ from lladar.records import read_records
 from lladar.reporting import create_report
 from lladar.runner import run_agent
 from fixture_extraction import browser_cli_terminal
+
+
+@pytest.mark.parametrize("failure,reason,http_status", [
+    ("http", "http_error", 503),
+    ("timeout", "timeout", None),
+    ("unknown", "browser_request_failed", None),
+    ("extraction", "provider_rate_limited", None),
+    ("stream", "stream_read_failed", 200),
+    ("decode", "utf8_decode_failed", 200),
+])
+@pytest.mark.parametrize("verbose", [True, False])
+def test_browser_failure_diagnostics_reach_verbose_log_and_sidecars(
+    tmp_path, capsys, failure, reason, http_status, verbose,
+):
+    from lladar.browser_target import BrowserTarget, BrowserRequestFailure
+
+    source, output, log = (tmp_path / name for name in ("dataset.jsonl", "responses.jsonl", "run.log"))
+    make_dataset(source, count=2)
+    calls = []
+
+    def replay(*args, **kwargs):
+        calls.append(args)
+        if failure == "http":
+            raise BrowserRequestFailure("http_error", http_status=503)
+        if failure == "timeout":
+            raise TimeoutError("https://secret.test/token?key=fixture-secret Cookie=fixture-secret")
+        if failure == "extraction":
+            return object()
+        if failure in {"stream", "decode"}:
+            raise BrowserRequestFailure(reason, http_status=200, received_bytes=12345, elapsed_seconds=90.253)
+        raise RuntimeError("https://secret.test/token?key=fixture-secret Cookie=fixture-secret")
+
+    def extract(*args, **kwargs):
+        raise ExtractionError("provider_rate_limited")
+
+    class Target(BrowserTarget):
+        def __init__(self, **kwargs):
+            self.evidence = {"mode": "browser", "status": "verified", "stage": "ready"}
+            self._template = object()
+            self._extractor = SimpleNamespace(check_budget=lambda: None, remaining_seconds=lambda: 60, extract=extract)
+            self._remaining_requests = 6
+            self.driver = SimpleNamespace(replay=replay)
+
+        def prepare(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    with browser_cli_terminal():
+        main(["run-agent", str(source), "--page-url", "https://example.test/chat",
+              "--output", str(output), "--log", str(log),
+              *([] if verbose else ["--no-verbose"])],
+             skill_agent_factory=StrategySkillAgent, browser_target_factory=Target)
+    terminal = capsys.readouterr()
+    logged = log.read_text(encoding="utf-8")
+    trials = [json.loads(line) for line in Path(str(output) + ".trials.jsonl").read_text().splitlines()]
+    run = json.loads(Path(str(output) + ".run.json").read_text())
+    assert len(calls) == 1
+    first = trials[0]["diagnostic"]
+    stage = "dataset_extraction" if failure == "extraction" else "dataset_request"
+    assert first["stage"] == stage and first["reason"] == reason
+    assert first["request_attempted"] is True
+    assert first.get("http_status") == http_status
+    if failure in {"stream", "decode"}:
+        assert first["received_bytes"] == 12345 and first["elapsed_seconds"] == 90.253
+    assert run["target"]["diagnostic"] == first
+    for trial in trials[1:]:
+        assert trial["diagnostic"]["reason"] == "extraction_blocked"
+        assert trial["diagnostic"]["blocked_by"] == reason
+        assert trial["diagnostic"]["request_attempted"] is False
+        assert "received_bytes" not in trial["diagnostic"] and "elapsed_seconds" not in trial["diagnostic"]
+    for text in (terminal.err, logged):
+        if not verbose:
+            assert "request_attempted=" not in text
+            continue
+        assert "stage=" + stage in text
+        assert "reason=" + reason in text
+        assert "request_attempted=false" in text and "blocked_by=" + reason in text
+        if http_status:
+            assert f"http_status={http_status}" in text
+        if failure in {"stream", "decode"}:
+            assert "received_bytes=12345" in text and "elapsed_seconds=90.253" in text
+    for text in (terminal.out + terminal.err, logged, json.dumps(trials), json.dumps(run)):
+        assert "fixture-secret" not in text and "secret.test" not in text
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -119,6 +205,28 @@ def make_dataset(path: Path, count: int = 2) -> None:
         {"question": f"question-{index}", "expected_answer": f"answer-{index}", "actual_response": None}
         for index in range(1, count + 1)
     ])
+
+
+@pytest.mark.parametrize("verbose", [True, False])
+def test_trial_details_show_before_answer_and_response_before_next_trial(tmp_path, capsys, verbose):
+    source = tmp_path / "dataset.jsonl"
+    make_dataset(source, count=1)
+    calls = []
+
+    def answer(question):
+        output = capsys.readouterr().err
+        assert ("[QUESTION] question-1" in output) == verbose
+        assert ("[EXPECTED] answer-1" in output) == verbose
+        if calls:
+            assert ("[RESPONSE] response-1" in output) == verbose
+        else:
+            assert "[RESPONSE]" not in output
+        calls.append(question)
+        return "response-1"
+
+    run_agent(source, tmp_path / "responses.jsonl", answer=answer, verbose=verbose)
+    assert len(calls) == 3
+    assert ("[RESPONSE] response-1" in capsys.readouterr().err) == verbose
 
 
 def test_cli_exposes_local_skills_and_rejects_removed_prompt_options():
@@ -502,6 +610,10 @@ def test_browser_preparation_blocker_writes_safe_run_evidence_without_response_f
     assert run["blocker"] == {
         "stage": "browser_prepare",
         "error_type": "BrowserConfirmationRequired",
+        "diagnostic": {
+            "stage": "unknown", "error_type": "BrowserConfirmationRequired",
+            "reason": "confirmation_required", "request_attempted": False, "requests_stopped": True,
+        },
     }
     assert run["target"]["status"] == "confirmation_required"
     assert "fixture decline" not in json.dumps(run)

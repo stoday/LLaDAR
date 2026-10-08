@@ -16,9 +16,11 @@ import playwright.sync_api as playwright_sync
 
 from lladar.browser_target import (
     BrowserAuthenticationRequired,
+    BrowserRequestFailure,
     BrowserTarget,
     CapturedInteraction,
     RequestTemplate,
+    browser_failure_diagnostic,
 )
 from lladar.playwright_driver import PlaywrightBrowserDriver
 from lladar.evaluation import evaluate
@@ -30,6 +32,123 @@ from lladar.runner import run_agent
 
 
 pytestmark = pytest.mark.browser
+
+
+@pytest.mark.parametrize("mode,reason,expected_bytes", [
+    ("read_error", "stream_read_failed", 3),
+    ("invalid_utf8", "utf8_decode_failed", 4),
+    ("truncated_utf8", "utf8_decode_failed", 5),
+    ("valid_split_utf8", None, 6),
+])
+def test_browser_stream_failure_phase_byte_count_and_elapsed_time(mode, reason, expected_bytes):
+    from lladar.playwright_driver import _STREAM_CAPTURE_SCRIPT
+    from lladar.response_capture import ResponseObservationSource
+
+    with playwright_sync.sync_playwright() as engine:
+        browser = engine.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.evaluate("""mode => {
+                globalThis.fetch = async () => {
+                    let index = 0;
+                    const stream = new ReadableStream({async pull(controller) {
+                        if (index++ === 0) {
+                            controller.enqueue(new Uint8Array([97, 98, 99]));
+                        } else if (index === 2) {
+                            await new Promise(resolve => setTimeout(resolve, 30));
+                            if (mode === 'read_error') {
+                                controller.error(new Error('fixture-private-error-token'));
+                            } else if (mode === 'invalid_utf8') {
+                                controller.enqueue(new Uint8Array([255])); controller.close();
+                            } else if (mode === 'truncated_utf8') {
+                                controller.enqueue(new Uint8Array([228, 184])); controller.close();
+                            } else {
+                                controller.enqueue(new Uint8Array([228, 184]));
+                            }
+                        } else {
+                            controller.enqueue(new Uint8Array([173])); controller.close();
+                        }
+                    }});
+                    return new Response(stream, {status: 200, headers: {'Content-Type': 'text/event-stream'}});
+                };
+            }""", mode)
+            page.evaluate(_STREAM_CAPTURE_SCRIPT)
+            driver = PlaywrightBrowserDriver.__new__(PlaywrightBrowserDriver)
+            driver.page, driver.timeout_ms = page, 3000
+            driver._observations = ResponseObservationSource()
+            template = RequestTemplate("POST", "https://fixture.test/ask", {}, "marker", "marker", "body")
+            if reason is None:
+                assert driver.replay(template, "question", "r").body == "abc\u4e2d"
+            else:
+                with pytest.raises(Exception) as caught:
+                    driver.replay(template, "question", "r")
+                diagnostic = browser_failure_diagnostic(caught.value, {"stage": "dataset_request"})
+                assert diagnostic["reason"] == reason
+                assert diagnostic["http_status"] == 200
+                assert diagnostic["received_bytes"] == expected_bytes
+                assert 0.02 <= diagnostic["elapsed_seconds"] < 3
+                assert "fixture-private-error-token" not in json.dumps(diagnostic)
+                assert "abc" not in json.dumps(diagnostic)
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("snapshot,expected,cleanup_fails", [
+    ({"status": 503, "ok": False}, "http_error", False),
+    ({"status": 429, "ok": False}, "http_error", True),
+    ({"status": 401, "ok": False}, "authentication_required", False),
+    ({"status": 200, "failed": True}, "transport_failed", False),
+    ({"timedOut": True}, "timeout", True),
+])
+def test_replay_reports_safe_transport_diagnostics(snapshot, expected, cleanup_fails):
+    from lladar.response_capture import ResponseObservationSource
+
+    result = {"overLimit": False, "timedOut": False, "failed": False, "status": 0,
+              "ok": True, "contentType": "text/plain", "body": "fixture-private-body",
+              "done": False, **snapshot}
+
+    class Page:
+        def evaluate(self, script, value):
+            if "replaySnapshot" in script:
+                return result
+            if "stopReplay" in script and cleanup_fails:
+                raise playwright_sync.Error("https://secret.test/?key=fixture-secret")
+
+        def wait_for_timeout(self, _):
+            pass
+
+    driver = PlaywrightBrowserDriver.__new__(PlaywrightBrowserDriver)
+    driver.page, driver.timeout_ms = Page(), 120000
+    driver._observations = ResponseObservationSource()
+    template = RequestTemplate("POST", "https://secret.test/ask", {}, "marker", "marker", "body")
+    with pytest.raises(Exception) as caught:
+        driver.replay(template, "fixture-private-question", "r", timeout_seconds=60)
+    diagnostic = browser_failure_diagnostic(caught.value, {"stage": "dataset_request"})
+    assert diagnostic["reason"] == expected
+    if result["status"]:
+        assert diagnostic["http_status"] == result["status"]
+    if expected == "timeout":
+        assert diagnostic["timeout_seconds"] == 60
+    assert "secret" not in json.dumps(diagnostic)
+    assert "private" not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize("error,reason", [
+    (playwright_sync.Error("https://secret.test/?token=fixture-secret"), "browser_context_failed"),
+    (playwright_sync.TimeoutError("Cookie=fixture-secret"), "timeout"),
+])
+def test_native_replay_errors_are_classified_without_messages(error, reason):
+    driver = PlaywrightBrowserDriver.__new__(PlaywrightBrowserDriver)
+
+    def fail(*args, **kwargs):
+        raise error
+
+    driver._replay = fail
+    with pytest.raises(Exception) as caught:
+        driver.replay(None, "question", "r")
+    diagnostic = browser_failure_diagnostic(caught.value, {"stage": "dataset_request"})
+    assert diagnostic["reason"] == reason
+    assert "fixture-secret" not in str(caught.value)
 
 
 def test_browser_startup_navigation_and_request_have_separate_deadlines(tmp_path, monkeypatch):
@@ -961,7 +1080,13 @@ def test_browser_transport_corpus_blocks_unsupported_opaque_responses(
     with question_site() as base_url:
         target = _automated_browser_target(base_url, page_path, tmp_path / "profile")
         try:
-            with pytest.raises(ExtractionError, match="completion_unconfirmed" if page_path=="/chat-binary" else "unsupported_response_protocol"):
+            expected_error = BrowserRequestFailure if page_path == "/chat-binary" else ExtractionError
+            expected_reason = "utf8_decode_failed" if page_path == "/chat-binary" else "unsupported_response_protocol"
+            with pytest.raises(expected_error, match=expected_reason):
                 target.prepare(["Dataset question"], interactive=True, request_count=1)
+            if page_path == "/chat-binary":
+                diagnostic = target.evidence["diagnostic"]
+                assert diagnostic["stage"] == "calibration_capture"
+                assert diagnostic["received_bytes"] == 3 and diagnostic["elapsed_seconds"] >= 0
         finally:
             target.close()

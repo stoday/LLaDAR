@@ -248,6 +248,13 @@ those saved facts and includes a record-level appendix.
 
 ## Operation logs
 
+Verbose generation shows candidate previews as they are submitted and each final
+question with its expected answer. Batch-file results appear when the Agent
+delivers them. `run-agent` shows both before each trial and the actual response
+as soon as it arrives; missing responses are omitted. Questions are cyan,
+expected answers green, and actual responses magenta in color terminals.
+These details are flushed immediately so you can inspect them and press Ctrl+C.
+
 Add `--log PATH` to any workflow command to save its terminal output to a new
 UTF-8 file while continuing to display it:
 
@@ -259,6 +266,26 @@ The file includes emitted progress, Agent traces, summaries, and errors without
 ANSI color codes. `--no-verbose` suppresses detailed output in both the terminal
 and the log. Parent directories are created automatically; use a new filename
 for each run because existing logs are preserved.
+
+With `--page-url`, verbose output shows browser loading, calibration capture,
+request parsing, website response waits, and model answer extraction. Long waits
+show elapsed time every five seconds; completed responses show their byte count.
+These progress messages also reach `--log`; `--no-verbose` hides them.
+Each LLaDAR progress message includes local time with milliseconds and a UTC
+offset, plus cumulative elapsed seconds (`[+12.345s]`). Browser waits also show
+the current stage's duration (`stage_elapsed`); the log retains the same markers.
+
+Browser failures include safe diagnostics in verbose output and the log: the
+failure stage, reason, observed HTTP status or timeout limit when available, and
+whether a request was attempted. Later blocked trials show
+`reason=extraction_blocked request_attempted=false blocked_by=...`. Diagnostics
+are also saved in the trials/run sidecars; raw exceptions, URLs, headers and
+response bodies are excluded from these diagnostic fields.
+
+Stream failures distinguish `stream_read_failed` from `utf8_decode_failed`.
+`received_bytes` counts bytes delivered by the browser reader after HTTP
+decompression, including bytes that could not be decoded. `elapsed_seconds`
+measures replay time from starting fetch to failure, excluding model extraction.
 
 ## Copy-and-run walkthrough
 

@@ -164,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--force", action="store_true",
                          help="Replace existing output files (default: off; existing files cause an error).")
     dataset.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True,
-                         help="Show LLaDAR progress and the dataset-generation Akasha trace; --no-verbose hides them (default: on).")
+                         help="Show LLaDAR progress, colored questions/expected answers and the dataset-generation Akasha trace; --no-verbose hides them (default: on).")
 
     situation = create_commands.add_parser(
         "situation", help=workflow_commands["situation"],
@@ -318,7 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument(
         "--verbose", action=argparse.BooleanOptionalAction, default=True,
-        help="Show single-question LLaDAR progress and coding-agent traces; use --no-verbose to hide them (default: enabled).",
+        help="Show single-question LLaDAR progress, colored questions/expected answers/available responses, safe browser diagnostics and coding-agent traces; use --no-verbose to hide them (default: enabled).",
     )
 
     evaluation = commands.add_parser(

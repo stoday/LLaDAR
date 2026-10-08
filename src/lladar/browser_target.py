@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import secrets
@@ -15,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from .answer_extraction import ExtractionError, ExtractionOptions, ResponseExtractor, response_input
 from .response_capture import ObservedResponse
 from .terminal_review import TerminalReview
+from .progress import ProgressReporter
 
 
 _SAFE_PATH_WORDS = {"api", "ask", "chat", "graphql", "messages", "projects", "query", "responses"}
@@ -180,6 +182,109 @@ class BrowserConfirmationRequired(RuntimeError):
 class BrowserAuthenticationRequired(RuntimeError):
     """The controlled browser session must be restored manually."""
 
+    def __init__(self, message: str = "Manual sign-in is required", *, http_status: int | None = None):
+        self.http_status = _safe_http_status(http_status)
+        super().__init__(message)
+
+
+def _safe_http_status(value: Any) -> int | None:
+    return value if type(value) is int and 100 <= value <= 599 else None
+
+
+def _safe_transport_metrics(received_bytes: Any, elapsed_seconds: Any) -> dict:
+    metrics = {}
+    if type(received_bytes) is int and 0 <= received_bytes <= 2**53 - 1:
+        metrics["received_bytes"] = received_bytes
+    if type(elapsed_seconds) in {int, float} and math.isfinite(elapsed_seconds) and elapsed_seconds >= 0:
+        metrics["elapsed_seconds"] = round(elapsed_seconds, 3)
+    return metrics
+
+
+class BrowserRequestFailure(RuntimeError):
+    """Transport classification authored by the host, never remote error text."""
+
+    def __init__(self, reason: str, *, http_status: int | None = None,
+                 received_bytes: int | None = None, elapsed_seconds: float | None = None):
+        self.reason = reason if reason in {
+            "http_error", "transport_failed", "stream_read_failed", "utf8_decode_failed", "browser_context_failed",
+        } else "browser_request_failed"
+        self.http_status = _safe_http_status(http_status)
+        self.received_bytes, self.elapsed_seconds = received_bytes, elapsed_seconds
+        super().__init__("Browser request failed: " + self.reason)
+
+
+class BrowserRequestTimeout(TimeoutError):
+    """A bounded website wait expired; only numeric transport metadata is retained."""
+
+    def __init__(self, *, timeout_seconds: float, http_status: int | None = None,
+                 received_bytes: int | None = None, elapsed_seconds: float | None = None):
+        self.timeout_seconds = timeout_seconds
+        self.http_status = _safe_http_status(http_status)
+        self.received_bytes, self.elapsed_seconds = received_bytes, elapsed_seconds
+        super().__init__("Browser replay timed out")
+
+
+_DIAGNOSTIC_STAGES = frozenset({
+    "calibration_capture", "run_consent", "calibration_extraction", "verification_request",
+    "verification_extraction", "verification_review", "ready", "dataset_preflight", "dataset_request", "dataset_extraction",
+})
+
+
+def browser_failure_diagnostic(error: BaseException, evidence: dict) -> dict:
+    """Whitelist values at the output boundary; never inspect exception messages."""
+    stage = evidence.get("stage")
+    stage = stage if type(stage) is str and stage in _DIAGNOSTIC_STAGES else "unknown"
+    if isinstance(error, ExtractionError):
+        reason, error_type = ExtractionError(error.reason).reason, "ExtractionError"
+    elif isinstance(error, BrowserRequestFailure):
+        reason, error_type = BrowserRequestFailure(error.reason).reason, "BrowserRequestFailure"
+    elif isinstance(error, BrowserAuthenticationRequired):
+        reason, error_type = "authentication_required", "BrowserAuthenticationRequired"
+    elif isinstance(error, BrowserResponseLimitExceeded):
+        reason, error_type = "response_size_limit", "BrowserResponseLimitExceeded"
+    elif isinstance(error, BrowserConfirmationRequired):
+        reason, error_type = "confirmation_required", "BrowserConfirmationRequired"
+    elif isinstance(error, TimeoutError):
+        reason, error_type = "timeout", "TimeoutError"
+    elif isinstance(error, ConnectionError):
+        reason, error_type = "transport_failed", "ConnectionError"
+    elif isinstance(error, KeyboardInterrupt):
+        reason, error_type = "cancelled", "KeyboardInterrupt"
+    elif isinstance(error, RuntimeError):
+        reason, error_type = "browser_request_failed", "RuntimeError"
+    else:
+        reason, error_type = "browser_request_failed", "Exception"
+    blocked = reason == "extraction_blocked"
+    diagnostic = {
+        "stage": stage, "reason": reason, "error_type": error_type,
+        "request_attempted": not blocked and stage in {
+            "calibration_capture", "calibration_extraction", "verification_request",
+            "verification_extraction", "verification_review", "dataset_request", "dataset_extraction",
+        },
+        "requests_stopped": True,
+    }
+    if isinstance(error, (BrowserRequestFailure, BrowserAuthenticationRequired, BrowserRequestTimeout)):
+        status = _safe_http_status(error.http_status)
+        if status is not None:
+            diagnostic["http_status"] = status
+    if isinstance(error, BrowserRequestTimeout):
+        seconds = error.timeout_seconds
+        if type(seconds) in {int, float} and math.isfinite(seconds) and 0 < seconds <= 86400:
+            diagnostic["timeout_seconds"] = seconds
+    if isinstance(error, (BrowserRequestFailure, BrowserRequestTimeout)):
+        diagnostic.update(_safe_transport_metrics(error.received_bytes, error.elapsed_seconds))
+    if blocked:
+        # Reclassify the saved cause through the same whitelist, rather than logging evidence verbatim.
+        cause = evidence.get("failure_reason")
+        if type(cause) is str:
+            safe_reason = BrowserRequestFailure(cause).reason
+            if cause in {"timeout", "authentication_required", "response_size_limit", "cancelled", "confirmation_required"}:
+                safe_reason = cause
+            elif safe_reason == "browser_request_failed" and ExtractionError(cause).reason == cause:
+                safe_reason = cause
+            diagnostic["blocked_by"] = safe_reason
+    return diagnostic
+
 
 class BrowserResponseLimitExceeded(RuntimeError):
     """A response cannot be retained within the fixed capture byte budget."""
@@ -202,7 +307,7 @@ def browser_error_message(error: Exception) -> str:
         return "Browser response exceeded the 1 MiB capture limit. No partial answer was accepted; later requests were stopped."
     if isinstance(error, ExtractionError):
         return _EXTRACTION_ERRORS.get(error.reason, "Response extraction blocked (" + error.reason + "); private diagnostics withheld; later requests were stopped.")
-    if type(error).__name__ == "TimeoutError":
+    if isinstance(error, TimeoutError) or type(error).__name__ == "TimeoutError":
         return (
             "Browser operation timed out. Startup and page navigation allow 5 minutes. "
             "Check the page and sign-in, submit the exact calibration question, "
@@ -237,6 +342,7 @@ class BrowserTarget:
         self.page_url = page_url
         self.timeout = timeout
         self.verbose = verbose
+        self._progress = ProgressReporter(verbose)
         self.input_fn = input_fn
         self.output_fn = output_fn
         self.confirmed = confirmed
@@ -271,11 +377,12 @@ class BrowserTarget:
                 self.profile_mode = (
                     "reused" if profile_dir.is_dir() and any(profile_dir.iterdir()) else "new"
                 )
-            driver = driver_factory(
-                page_url=page_url,
-                profile_dir=profile_dir,
-                timeout=timeout,
-            )
+            with self._progress.waiting("Opening browser and loading page"):
+                driver = driver_factory(
+                    page_url=page_url,
+                    profile_dir=profile_dir,
+                    timeout=timeout,
+                )
         self.driver = driver
         self.evidence: dict[str, Any] = {
             "mode": "browser",
@@ -357,8 +464,11 @@ class BrowserTarget:
         self.evidence["stage"] = "calibration_capture"
         marker = "LLaDAR calibration " + secrets.token_hex(12)
         try:
-            interaction = self.driver.capture_calibration(marker, self._manual_calibration)
-            template = RequestTemplate.from_interaction(interaction, marker)
+            with self._progress.waiting("Capturing calibration request and website response"):
+                interaction = self.driver.capture_calibration(marker, self._manual_calibration)
+            self._response_progress(interaction.response)
+            with self._progress.waiting("Parsing captured request"):
+                template = RequestTemplate.from_interaction(interaction, marker)
         except BaseException as error:
             self._block(error)
             raise
@@ -389,13 +499,17 @@ class BrowserTarget:
             self.evidence["extraction"] = self._extractor.evidence
             receipt = interaction.response._receipt
             self.evidence["stage"] = "calibration_extraction"
-            self._extractor.extract(interaction.response, request_id=receipt.request_id if receipt else "")
+            with self._progress.waiting("Extracting calibration answer with model"):
+                self._extractor.extract(interaction.response, request_id=receipt.request_id if receipt else "")
             self._extractor.check_budget()
             self.evidence["stage"] = "verification_request"
-            verification = self.driver.replay(template, "LLaDAR verification " + secrets.token_hex(12), "browser-verification",
-                                              timeout_seconds=self._extractor.remaining_seconds())
+            with self._progress.waiting("Waiting for verification website response"):
+                verification = self.driver.replay(template, "LLaDAR verification " + secrets.token_hex(12), "browser-verification",
+                                                  timeout_seconds=self._extractor.remaining_seconds())
+            self._response_progress(verification)
             self.evidence["stage"] = "verification_extraction"
-            text = self._extractor.extract(verification, request_id="browser-verification")
+            with self._progress.waiting("Extracting verification answer with model"):
+                text = self._extractor.extract(verification, request_id="browser-verification")
             self.evidence["stage"] = "verification_review"
             reference = (options.reference_reader(verification, "browser-verification")
                          if options.reference_reader is not None else self._review.review(
@@ -409,6 +523,7 @@ class BrowserTarget:
             self.evidence["status"] = "verified"
             self.evidence["verification"] = "independent_local_reference"
             self.evidence["stage"] = "ready"
+            self._progress.emit("BROWSER", "Verification passed; ready for dataset requests")
         except BrowserConfirmationRequired:
             self.evidence["status"] = "confirmation_required"
             raise
@@ -417,13 +532,10 @@ class BrowserTarget:
             raise
 
     def _block(self, error: BaseException) -> None:
+        diagnostic = browser_failure_diagnostic(error, self.evidence)
         self.evidence["status"] = "blocked"
-        self.evidence["failure_reason"] = (
-            error.reason if isinstance(error, ExtractionError) else
-            "response_size_limit" if isinstance(error, BrowserResponseLimitExceeded) else
-            "authentication_required" if isinstance(error, BrowserAuthenticationRequired) else
-            "cancelled" if isinstance(error, KeyboardInterrupt) else "browser_request_failed"
-        )
+        self.evidence["failure_reason"] = diagnostic["reason"]
+        self.evidence["diagnostic"] = diagnostic
 
     def answer(self, question: str, request_id: str) -> str:
         if self.evidence["status"] == "blocked":
@@ -431,18 +543,29 @@ class BrowserTarget:
         if self._template is None or self._extractor is None:
             raise RuntimeError("Browser target is not prepared")
         try:
+            self.evidence["stage"] = "dataset_preflight"
             self._extractor.check_budget()
             if self._remaining_requests <= 0:
                 raise ExtractionError("extraction_budget_exhausted")
             self._remaining_requests -= 1
             self.evidence["stage"] = "dataset_request"
-            observation = self.driver.replay(self._template, question, request_id,
-                                             timeout_seconds=self._extractor.remaining_seconds())
+            progress = getattr(self, "_progress", None) or ProgressReporter(getattr(self, "verbose", False))
+            with progress.waiting("Waiting for dataset website response"):
+                observation = self.driver.replay(self._template, question, request_id,
+                                                 timeout_seconds=self._extractor.remaining_seconds())
+            self._response_progress(observation)
             self.evidence["stage"] = "dataset_extraction"
-            return self._extractor.extract(observation, request_id=request_id)
+            with progress.waiting("Extracting dataset answer with model"):
+                return self._extractor.extract(observation, request_id=request_id)
         except BaseException as error:
             self._block(error)
             raise
+
+    def _response_progress(self, response: ObservedResponse) -> None:
+        progress = getattr(self, "_progress", None)
+        if progress is not None and isinstance(response, ObservedResponse):
+            body = response.body.encode("utf-8") if isinstance(response.body, str) else response.body
+            progress.emit("BROWSER", f"Website response received bytes={len(body)}")
 
     def close(self) -> None:
         try:

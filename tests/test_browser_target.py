@@ -7,6 +7,7 @@ import pytest
 from lladar.browser_target import BrowserTarget, CapturedInteraction, RequestTemplate
 from lladar.response_capture import ObservedResponse, ResponseObservationSource
 from fixture_extraction import fixture_options, FixtureTerminal
+from lladar.command_log import command_log
 
 class FixtureBrowserDriver:
     def __init__(self):
@@ -20,6 +21,55 @@ class FixtureBrowserDriver:
         return self.source.begin_request(request_id).observe("application/json", '{"answer":"Verification"}')
     def close(self):
         pass
+
+
+@pytest.mark.parametrize("verbose", [True, False])
+def test_browser_stages_are_logged_before_blocking_work(tmp_path, verbose):
+    from fixture_extraction import FixtureProvider
+    from lladar.answer_extraction import ExtractionOptions
+
+    log = tmp_path / "progress.log"
+    calls = []
+
+    def expect(message):
+        assert (message in log.read_text(encoding="utf-8")) == verbose
+
+    class Driver(FixtureBrowserDriver):
+        def capture_calibration(self, marker, prompt):
+            expect("Capturing calibration request and website response started")
+            return super().capture_calibration(marker, prompt)
+
+        def replay(self, template, question, request_id, **kwargs):
+            stage = "verification" if request_id == "browser-verification" else "dataset"
+            expect(f"Waiting for {stage} website response started")
+            calls.append(request_id)
+            return super().replay(template, question, request_id, **kwargs)
+
+    class Provider(FixtureProvider):
+        def extract(self, request, **kwargs):
+            stage = ("calibration", "verification", "dataset")[len(self.calls)]
+            expect(f"Extracting {stage} answer with model started")
+            return super().extract(request, **kwargs)
+
+    with command_log(log):
+        target = BrowserTarget(
+            page_url="https://example.test/chat?token=private-path",
+            timeout=5, verbose=verbose, driver=Driver(), confirmed=True,
+            input_fn=lambda _prompt: "MATCH", output_fn=lambda _message: None,
+            review_stream=FixtureTerminal(),
+            extraction_options=ExtractionOptions(provider_factory=Provider, transfer_approved=True),
+        )
+        try:
+            target.prepare([], interactive=True, record_count=1, request_count=1)
+            assert target.answer("Question", "dataset-1") == "Verification"
+        finally:
+            target.close()
+    saved = log.read_text(encoding="utf-8")
+    assert ("Website response received bytes=" in saved) == verbose
+    assert ("Verification passed; ready for dataset requests" in saved) == verbose
+    assert calls == ["browser-verification", "dataset-1"]
+    assert "private-path" not in saved
+    assert '"answer"' not in saved
 
 def test_reusable_site_profile_is_reported_as_new_then_reused(tmp_path: Path):
     runs_root = tmp_path / ".lladar" / "runs"
@@ -178,3 +228,42 @@ def test_multipart_calibration_is_blocked_instead_of_replayed_as_raw_text():
             ),
             marker,
         )
+
+
+def test_request_budget_failure_after_success_does_not_claim_another_request():
+    from types import SimpleNamespace
+    from lladar.answer_extraction import ExtractionError
+    from lladar.browser_target import BrowserTarget, browser_failure_diagnostic
+
+    calls = []
+    target = BrowserTarget.__new__(BrowserTarget)
+    target.evidence = {"status": "verified", "stage": "ready"}
+    target._template, target._remaining_requests = object(), 1
+    target._extractor = SimpleNamespace(check_budget=lambda: None, remaining_seconds=lambda: 60,
+                                        extract=lambda *args, **kwargs: "answer")
+    target.driver = SimpleNamespace(replay=lambda *args, **kwargs: calls.append(args))
+    assert target.answer("question", "first") == "answer"
+    with pytest.raises(ExtractionError) as caught:
+        target.answer("question", "second")
+    assert caught.value.reason == "extraction_budget_exhausted"
+    diagnostic = target.evidence["diagnostic"]
+    assert diagnostic["stage"] == "dataset_preflight"
+    assert diagnostic["request_attempted"] is False and len(calls) == 1
+    with pytest.raises(ExtractionError) as blocked:
+        target.answer("question", "third")
+    assert browser_failure_diagnostic(blocked.value, target.evidence)["blocked_by"] == "extraction_budget_exhausted"
+
+
+def test_diagnostics_reject_remote_strings_in_metadata():
+    from lladar.browser_target import BrowserRequestFailure, BrowserRequestTimeout, browser_failure_diagnostic
+
+    evidence = {"stage": "fixture-secret-url", "failure_reason": "fixture-secret-token"}
+    errors = [BrowserRequestFailure("fixture-secret-reason", http_status="fixture-secret-status",
+                                   received_bytes="fixture-secret-bytes", elapsed_seconds="fixture-secret-time"),
+              BrowserRequestTimeout(timeout_seconds=float("inf"), http_status=True,
+                                    received_bytes=True, elapsed_seconds=float("nan"))]
+    for error in errors:
+        diagnostic = browser_failure_diagnostic(error, evidence)
+        assert "http_status" not in diagnostic and "timeout_seconds" not in diagnostic
+        assert "received_bytes" not in diagnostic and "elapsed_seconds" not in diagnostic
+        assert "fixture-secret" not in str(diagnostic)

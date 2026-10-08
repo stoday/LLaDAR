@@ -140,7 +140,8 @@ class GenerationWorkspace:
     """Own source positions and candidates for tool or Python delivery."""
 
     def __init__(self, sources: list[tuple[Path, str]], page_chars: int = 12000,
-                 question_type: str = "free"):
+                 question_type: str = "free", reporter: ProgressReporter | None = None):
+        self.reporter = reporter
         self.sources = {
             f"source_{index:03d}": {"path": str(path.resolve()), "text": text}
             for index, (path, text) in enumerate(sources, 1)
@@ -504,6 +505,9 @@ class GenerationWorkspace:
             if len(set(skeletons)) != 1:
                 raise ValueError("controlled-invariance pair must change only its control value")
         self.test_plans = normalized
+        if self.reporter is not None:
+            for plan in normalized:
+                self.reporter.record(plan, context=f"candidate plan={plan['plan_id']}")
         return {"accepted": len(normalized), "pairs": len(pair_groups)}
 
     def submit_qa(self, record: dict) -> dict:
@@ -516,6 +520,8 @@ class GenerationWorkspace:
                     return {"accepted": True, "duplicate": True}
             qa_id = f"qa_{len(self.qa) + 1:06d}"
             self.qa[qa_id], self.qa_contracts[qa_id], self.qa_points[qa_id] = row, contract, point_id
+            if self.reporter is not None:
+                self.reporter.record(row, context=f"candidate qa={qa_id}")
             return {"accepted": True}
         if point_id in self.qa:
             if self.qa[point_id] == row and self.qa_contracts[point_id] == contract:
@@ -524,6 +530,8 @@ class GenerationWorkspace:
             raise ValueError("this knowledge point already has an accepted QA")
         self.qa[point_id] = row
         self.qa_contracts[point_id] = contract
+        if self.reporter is not None:
+            self.reporter.record(row, context=f"candidate point={point_id}")
         return {"accepted": True}
 
     def validate_qa(self, record: Any) -> tuple[dict[str, Any], dict[str, Any], str]:
@@ -775,12 +783,13 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     sources = load_knowledge(knowledge)
     if not sources:
         raise KnowledgeLoadError("no supported knowledge files were found")
+    reporter = ProgressReporter(verbose)
     workspace = GenerationWorkspace(
         sources,
         page_chars=min(12000, max(1, profile.max_input_tokens // 4)),
         question_type=question_type,
+        reporter=reporter,
     )
-    reporter = ProgressReporter(verbose)
     reporter.configuration({"skill": skill, "model": model, "sources": len(sources), "count": count,
                             "question_type": question_type, "seed": seed})
     skill_files = {"SKILL.md": hashlib.sha256((skill / "SKILL.md").read_bytes()).hexdigest()}
@@ -902,6 +911,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             continue
         seen_qa[identity] = len(records)
         records.append(row)
+        reporter.record(row, context=f"generated record={len(records)}")
         contract = workspace.qa_contracts[qa_id]
         lines.append({"line": len(records), "qa_id": qa_id,
                       "knowledge_point_ids": contract.get("knowledge_point_ids", [point_id]),
@@ -933,6 +943,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 continue
             seen_qa[identity] = len(records)
             records.append(row)
+            reporter.record(row, context=f"generated record={len(records)}")
             lines.append({"line": len(records), "qa_id": selected["plan_id"], "qa_ids": [selected["plan_id"]],
                           "knowledge_point_ids": [item["evidence_ref"] for item in selected.get("candidates", [])]
                           or list(selected["evidence_refs"]),

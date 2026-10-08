@@ -53,6 +53,25 @@ existing log files are rejected before workflow execution, including with
 cancellation. This is a CLI output record, not Akasha structured `keep_logs` or
 a capture of child-process output that bypasses Python stdout/stderr.
 
+Verbose dataset generation displays accepted tool submissions immediately as
+candidate previews, and each selected final record before publishing. Batch-file
+generation can display results only after the Agent delivers its candidate file.
+Target execution displays each question and expected answer before each trial,
+then the actual response immediately when available. Missing responses are omitted.
+Question, expected answer, and actual response use cyan, green, and magenta
+respectively, including multiline content. Details are flushed to stderr and the
+optional log immediately so users can inspect direction and cancel with Ctrl+C.
+Non-TTY output and `NO_COLOR` remain plain text; log files never contain ANSI
+codes. `--no-verbose` suppresses these details in both destinations.
+
+Every LLaDAR progress event, including each effective configuration entry,
+includes local date/time to millisecond precision, the UTC offset, and cumulative
+elapsed seconds from that reporter's start (`[+12.345s]`). Elapsed time uses a
+monotonic clock so wall-clock adjustments cannot alter durations. Browser wait
+messages additionally name the current operation's duration as `stage_elapsed`.
+The same time markers are retained in `--log`; third-party traces and ordinary
+stdout retain their original formatting.
+
 ## Record contract
 
 Every JSONL line has exactly three fields:

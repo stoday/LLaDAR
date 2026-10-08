@@ -51,6 +51,27 @@ class DirectAgent:
         return self.evidence()
 
 
+@pytest.mark.parametrize("verbose", [True, False])
+def test_generation_previews_are_available_before_agent_returns(inputs, tmp_path, capsys, verbose):
+    source, skill = inputs
+
+    class ObservedAgent(DirectAgent):
+        def __call__(self, request):
+            result = super().__call__(request)
+            preview = capsys.readouterr().err
+            assert ("candidate qa=" in preview) == verbose
+            assert ("How long does Service A keep data?" in preview) == verbose
+            assert ("30 days" in preview) == verbose
+            assert "[RESPONSE]" not in preview
+            return result
+
+    create_test_dataset(source, output=tmp_path / "preview.jsonl", skill=skill,
+                        skill_agent_factory=ObservedAgent, verbose=verbose)
+    final = capsys.readouterr().err
+    assert ("generated record=1" in final) == verbose
+    assert "[RESPONSE]" not in final
+
+
 def test_direct_skill_can_publish_without_a_graph(inputs, tmp_path):
     source, skill = inputs
     output = tmp_path / "dataset.jsonl"
