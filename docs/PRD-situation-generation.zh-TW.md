@@ -10,6 +10,16 @@
 另行評估原始對話，無須修改原始 config；下文原先禁止 eval Skill
 及要求重評改 config 的條文由該修訂取代。run-agent 的限制維持。
 
+2026-10-08 修訂：`--instructions` 接受文字字串，未指定 `--skill` 時
+使用隨套件提供的情境生成 Skill，使用者不必自行建立 `SKILL.md`。
+建立設定使用 LLaDAR 的模型 profile 輸入與輸出 token 額度，與其他
+生成流程一致；不可沿用 Akasha 的低輸出預設值而使結構化工具呼叫
+無法完成。`--max-turns` 僅限制後續受測目標的對話輪數。
+提供選填的 `--max-input-tokens N` 與 `--max-output-tokens N`（Python API
+為同名底線參數），各自接受正整數、獨立覆寫模型 profile；省略者維持
+profile 預設。非正數須在模型執行前拒絕，設定 JSON 保存實際生效的額度。
+這兩個引數只控制建立設定的模型，後續 run-agent 與 eval 維持各自設定。
+
 ## 1. 問題與目標
 
 目前 LLaDAR 的 create test-dataset 以知識文本建立單題問答資料；run-agent 對每筆題目取得一次回覆；eval RESPONSES 評估完成的單題紀錄。使用者希望另有一條情境流程：即使沒有知識文本，只要描述要觀察的行為及停止條件，就能生成具體情境，與本地專案或外部應用服務進行多輪對話，再根據完整對話評估該行為是否出現。

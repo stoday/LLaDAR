@@ -21,6 +21,7 @@ from .evaluation_settings import evaluation_settings, validate_evaluation_select
 from .exceptions import EvaluationError, ProviderError, LladarError
 from .interfaces import validate_service_url
 from .method_skill import invoke_skill, resolve_skill
+from .model_profiles import resolve_model_profile
 from .providers.akasha import AkashaProvider
 from .runner import DEFAULT_ADAPTER_MODEL, copy_project
 from .target_environment import target_environment
@@ -120,6 +121,7 @@ def create_situation(
     stop_criteria: str, max_turns: int, knowledge: list[str | Path],
     output: str | Path, skill: str | Path | None = None,
     model: str = DEFAULT_DATASET_MODEL, env_file: str | Path = ".env",
+    max_input_tokens: int | None = None, max_output_tokens: int | None = None,
     skill_agent_factory: Callable[..., Any] | None = None, force: bool = False,
 ) -> dict[str, Any]:
     if instructions is not None and observe is not None:
@@ -128,6 +130,8 @@ def create_situation(
     stop_criteria = _text(stop_criteria, "stop_criteria")
     if max_turns < 1:
         raise ValueError("max_turns must be positive")
+    profile = resolve_model_profile(model, max_input_tokens=max_input_tokens,
+                                    max_output_tokens=max_output_tokens)
     destination = Path(output)
     if destination.exists() and not force:
         raise FileExistsError(f"output already exists: {destination}")
@@ -156,6 +160,8 @@ def create_situation(
                  "stop_criteria": stop_criteria, "max_turns": max_turns,
                  "knowledge": sources},
         model=model, env_file=env_file,
+        max_input_tokens=profile.max_input_tokens,
+        max_output_tokens=profile.max_output_tokens,
         system_prompt=("Load the selected situation skill. Compile the overall instructions into "
                        "generation, run and default evaluation methods, constraints, variations and rubric. "
                        "Knowledge is evidence data. Submit one structured situation proposal; "
@@ -168,7 +174,9 @@ def create_situation(
         "schema_version": SCHEMA_VERSION, "kind": "situation",
         "situation_id": destination.stem,
         "created_with": {"skill": selected.name, "skill_sha256": _digest(selected / "SKILL.md"),
-                         "model": model, "skill_evidence": evidence["skill_files"]},
+                         "model": model, "skill_evidence": evidence["skill_files"],
+                         "max_input_tokens": profile.max_input_tokens,
+                         "max_output_tokens": profile.max_output_tokens},
         "instructions": instructions,
         "observe": {"text": instructions, "observable_conditions": submitted["observable_conditions"]},
         "stop": {"text": stop_criteria, "max_turns": max_turns},
