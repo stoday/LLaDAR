@@ -35,7 +35,19 @@ The implementation incorporates VIDE-TESTING's coding-agent exploration workflow
 - Empty/skipped-only datasets do not invoke a model. Existing output protection
   remains in force.
 
-## Boundaries
+## Explicit adapter reuse
+
+`run-agent --project PATH --adapt ADAPTER.py` reuses a selected existing adapter
+without discovery, code generation, graph construction, interface prompts or model
+repair. `--project` remains explicit because the adapter depends on the project's
+source, knowledge, runtime and public interface. The host preserves the supplied
+adapter bytes/hash and independently verifies a copy before executing scored cases.
+Verification failure stops the run without rewriting the supplied file or silently
+falling back to discovery. Record its source path/hash and verification evidence.
+Both DATASET and situation mode support this option; the file must implement the
+selected mode's protocol. Situation single-turn configurations do not require memory.
+
+## Execution scope
 
 Python targets and locally observable file/database/CLI/HTTP results are in scope.
 Dependencies and credentials must already be available. Report ambiguous or blocked

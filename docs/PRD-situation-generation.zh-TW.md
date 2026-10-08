@@ -202,12 +202,19 @@ rubric 至少定義何種目標回覆構成行為出現、何種情況證據不�
 6. eval 能依凍結規準引用真實 turn_id，且無效、錯誤及未完成試次不算成「未觀察到行為」。
 7. run-agent 或 eval 同時收到 --situation-config 與 --skill 時明確拒絕；改動方法須產生新設定版本及新的評估結果，現有單題流程與輸出契約不變。
 8. CLI help 清楚說明兩種 run-agent 模式、情境主檔及 sidecar，且現有 eval RESPONSES 位置參數仍可使用。
+9. situation 模式預設顯示設定、adapter 生成／校準、重試、情境與逐輪問答進度；--no-verbose 關閉這些 stderr 輸出，JSONL 產物不混入進度訊息。
+10. DATASET 與 situation 共用 AutoAdapter 的來源探索、公開入口選擇、coding Agent、工具、模型預算、獨立實跑與修復流程；situation 只替換 session 協定、建置提示及驗證。Agent 以 write_harness 寫入 Python 程式，最後提交路徑，不把整份程式包成 JSON 字串。
+11. 兩種專案模式在 verbose 開啟 coding Agent 的可見 trace、工具操作與串流回應；所有 trace 導向 stderr，--no-verbose 關閉。探索、adapter 版本、驗證與修復證據保存在 builder_evidence 指向的資料夾，calibration.json 保存校準結果及其引用。
+12. max_turns=1 只驗證隔離 session 的單輪送出與真實回答，可宣告 persistent=false；max_turns>1 才要求 persistent=true、同 session 前文記憶與不同 session 隔離。不得將歷史貼入單題來冒充目標支援多輪。
+13. run-agent --adapt PATH 搭配明確 --project 直接重用既有 Python adapter，優先於專案內的 lladar_session.py；跳過探索／生成，但重新驗證目前專案與情境輪次。失敗停止，不改寫指定 adapter 或自動探索替代接法，保存來源路徑及雜湊。
 
 ## 實作狀態（2026-10-02）
 
 第一版已支援 create situation、專案模式的 run-agent --situation-config、eval RESPONSES --situation-config，以及 report EVALUATION。受測專案可提供 lladar_session.py，透過 JSONL 協定連接真正的應用程式對話介面；若沒有此檔，LLaDAR 會在專案副本中產生候選 adapter。
 
-正式產生與執行情境前，LLaDAR 先用候選 adapter 在同一個 session 傳送兩輪訊息，確認第二輪能回憶第一輪的隨機代碼；再開啟新 session，確認不會取回前一個 session 的代碼。同時檢查 session ID 與 turn ID 的對應。校準失敗即停止，證據存於對話主檔旁的 calibration.json。
+正式產生與執行情境前，LLaDAR 先驗證候選 adapter。max_turns=1 只驗證單輪真實回答與 session／turn ID 對應，不要求記憶；多輪才在同一個 session 傳送兩輪訊息，確認第二輪能回憶第一輪的隨機代碼，再開啟新 session 確認不會取回前一個 session 的代碼。校準失敗即停止，證據存於對話主檔旁的 calibration.json。
+
+2026-10-08 起，情境 adapter 與單題 adapter 共用 coding Agent 建置流程。沒有 lladar_session.py 時會透過相同的讀檔、搜尋、Graphify、write_harness、run_harness 工具探索公開入口並實跑修復。--max-input-tokens、--max-output-tokens、--max-tool-calls、--graphify、--graphify-python 及 --interactive 適用於兩種專案模式；既有 session adapter 仍可直接校準使用。
 
 已用 Gemini 對 example_project/situation_demo 實跑：兩個情境各完成兩輪受測對話，之後產生兩筆可判定的評估。另以只有 app.py 的專案實跑自動產生 adapter：候選程式通過校準，完成一個兩輪情境。可複製命令與輸出格式見範例 README。
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stdout
 from dataclasses import asdict
+import ast
 import hashlib
 import json
 import os
@@ -242,13 +243,21 @@ def _stream_answer(events) -> str:
 
 
 class AutoAdapter:
+    protocol_mode = "single"
+    coding_prompt = CODING_PROMPT
+    repair_prompt = REPAIR_PROMPT
+    runtime_protocol = ADAPTER_RUNTIME_PROTOCOL
+    run_harness_guidance = RUN_HARNESS_ARGUMENT_GUIDANCE
+    discovery_context = ""
+
     def __init__(self, workspace: Path, *, python: Path, env_file: str | Path | None,
                  model: str, timeout: float = 3600, max_tool_calls: int = 100,
                  verbose: bool = True,
                  graphify: bool = True, graphify_python: str | Path | None = None,
                  service_url: str | None = None,
                  max_input_tokens: int | None = None,
-                 max_output_tokens: int | None = None):
+                 max_output_tokens: int | None = None,
+                 agent_factory: Callable | None = None):
         if timeout <= 0 or max_tool_calls <= 0:
             raise ValueError("timeout and max_tool_calls must be positive")
         self.model_profile = resolve_model_profile(
@@ -260,6 +269,7 @@ class AutoAdapter:
             raise FileNotFoundError(f"Target Python not found: {self.python}")
         self.env_file = str(Path(env_file).resolve()) if env_file else ""
         self.model, self.timeout, self.verbose = model, timeout, verbose
+        self.agent_factory = agent_factory
         self.graphify, self.graphify_python = graphify, graphify_python
         self.service_url = validate_service_url(service_url) if service_url else None
         evidence_name = "adapter-evidence" if self.workspace.name.casefold() == "adapter" else "adapter"
@@ -273,6 +283,7 @@ class AutoAdapter:
         )
         self.source: bytes | None = None
         self.report: dict = {"status": "preparing", "model": model,
+                             "protocol": self.protocol_mode,
                              "max_input_tokens": self.model_profile.max_input_tokens,
                              "max_output_tokens": self.model_profile.max_output_tokens,
                              "controller_python": sys.executable,
@@ -403,8 +414,8 @@ class AutoAdapter:
             if event.tool == "tool_error"
         ]
         return {
-            "adapter_runtime_protocol": ADAPTER_RUNTIME_PROTOCOL,
-            "run_harness_tool_argument": RUN_HARNESS_ARGUMENT_GUIDANCE,
+            "adapter_runtime_protocol": self.runtime_protocol,
+            "run_harness_tool_argument": self.run_harness_guidance,
             "current_adapter": current,
             "repair_history": self._repair_history(),
             "failure_catalog": failure_catalog,
@@ -544,7 +555,9 @@ class AutoAdapter:
                 raise ValueError("message must be one of the exact plain-text probe questions supplied")
             result = self.execute(self._path(path).read_bytes(), message, phase="exploration")
             self.explorer._record("run_harness", {"path": path}, "success" if result["ok"] else "failed")
-            return json.dumps(_harness_feedback(result), ensure_ascii=False)
+            return json.dumps({"verification": result,
+                               "adapter_runtime_protocol": self.runtime_protocol,
+                               "run_harness_tool_argument": self.run_harness_guidance}, ensure_ascii=False)
 
         def list_files(pattern: str = "**/*") -> str:
             return json.dumps(self.explorer.list_files(pattern), ensure_ascii=False)
@@ -591,6 +604,7 @@ class AutoAdapter:
 
         try:
             import akasha
+            agent_factory = self.agent_factory or akasha.agents
             from .graph_discovery import CodeGraph
 
             graph = CodeGraph(self.workspace, self.evidence, enabled=self.graphify,
@@ -605,6 +619,7 @@ class AutoAdapter:
             if graph.summary['status'] == 'ready':
                 graph_context += "\nInitial entrypoint neighborhood: " + query_graph('main server app route chat', 8)
             graph_context += '\nUser-authorized existing test service URL: ' + str(self.service_url)
+            graph_context += self.discovery_context
             graph_context += '\nA separate target Python interpreter is already selected. Environment is injected at execution. Use check_runtime for required variable/executable presence; never request secret values. Dependency versions are unverified until replay; do not treat hidden credential VALUES as missing.'
 
             tools = [akasha.create_tool(description, recoverable(function), function.__name__)
@@ -615,7 +630,7 @@ class AutoAdapter:
                          ("Search directed code graph and callers/callees. Confirm all leads in source.", query_graph),
                          ("Check only presence of a named environment variable or executable, without revealing values or executing target code.", check_runtime),
                          ("Write one standalone Python adapter.", write_harness),
-                         ("Execute adapter in a fresh copy. Its message argument is plain text, but adapter stdin is the invariant JSON runtime protocol returned by this tool.", run_harness),
+                         ("Verify adapter in a fresh project copy using the selected mode's runtime protocol. The message argument is an exact plain-text probe; inspect adapter_runtime_protocol in the result.", run_harness),
                      ]]
             plan_path = self.evidence / "interfaces.json"
             plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else None
@@ -634,7 +649,7 @@ class AutoAdapter:
                     def generate_discovery(prompt: str) -> str:
                         self.explorer.start_agent_turn()
                         with redirect_stdout(sys.stderr):
-                            discovery = akasha.agents(
+                            discovery = agent_factory(
                                 model=self.model, env_file=self.env_file, tools=tools[:5],
                                 max_input_tokens=self.model_profile.max_input_tokens,
                                 max_output_tokens=self.model_profile.max_output_tokens,
@@ -697,7 +712,7 @@ class AutoAdapter:
             def new_coding_agent():
                 self.explorer.start_agent_turn()
                 with redirect_stdout(sys.stderr):
-                    return akasha.agents(
+                    return agent_factory(
                         model=self.model, env_file=self.env_file, tools=tools,
                         max_input_tokens=self.model_profile.max_input_tokens,
                         max_output_tokens=self.model_profile.max_output_tokens,
@@ -709,7 +724,7 @@ class AutoAdapter:
             try:
                 agent = new_coding_agent()
                 with redirect_stdout(sys.stderr):
-                    response = _stream_answer(agent(CODING_PROMPT + coding_context))
+                    response = _stream_answer(agent(self.coding_prompt + coding_context))
                 self._accept_proposal(_json_object(str(response)))
             except (OSError, ValueError, RuntimeError) as error:
                 initial_failure = {
@@ -723,7 +738,7 @@ class AutoAdapter:
                 agent = new_coding_agent()
                 with redirect_stdout(sys.stderr):
                     response = _stream_answer(agent(
-                        REPAIR_PROMPT + coding_context
+                        self.repair_prompt + coding_context
                         + f"\nRepair attempt: {attempt}/{MAX_ADAPTER_REPAIR_ATTEMPTS}"
                         + "\nComplete repair evidence: "
                         + json.dumps(context, ensure_ascii=False)
@@ -745,6 +760,48 @@ class AutoAdapter:
             generated = self.workspace / ".lladar" / "harnesses"
             if generated.is_dir():
                 shutil.copytree(generated, self.evidence / "harnesses", dirs_exist_ok=True)
+            self._save()
+
+    def prepare_existing(self, path: str | Path, probes: list[str]) -> None:
+        """Load an exact adapter and independently verify it without model calls."""
+        original = Path(path).resolve()
+        self.report["status"] = "loading"
+        try:
+            if original.suffix.lower() != ".py" or not original.is_file():
+                raise ValueError("--adapt must point to an existing Python adapter file")
+            source = original.read_bytes()
+            ast.parse(source, filename=str(original))
+            self.report["reused_adapter"] = {"path": str(original), "sha256": hashlib.sha256(source).hexdigest()}
+            metadata = original.parent / "run.json"
+            if metadata.is_file():
+                try:
+                    saved = json.loads(metadata.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    saved = {}
+                if isinstance(saved, dict):
+                    hashes = {saved["adapter_sha256"]} if isinstance(saved.get("adapter_sha256"), str) else set()
+                    versions = saved.get("adapter_versions", [])
+                    if isinstance(versions, list):
+                        hashes.update(item["sha256"] for item in versions
+                                      if isinstance(item, dict) and isinstance(item.get("sha256"), str))
+                    if (self.report["reused_adapter"]["sha256"] in hashes
+                            and saved.get("protocol") in {"single", "session"}
+                            and saved["protocol"] != self.protocol_mode):
+                        raise ValueError(f"Existing adapter uses {saved['protocol']} protocol; this run requires {self.protocol_mode}")
+            if self.verbose:
+                print(f"[ADAPT] Reusing {original}; verifying selected runtime protocol", file=sys.stderr, flush=True)
+            harness = self.explorer.write_harness("adapter.py", source.decode("utf-8-sig"))
+            # Preserve the supplied bytes, including a possible UTF-8 BOM.
+            self._path(harness).write_bytes(source)
+            self._accept_proposal({"harness": harness, "explanation": "Explicit existing adapter", "blockers": []})
+            failure = self._verification_failure(probes)
+            if failure is not None:
+                raise RuntimeError("Existing adapter verification failed: " + failure["error"])
+            self.report["status"] = "verified"
+        except Exception as error:
+            self.report.update(status="failed", error=f"{type(error).__name__}: {error}")
+            raise
+        finally:
             self._save()
 
     def answer(self, question: str, case_id: str) -> str:

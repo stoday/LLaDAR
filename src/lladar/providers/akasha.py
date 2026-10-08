@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import redirect_stdout
+import sys
 from typing import Any
 
 from ..exceptions import ProviderError
@@ -17,12 +19,14 @@ class AkashaProvider:
         max_input_tokens: int | None = None,
         max_output_tokens: int | None = None,
         verbose: bool = False,
+        stream: bool = False,
     ) -> None:
         self.env_file = env_file
         self._agent_factory = agent_factory
         self.max_input_tokens = max_input_tokens
         self.max_output_tokens = max_output_tokens
         self.verbose = verbose
+        self.stream = stream
 
     def generate_structured(
         self,
@@ -55,7 +59,7 @@ class AkashaProvider:
         agent = factory(
             model=model,
             env_file=self.env_file,
-            stream=False,
+            stream=self.stream,
             thinking=False,
             max_input_tokens=profile.max_input_tokens,
             max_output_tokens=profile.max_output_tokens,
@@ -64,9 +68,30 @@ class AkashaProvider:
             keep_logs=False,
         )
         try:
-            response = agent(prompt)
+            # Akasha emits its visible trace to stdout. Keep provider trace
+            # separate from the CLI's structured data and returned answer.
+            with redirect_stdout(sys.stderr):
+                response = agent(prompt)
+                if self.stream and not isinstance(response, str):
+                    parts = []
+                    for event in response:
+                        if isinstance(event, str):
+                            parts.append(event)
+                        elif isinstance(event, dict):
+                            if event.get("type") == "answer":
+                                chunk = event.get("data")
+                                if not isinstance(chunk, str):
+                                    raise ProviderError("Akasha answer chunks must be text")
+                                parts.append(chunk)
+                            elif event.get("type") == "error":
+                                raise ProviderError("Akasha generation stream failed")
+                        else:
+                            raise ProviderError("Unsupported Akasha stream event")
+                    response = "".join(parts)
             if not isinstance(response, str):
                 raise ProviderError("Akasha response must be text")
+            if not response.strip():
+                raise ProviderError("Akasha response was empty")
             return response
         except ProviderError:
             raise

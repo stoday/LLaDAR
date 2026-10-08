@@ -260,6 +260,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Use a local method directory containing SKILL.md for single-question runs (default: bundled run-agent-stability; unavailable with --situation-config).")
     runner.add_argument("--situation-config", metavar="PATH",
                         help="Use a frozen situation JSON for multi-turn project sessions (default: single-question DATASET mode; cannot combine with DATASET or --skill).")
+    runner.add_argument("--adapt", metavar="PATH",
+                        help="Reuse an existing Python adapter file with an explicit --project. Skip discovery/generation and verify it in project copies using the selected DATASET or situation protocol; stop on failure without rewriting the supplied file (default: automatic adapter discovery/generation).")
     runner.add_argument("--num-scenarios", type=int, metavar="N",
                         help="Number of distinct scenarios to generate and run; required with --situation-config, unused otherwise (no default).")
     runner.add_argument("--seed", type=int, default=0,
@@ -294,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument(
         "--graphify", action=argparse.BooleanOptionalAction, default=True,
-        help="Build a static code graph before single-question project exploration; --no-graphify disables it (default: enabled in that mode).",
+        help="Build a static code graph before project adapter exploration in DATASET and situation modes; --no-graphify disables it (default: enabled).",
     )
     runner.add_argument(
         "--graphify-python", metavar="PATH",
@@ -326,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument(
         "--verbose", action=argparse.BooleanOptionalAction, default=True,
-        help="Show single-question LLaDAR progress, colored questions/expected answers/available responses, safe browser diagnostics and coding-agent traces; use --no-verbose to hide them (default: enabled).",
+        help="Show LLaDAR progress, questions/available responses, coding-agent exploration and repair traces in both project modes, situation calibration and turn progress, and safe browser diagnostics; use --no-verbose to hide them (default: enabled).",
     )
 
     evaluation = commands.add_parser(
@@ -350,10 +352,16 @@ def build_parser() -> argparse.ArgumentParser:
                             help=f"Model used for evaluation judgments (default: {DEFAULT_EVALUATION_MODEL}).")
     evaluation.add_argument("--env-file", default=".env", metavar="PATH",
                             help="Environment file for the evaluation model provider (default: .env).")
+    evaluation.add_argument("--max-input-tokens", type=int, metavar="N",
+                            help="Override the evaluator input token budget (positive integer; default: selected model profile).")
+    evaluation.add_argument("--max-output-tokens", type=int, metavar="N",
+                            help="Override the evaluator output token budget (positive integer; default: selected model profile).")
     evaluation.add_argument("--strict", action="store_true",
                             help="Stop on a judgment error instead of recording it and continuing (default: off).")
     evaluation.add_argument("--force", action="store_true",
                             help="Replace an existing evaluation JSON (default: off).")
+    evaluation.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True,
+                            help="Show evaluation settings, per-trial progress, waiting heartbeats and results; --no-verbose hides progress (default: enabled).")
 
     report = commands.add_parser(
         "report",
@@ -505,6 +513,8 @@ def _execute(
             print(f"Generated {len(records)} record(s) at {output}{status}")
             return 0
         if args.command == "run-agent":
+            if args.adapt is not None and (args.project is None or args.page_url is not None):
+                parser.error("--adapt requires an explicit --project and cannot be combined with --page-url")
             if args.calibration_question is not None and args.page_url is None:
                 parser.error("--calibration-question requires --page-url")
             if args.situation_config:
@@ -514,10 +524,9 @@ def _execute(
                     parser.error("--num-scenarios is required with --situation-config")
                 if args.page_url is not None:
                     parser.error("multi-turn browser sessions are not supported yet")
-                if any((args.max_input_tokens is not None, args.max_output_tokens is not None,
-                        args.graphify_python is not None, args.confirm_browser_run,
+                if any((args.confirm_browser_run,
                         args.fresh_browser_profile, args.allow_response_model_transfer)):
-                    parser.error("single-question adapter and browser options do not apply to situation mode")
+                    parser.error("browser options do not apply to situation mode")
                 completed = run_situation(
                     args.situation_config, args.output,
                     project=args.project or ".", num_scenarios=args.num_scenarios,
@@ -525,6 +534,11 @@ def _execute(
                     target_python=args.target_python, timeout=args.timeout,
                     runs_root=runs_root, force=args.force,
                     service_url=args.service_url,
+                    verbose=args.verbose,
+                    max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
+                    max_tool_calls=args.max_tool_calls, graphify=args.graphify,
+                    graphify_python=args.graphify_python, interactive=args.interactive,
+                    adapt=args.adapt,
                 )
                 print(f"Completed {completed} situation trial(s) at {args.output}")
                 return 0
@@ -554,6 +568,7 @@ def _execute(
                 interactive=args.interactive,
                 graphify=args.graphify,
                 graphify_python=args.graphify_python,
+                adapt=args.adapt,
                 service_url=args.service_url,
                 confirm_browser_run=args.confirm_browser_run,
                 fresh_browser_profile=args.fresh_browser_profile,
@@ -568,16 +583,25 @@ def _execute(
             if args.situation_config:
                 result = evaluate_situation(
                     args.responses, args.situation_config, output=args.output,
+                    verbose=args.verbose,
+                    max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
                     model=args.model, env_file=args.env_file, strict=args.strict,
                     force=args.force,
                     criteria=args.criteria, skill=args.skill,
                     skill_agent_factory=skill_agent_factory,
                     provider_factory=situation_provider_factory,
                 )
-                print(f"Evaluated {result['summary']['valid_determinate']} situation trial(s) at {args.output}")
+                summary = result["summary"]
+                print(f"Evaluated {len(result['items'])} situation trial(s) at {args.output} "
+                      f"(valid_determinate={summary['valid_determinate']}, "
+                      f"judge_error={summary['judge_error']}, "
+                      f"execution_error={summary['execution_error']}, "
+                      f"invalid={summary['invalid']}, indeterminate={summary['indeterminate']})")
                 return 0
             result = evaluate(
                 args.responses,
+                verbose=args.verbose,
+                max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
                 output=args.output,
                 skill=args.skill,
                 criteria=args.criteria,

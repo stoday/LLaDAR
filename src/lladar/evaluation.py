@@ -11,6 +11,8 @@ from typing import Any
 from .exceptions import EvaluationError
 from .evaluation_settings import evaluation_settings, validate_evaluation_selection
 from .method_skill import SkillAgentFactory, invoke_skill, resolve_skill
+from .model_profiles import resolve_model_profile
+from .progress import ProgressReporter
 from .question_types import deterministic_judgment, load_run_probe_contract, load_run_question_type_contract, record_fingerprint
 from .records import read_records
 from .semantic_graph import classify_probe_response
@@ -45,9 +47,12 @@ class EvaluationWorkspace:
 def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | None = None,
              criteria: str | None = None,
              model: str = DEFAULT_EVALUATION_MODEL, env_file: str | Path = ".env",
+             max_input_tokens: int | None = None, max_output_tokens: int | None = None,
              skill_agent_factory: SkillAgentFactory | None = None, strict: bool = False,
-             force: bool = False) -> dict[str, Any]:
+             force: bool = False, verbose: bool = True) -> dict[str, Any]:
     validate_evaluation_selection(criteria, skill)
+    profile = resolve_model_profile(model, max_input_tokens=max_input_tokens,
+                                    max_output_tokens=max_output_tokens)
     explicit_method = criteria is not None or skill is not None
     output_path = Path(output)
     if output_path.exists() and not force:
@@ -70,6 +75,11 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
                             for contract in typed_trial_contracts.values())
     has_probe_trials = any(probe_trial_contracts.values())
     completed = [trial for trial in trials if trial["status"] == "ok"]
+    progress = ProgressReporter(enabled=verbose)
+    progress.configuration({"mode": "single_question", "model": model,
+                            "method": "criteria" if criteria is not None else "skill" if skill is not None else "default",
+                            "trials": len(trials), "max_input_tokens": profile.max_input_tokens,
+                            "max_output_tokens": profile.max_output_tokens, "output": str(output_path)})
     workspace = EvaluationWorkspace()
     if has_typed_trials and not explicit_method:
         evidence = {"skill_files": {"SKILL.md": _sha(selected_skill / "SKILL.md")}}
@@ -94,10 +104,13 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
             "limitations": ["A mapping outcome is not a correctness or bias verdict."],
         }
     elif completed or explicit_method:
-        evidence = invoke_skill(skill=selected_skill, tools={"submit_plan": workspace.submit_plan},
-                                request={"stage": "plan", "records": completed[:25], "criteria": criteria}, model=model,
-                                env_file=env_file, system_prompt=EVAL_SYSTEM_PROMPT,
-                                agent_factory=skill_agent_factory)
+        with progress.waiting("Planning evaluation", label="EVAL"):
+            evidence = invoke_skill(skill=selected_skill, tools={"submit_plan": workspace.submit_plan},
+                                    request={"stage": "plan", "records": completed[:25], "criteria": criteria}, model=model,
+                                    env_file=env_file, system_prompt=EVAL_SYSTEM_PROMPT,
+                                    agent_factory=skill_agent_factory,
+                                    max_input_tokens=profile.max_input_tokens,
+                                    max_output_tokens=profile.max_output_tokens)
         if workspace.plan is None:
             raise EvaluationError("evaluation skill did not submit a plan")
     else:
@@ -107,7 +120,9 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
                           "limitations": ["Every scheduled trial failed before a response."]}
     items: list[dict[str, Any]] = []
     judge_errors = 0
-    for trial in trials:
+    for index, trial in enumerate(trials, 1):
+        context = f"record={trial['record_index']} trial={trial['trial']}"
+        progress.evaluation(index - 1, len(trials), f"Judging {context}")
         item = {key: trial.get(key) for key in ("record_index", "trial", "question", "expected_answer", "actual_response")}
         contract = typed_trial_contracts.get((trial["record_index"], trial["trial"]))
         probe = probe_trial_contracts.get((trial["record_index"], trial["trial"]))
@@ -137,20 +152,25 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
                             extra_dimension = "response_format_valid" if has_typed_trials else "mapping_outcome"
                             value = {**value, "values": {**value["values"], extra_dimension: None}}
                         return workspace.submit_judgment(value)
-                judgment_evidence = invoke_skill(skill=selected_skill, tools={"submit_judgment": submit_judgment},
-                             request={"stage": "judgment", **item, "criteria": criteria,
-                                      "plan": workspace.plan}, model=model, env_file=env_file,
-                             system_prompt=EVAL_SYSTEM_PROMPT, agent_factory=skill_agent_factory)
+                with progress.waiting(f"Judging {context}", label="EVAL"):
+                    judgment_evidence = invoke_skill(skill=selected_skill, tools={"submit_judgment": submit_judgment},
+                                 request={"stage": "judgment", **item, "criteria": criteria,
+                                          "plan": workspace.plan}, model=model, env_file=env_file,
+                                 system_prompt=EVAL_SYSTEM_PROMPT, agent_factory=skill_agent_factory,
+                                 max_input_tokens=profile.max_input_tokens,
+                                 max_output_tokens=profile.max_output_tokens)
                 evidence["skill_files"].update(judgment_evidence["skill_files"])
                 if workspace.judgment is None:
                     raise EvaluationError("evaluation skill did not submit a judgment")
                 item.update(status="evaluated", **workspace.judgment)
             except Exception as error:
+                progress.emit("WARN", f"{context} judge_error: {error}")
                 if strict:
                     raise EvaluationError(f"evaluator failed for record {item['record_index']}: {error}") from error
                 judge_errors += 1
                 item.update(status="judge_error", values={}, reason=f"{type(error).__name__}: {error}")
         items.append(item)
+        progress.evaluation(index, len(trials), f"{context} status={item['status']}")
     evaluated = [item for item in items if item["status"] == "evaluated"]
     summary = {"records": len(records), "scheduled_trials": len(trials), "evaluated": len(evaluated),
                "execution_error": sum(item["status"] == "execution_error" for item in items),
@@ -166,12 +186,17 @@ def evaluate(responses: str | Path, *, output: str | Path, skill: str | Path | N
                   mode="criteria" if criteria is not None else "skill" if skill is not None else "default",
                   criteria=criteria, skill=skill_metadata),
               "evaluator_model": model, "plan": workspace.plan, "summary": summary,
+              "max_input_tokens": profile.max_input_tokens,
+              "max_output_tokens": profile.max_output_tokens,
               "aggregates": _aggregate(workspace.plan, evaluated),
               "stability": _stability(items, len(records)) if any(
                   d["name"] == "correct" and d["kind"] == "boolean"
                   for d in workspace.plan["dimensions"]) else {"records": []}, "items": items}
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    progress.emit("WRITE", f"Evaluation: {output_path.resolve()}")
+    progress.emit("EVAL", f"evaluated={len(evaluated)} judge_error={judge_errors} execution_error={summary['execution_error']}")
+    progress.done(len(items), metric="processed")
     return result
 
 

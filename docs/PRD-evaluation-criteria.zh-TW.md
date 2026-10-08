@@ -10,6 +10,10 @@
 
 ## CLI 與公開介面
 
+- `eval --verbose` 預設開啟，`--no-verbose` 關閉；兩種模式都顯示實際設定、總試次、規劃／逐題等待心跳、判斷狀態與耗時、結果路徑。`--log` 保存相同進度；安靜模式仍輸出完成摘要。情境摘要區分處理試次、有效判定與 judge error，不再把有效判定數稱為所有評估題數。公開 API 提供 `verbose=True`。
+
+- `eval --max-input-tokens N`／`--max-output-tokens N` 覆寫評估模型的正整數 token 上限；單題計畫、逐題判斷、情境 rubric／criteria／Skill 均須傳入。未指定時使用所選模型 profile，情境評估不再固定為 2,048 output tokens。公開 evaluate／evaluate_situation 同步提供同名 snake_case 引數，在讀取輸入或呼叫模型前驗證，結果保存實際 token 上限。此設定不修改受測 Agent 或原始對話。
+
 - `lladar create situation --instructions TEXT`（或 `--instructions-file PATH`）描述整體情境作業，仍一次規劃生成、執行、停止與預設評估。既有 `--observe`／`--observe-file` 作為相同入口的相容別名；同時指定兩種來源拒絕。既有停止條件與輪數引數維持。
 - `lladar eval RESPONSES [--criteria TEXT | --skill DIRECTORY]` 支援單題與 `--situation-config PATH` 情境模式。
 - `evaluate(..., criteria=None, skill=None)` 與 `evaluate_situation(..., criteria=None, skill=None)` 必須在公開 API 層也驗證互斥與非空準則。

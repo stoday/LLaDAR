@@ -79,7 +79,9 @@ selected `SKILL.md` on demand. The bundled method is not a removable
 user-installed skill. See [skill generation](docs/skill-generation.md) for
 limits and Python usage.
 
-For knowledge-optional adaptive conversations, see the [multi-turn situation example](example_project/situation_demo/README.md). The project session adapter is calibrated with two turns and a fresh session before scored tests.
+For knowledge-optional adaptive conversations, see the [situation example](example_project/situation_demo/README.md). Both project modes share coding-agent discovery, tools and verified repair. With `max_turns=1`, session calibration checks one real answer; multi-turn configurations also check memory and fresh-session isolation.
+
+Add `--adapt PATH_TO_ADAPTER.py --project PATH` to reuse an existing adapter in either project mode. LLaDAR skips discovery and generation, verifies the selected protocol in project copies, and stops on failure without rewriting the supplied adapter. Keep `--project`: the adapter still needs the application's source and runtime.
 
 Run the target Agent. LLaDAR inspects a copied project and creates a temporary
 adapter for its real public workflow:
@@ -215,6 +217,10 @@ Evaluate automatically:
 ```bash
 lladar eval responses.jsonl --output evaluation.json
 ```
+
+`eval` shows settings, per-trial progress, waiting heartbeats and results by default. Use `--no-verbose` to hide progress, or `--log eval.log` to save it.
+
+Both evaluation modes accept `--max-input-tokens N` and `--max-output-tokens N` (positive integers). Defaults follow the selected model profile; evaluation JSON records the effective limits.
 
 Use `--criteria "Describe what to check and what counts as evidence"` for ordinary
 evaluation requirements. Advanced users can instead supply a complete method

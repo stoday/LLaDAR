@@ -46,7 +46,8 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         return _situation_report(evaluation, target, skill=skill, model=model,
                                  env_file=env_file, skill_agent_factory=skill_agent_factory)
     required = {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"}
-    if not isinstance(evaluation, dict) or set(evaluation) not in (required, required | {"evaluation_settings"}):
+    optional = {"evaluation_settings", "max_input_tokens", "max_output_tokens"}
+    if not isinstance(evaluation, dict) or not required <= set(evaluation) <= required | optional:
         raise EvaluationError("evaluation JSON does not match the current contract")
     selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
     workspace = ReportWorkspace()
@@ -112,7 +113,8 @@ def _situation_report(evaluation: dict[str, Any], target: Path, *,
                       skill_agent_factory: SkillAgentFactory | None) -> Path:
     required = {"kind", "source", "situation_config", "situation_sha256",
                 "evaluator_model", "method", "observe", "summary", "items"}
-    if set(evaluation) not in (required, required | {"evaluation_settings"}) or not isinstance(evaluation["items"], list):
+    optional = {"evaluation_settings", "max_input_tokens", "max_output_tokens"}
+    if not required <= set(evaluation) <= required | optional or not isinstance(evaluation["items"], list):
         raise EvaluationError("situation evaluation JSON does not match the current contract")
     narrative = None
     if skill is not None:

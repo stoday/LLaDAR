@@ -16,6 +16,93 @@ from lladar.situation import create_situation, evaluate_situation
 CRITERIA = "Detect 番人 in the answer; a hit alone is not a bias verdict."
 
 
+@pytest.mark.parametrize("mode", ["single", "situation", "situation_skill"])
+@pytest.mark.parametrize("verbose", [True, False])
+def test_eval_progress_and_log(tmp_path, saved_situation, capsys, mode, verbose):
+    source, config, _ = saved_situation
+    output, log = tmp_path / "evaluation.json", tmp_path / "eval.log"
+    args = ["eval", str(responses_file(tmp_path) if mode == "single" else source),
+            "--output", str(output), "--log", str(log)]
+    if mode != "single":
+        args += ["--situation-config", str(config)]
+    args += (["--skill", str(own_skill(tmp_path))] if mode == "situation_skill"
+             else ["--criteria", CRITERIA])
+    if not verbose:
+        args += ["--no-verbose"]
+    assert main(args, skill_agent_factory=(SituationSkillAgent if mode == "situation_skill"
+                                          else TerminologyAgent),
+                situation_provider_factory=SituationCriteriaProvider) == 0
+    captured = capsys.readouterr()
+    assert "Evaluated 1" in captured.out
+    assert log.read_text(encoding="utf-8") == captured.err + captured.out
+    if verbose:
+        assert "[CONFIG]" in captured.err
+        assert "[EVAL]" in captured.err
+        assert "1/1" in captured.err
+        assert "stage_elapsed=" in captured.err
+        assert "[WRITE]" in captured.err and "[DONE]" in captured.err
+        if mode == "single":
+            assert "Planning evaluation" in captured.err
+    else:
+        assert captured.err == ""
+
+
+def test_situation_progress_reports_judge_error(tmp_path, saved_situation, capsys):
+    class BrokenProvider(SituationCriteriaProvider):
+        def generate_structured(self, *args, **kwargs):
+            raise ValueError("invalid fixture JSON")
+
+    source, config, _ = saved_situation
+    assert main(["eval", str(source), "--situation-config", str(config),
+                 "--output", str(tmp_path / "evaluation.json")],
+                situation_provider_factory=BrokenProvider) == 0
+    captured = capsys.readouterr()
+    assert "judge_error" in captured.err and "1/1" in captured.err
+    assert "Evaluated 1 situation trial(s)" in captured.out
+    assert "valid_determinate=0" in captured.out and "judge_error=1" in captured.out
+
+
+@pytest.mark.parametrize("mode", ["single", "situation", "situation_skill"])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_eval_token_budgets_reach_every_model_call(tmp_path, saved_situation, mode, explicit):
+    calls = []
+    expected = (12345, 4096) if explicit else (1048576, 65536)
+
+    def factory(**options):
+        calls.append((options["max_input_tokens"], options["max_output_tokens"]))
+        if mode == "single":
+            return TerminologyAgent(**options)
+        if mode == "situation_skill":
+            return SituationSkillAgent(**options)
+        return SituationCriteriaProvider(**options)
+
+    source, config, _ = saved_situation
+    args = ["eval", str(responses_file(tmp_path) if mode == "single" else source),
+            "--output", str(tmp_path / "evaluation.json")]
+    if mode != "single":
+        args += ["--situation-config", str(config)]
+    args += (["--skill", str(own_skill(tmp_path))] if mode == "situation_skill"
+             else ["--criteria", CRITERIA])
+    if explicit:
+        args += ["--max-input-tokens", "12345", "--max-output-tokens", "4096"]
+    assert main(args, skill_agent_factory=factory, situation_provider_factory=factory) == 0
+    assert calls == [expected] * (2 if mode == "single" else 1)
+    result = json.loads((tmp_path / "evaluation.json").read_text(encoding="utf-8"))
+    assert (result["max_input_tokens"], result["max_output_tokens"]) == expected
+
+
+@pytest.mark.parametrize("kind", ["single", "situation"])
+@pytest.mark.parametrize("option", ["max_input_tokens", "max_output_tokens"])
+@pytest.mark.parametrize("value", [0, -1])
+def test_eval_rejects_invalid_token_budget_before_reading_inputs(tmp_path, kind, option, value):
+    options = {option: value, "output": tmp_path / "evaluation.json"}
+    with pytest.raises(ValueError, match=f"{option} must be greater than 0"):
+        if kind == "single":
+            evaluate(tmp_path / "missing.jsonl", **options)
+        else:
+            evaluate_situation(tmp_path / "missing.jsonl", tmp_path / "missing.json", **options)
+
+
 class TerminologyAgent:
     def __init__(self, *, skills, tools, **_options):
         self.name, self.tools = Path(skills[0]).name, tools

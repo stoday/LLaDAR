@@ -138,13 +138,37 @@ def test_situation_end_to_end_with_three_target_turns(tmp_path):
     assert "Trial evidence" in report.read_text()
 
 
-class AutoProvider(Provider):
-    def generate_structured(self, prompt, **kwargs):
-        request = json.loads(prompt)
-        if request["task"].startswith("Write a standalone"):
-            driver = Path(__file__).parents[1] / "example_project" / "situation_demo" / "lladar_session.py"
-            return {"code": driver.read_text(encoding="utf-8")}
-        return super().generate_structured(prompt, **kwargs)
+class SessionCodingFactory:
+    def __init__(self, *, fail_initial=False):
+        self.calls = []
+        self.fail_initial = fail_initial
+
+    def __call__(self, **options):
+        self.calls.append(options)
+        tools = {tool.name: tool for tool in options["tools"]}
+        turn = len(self.calls)
+
+        def respond(prompt):
+            tools["list_files"].invoke({"pattern": "**/*"})
+            tools["read_file"].invoke({"path": "app.py"})
+            if turn == 1:
+                result = {"candidates": [{
+                    "id": "public", "label": "Order assistant", "entrypoint": "app.py:OrderAssistant.chat",
+                    "public_boundary": True, "rationale": "Public conversation interface",
+                    "flow": ["OrderAssistant", "chat"], "output": "returned answer", "transport": "python",
+                    "service": None, "evidence": [{"path": "app.py", "line": 7, "quote": "class OrderAssistant:"}],
+                }], "unresolved": [], "summary": "Public chat"}
+            elif turn == 2 and self.fail_initial:
+                return iter([{"type": "answer", "data": "invalid proposal"}])
+            else:
+                assert "SESSION ADAPTER RUNTIME PROTOCOL" in prompt
+                assert "reads exactly one JSON object" not in prompt
+                source = Path(__file__).parents[1] / "example_project" / "situation_demo" / "lladar_session.py"
+                path = tools["write_harness"].invoke({"filename": "adapter.py", "content": source.read_text(encoding="utf-8")})
+                tools["run_harness"].invoke({"path": path, "message": "Hello. Please respond briefly."})
+                result = {"harness": path, "explanation": "Real application session", "blockers": []}
+            return iter([{"type": "answer", "data": json.dumps(result)}])
+        return respond
 
 
 def test_candidate_session_adapter_is_calibrated_before_use(tmp_path):
@@ -159,7 +183,8 @@ def test_candidate_session_adapter_is_calibrated_before_use(tmp_path):
     transcript = tmp_path / "responses.jsonl"
     assert run_situation(config, transcript, project=project, num_scenarios=1,
                          target_python=sys.executable, runs_root=tmp_path / "runs",
-                         provider_factory=AutoProvider) == 1
+                         provider_factory=Provider, adapter_agent_factory=SessionCodingFactory(),
+                         graphify=False, interactive=False) == 1
     calibration = json.loads(Path(str(transcript) + ".calibration.json").read_text())
     assert calibration["generated"] is True
     assert calibration["status"] == "passed"
@@ -261,3 +286,162 @@ def test_situation_cli_rejects_conflicting_methods():
     with pytest.raises(SystemExit):
         main(["eval", "r.jsonl", "--situation-config", "s.json", "--skill", "custom",
               "--criteria", "Observe behavior"])
+
+
+@pytest.mark.parametrize("flag,expected", [("--verbose", True), ("--no-verbose", False)])
+def test_situation_cli_forwards_verbose(monkeypatch, flag, expected):
+    received = {}
+
+    def run(*args, **kwargs):
+        received.update(kwargs)
+        return 1
+
+    monkeypatch.setattr("lladar.cli.run_situation", run)
+    assert main(["run-agent", "--situation", "s.json", "--project", ".",
+                 "--num-scenarios", "1", flag]) == 0
+    assert received.get("verbose") is expected
+
+
+def test_situation_cli_accepts_shared_adapter_options(monkeypatch):
+    received = {}
+
+    def run(*args, **kwargs):
+        received.update(kwargs)
+        return 1
+
+    monkeypatch.setattr("lladar.cli.run_situation", run)
+    assert main(["run-agent", "--situation", "s.json", "--num-scenarios", "1",
+                 "--max-input-tokens", "32000", "--max-output-tokens", "16000",
+                 "--max-tool-calls", "20", "--no-graphify", "--no-interactive"]) == 0
+    assert received["max_input_tokens"] == 32000
+    assert received["max_output_tokens"] == 16000
+    assert received["max_tool_calls"] == 20
+    assert received["graphify"] is False
+    assert received["interactive"] is False
+
+
+@pytest.mark.parametrize("verbose", [True, False])
+@pytest.mark.parametrize("max_turns", [1, 3])
+def test_situation_shared_coding_agent_explores_generates_and_repairs(tmp_path, capsys, verbose, max_turns):
+    config = tmp_path / "situation.json"
+    create_situation(observe="Asks for identifier", stop_criteria="After one turn",
+                     max_turns=max_turns, knowledge=[], output=config,
+                     skill_agent_factory=AuthoringAgent)
+    source = Path(__file__).parents[1] / "example_project" / "situation_demo"
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "app.py").write_bytes((source / "app.py").read_bytes())
+    factory = SessionCodingFactory(fail_initial=True)
+    output = tmp_path / "responses.jsonl"
+    assert run_situation(config, output, project=project, num_scenarios=1,
+                         target_python=sys.executable, runs_root=tmp_path / "runs",
+                         provider_factory=Provider, adapter_agent_factory=factory,
+                         graphify=False, interactive=False, verbose=verbose) == 1
+    assert len(factory.calls) == 3
+    assert all(call["stream"] and call["verbose"] == verbose for call in factory.calls)
+    assert all(call["max_output_tokens"] == 65_536 for call in factory.calls)
+    calibration = json.loads(Path(str(output) + ".calibration.json").read_text())
+    assert calibration["memory_required"] is (max_turns > 1)
+    if max_turns == 1:
+        assert calibration["memory_check"] == "not_required"
+    else:
+        assert calibration["same_session_recalled"] is True
+        assert calibration["fresh_session_leaked"] is False
+    assert calibration["repair_attempts"] == 1
+    evidence = Path(calibration["builder_evidence"])
+    audit = json.loads((evidence / "audit.json").read_text())
+    assert {"list_files", "read_file", "write_harness"} <= {event["tool"] for event in audit}
+    logs = capsys.readouterr()
+    assert logs.out == ""
+    if verbose:
+        assert "[ADAPT] read_file" in logs.err
+        assert "[ADAPT] write_harness" in logs.err
+        assert "[QUESTION]" in logs.err
+        assert "[RESPONSE]" in logs.err
+    else:
+        assert logs.err == ""
+    assert not (project / "lladar_session.py").exists()
+    assert (project / "app.py").read_bytes() == (source / "app.py").read_bytes()
+
+
+def test_stateless_driver_passes_single_turn_but_fails_multi_turn(tmp_path):
+    from lladar.situation import calibrate_session
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "app.py").write_text("def answer(message): return 'reply: ' + message\n", encoding="utf-8")
+    (project / "lladar_session.py").write_text(
+        "import json,sys,uuid\n"
+        "from app import answer\n"
+        "session=uuid.uuid4().hex\n"
+        "for line in sys.stdin:\n"
+        " r=json.loads(line)\n"
+        " if r['op']=='open': out={'session_id':session,'persistent':False,'isolated':True}\n"
+        " elif r['op']=='send': out={'session_id':session,'turn_id':r['turn_id'],'output':answer(r['message'])}\n"
+        " else: out={'closed':session}\n"
+        " print(json.dumps(out),flush=True)\n", encoding="utf-8")
+    single = calibrate_session(project, Path(sys.executable), ".env", 10,
+                               runs_root=tmp_path / "single", max_turns=1)
+    assert single["status"] == "passed"
+    assert single["memory_required"] is False
+    config = tmp_path / "situation.json"
+    create_situation(observe="Asks for identifier", stop_criteria="After one turn",
+                     max_turns=1, knowledge=[], output=config, skill_agent_factory=AuthoringAgent)
+    output = tmp_path / "responses.jsonl"
+    assert run_situation(config, output, project=project, num_scenarios=1,
+                         target_python=sys.executable, runs_root=tmp_path / "trials",
+                         provider_factory=Provider, verbose=False) == 1
+    transcript = json.loads(output.read_text().splitlines()[0])
+    assert len(transcript["turns"]) == 1
+    assert transcript["turns"][0]["output"] == "reply: " + transcript["turns"][0]["message"]
+    multi = calibrate_session(project, Path(sys.executable), ".env", 10,
+                              runs_root=tmp_path / "multi", max_turns=2)
+    assert multi["status"] == "failed"
+    assert "persistent" in multi["error"]
+
+
+def test_session_calibration_rejects_source_mutation(tmp_path):
+    from lladar.situation import calibrate_session
+    source = Path(__file__).parents[1] / "example_project" / "situation_demo"
+    project = tmp_path / "project"
+    project.mkdir()
+    original = (source / "app.py").read_bytes()
+    (project / "app.py").write_bytes(original)
+    code = (source / "lladar_session.py").read_text(encoding="utf-8")
+    code = code.replace("output = assistant.chat(request[\"message\"])",
+                        "output = assistant.chat(request[\"message\"])\n            "
+                        "from pathlib import Path\n            Path('app.py').write_text('changed')")
+    (project / "lladar_session.py").write_text(code, encoding="utf-8")
+    result = calibrate_session(project, Path(sys.executable), ".env", 10,
+                               runs_root=tmp_path / "runs", max_turns=1)
+    assert result["status"] == "failed"
+    assert "changed target source" in result["error"]
+    assert (project / "app.py").read_bytes() == original
+
+
+def test_situation_explicit_reuse_overrides_project_driver_without_discovery(tmp_path):
+    config = tmp_path / "situation.json"
+    create_situation(observe="Asks for identifier", stop_criteria="After two turns",
+                     max_turns=2, knowledge=[], output=config, skill_agent_factory=AuthoringAgent)
+    source = Path(__file__).parents[1] / "example_project" / "situation_demo"
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "app.py").write_bytes((source / "app.py").read_bytes())
+    broken = b"raise RuntimeError('wrong driver selected')\n"
+    (project / "lladar_session.py").write_bytes(broken)
+    selected = source / "lladar_session.py"
+    original = selected.read_bytes()
+
+    def forbidden(**kwargs):
+        pytest.fail("Explicit reuse must not call a coding Agent")
+
+    output = tmp_path / "responses.jsonl"
+    assert run_situation(config, output, project=project, num_scenarios=1,
+                         target_python=sys.executable, runs_root=tmp_path / "runs",
+                         provider_factory=Provider, adapter_agent_factory=forbidden,
+                         adapt=selected, verbose=False) == 1
+    calibration = json.loads(Path(str(output) + ".calibration.json").read_text())
+    assert calibration["status"] == "passed"
+    assert calibration["generated"] is False
+    assert calibration["reused_adapter"]["path"] == str(selected.resolve())
+    assert selected.read_bytes() == original
+    assert (project / "lladar_session.py").read_bytes() == broken

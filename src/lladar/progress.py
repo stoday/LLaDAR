@@ -19,6 +19,7 @@ _COLORS = {
     "RETRY": "\x1b[33m",
     "PAIR": "\x1b[32m",
     "SESSION": "\x1b[32m",
+    "EVAL": "\x1b[32m",
     "WRITE": "\x1b[36m",
     "WARN": "\x1b[33m",
     "DONE": "\x1b[32m",
@@ -81,18 +82,18 @@ class ProgressReporter:
         self.emit(label, value)
 
     @contextmanager
-    def waiting(self, message: str, *, interval: float = 5.0):
-        """Report synchronous work without moving browser operations off-thread."""
+    def waiting(self, message: str, *, interval: float = 5.0, label: str = "BROWSER"):
+        """Report synchronous work without moving operations off-thread."""
         if not self.enabled:
             yield
             return
         stopped = Event()
         started = time.perf_counter()
-        self.emit("BROWSER", f"{message} started")
+        self.emit(label, f"{message} started")
 
         def heartbeat() -> None:
             while not stopped.wait(interval):
-                self.emit("BROWSER", f"{message} still working stage_elapsed={_duration(time.perf_counter() - started)}")
+                self.emit(label, f"{message} still working stage_elapsed={_duration(time.perf_counter() - started)}")
 
         thread = Thread(target=heartbeat, name="lladar-progress", daemon=True)
         thread.start()
@@ -105,10 +106,13 @@ class ProgressReporter:
         finally:
             stopped.set()
             thread.join()
-            self.emit("BROWSER", f"{message} {status} stage_elapsed={_duration(time.perf_counter() - started)}")
+            self.emit(label, f"{message} {status} stage_elapsed={_duration(time.perf_counter() - started)}")
 
     def session(self, completed: int, total: int, message: str) -> None:
         self._progress("SESSION", completed, total, message)
+
+    def evaluation(self, completed: int, total: int, message: str) -> None:
+        self._progress("EVAL", completed, total, message)
 
     def group(self, completed: int, total: int, message: str) -> None:
         self._progress("GROUP", completed, total, message)
