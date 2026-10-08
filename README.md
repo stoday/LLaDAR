@@ -48,6 +48,19 @@ browser targets, custom evaluation criteria, and multi-turn situations.
 
 ## Workflow options
 
+All main workflow commands accept an optional `--output` directory or file path.
+Omitting it writes into the current directory: a timestamped
+`test-dataset-YYYYMMDD-HHMMSS.jsonl`, `situation.json`, `responses.jsonl`,
+`evaluation.json`, or `report.md`. With `--output ./artifacts`, the same names
+and their sidecars go into `./artifacts/`. Existing directories, trailing
+separators, and new paths without a suffix are directories; existing files and
+new paths with a suffix are filenames. For a new directory containing a dot,
+use `./results.v1/`. Existing outputs still require `--force`.
+
+After each successful stage, a work summary lists the absolute output directory,
+each generated file and its purpose, and the next command or reading step.
+This summary remains visible with `--no-verbose` and is also saved by `--log`.
+
 Generate a dataset. `--output` accepts an explicit `.jsonl` path (as below),
 or a directory in which the CLI creates a timestamped dataset.
 

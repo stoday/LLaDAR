@@ -45,6 +45,17 @@ lladar report evaluation.json --output report.md
 
 ## 使用選項
 
+所有主要階段都可省略 `--output`，也可指定資料夾或完整檔案路徑。
+省略時輸出到目前工作目錄：資料集使用 `test-dataset-YYYYMMDD-HHMMSS.jsonl`，
+其他階段依序使用 `situation.json`、`responses.jsonl`、`evaluation.json`、`report.md`。
+指定 `--output ./artifacts` 時，預設檔名與附屬檔都放進 `./artifacts/`。
+既有資料夾、結尾分隔符號或沒有副檔名的新路徑視為資料夾；
+既有檔案或有副檔名的新路徑視為檔案。含點號的新資料夾可寫成 `./results.v1/`。
+既有輸出仍需 `--force`。
+
+每個階段成功後都會顯示工作摘要，列出輸出的絕對目錄、各檔案位置與內容簡述，
+以及下一步命令或閱讀提示。`--no-verbose` 仍會顯示摘要，`--log` 也會同步保存。
+
 產生資料集：
 
 ```bash

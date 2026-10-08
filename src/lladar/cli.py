@@ -57,11 +57,88 @@ def _timestamped_dataset_output(directory: Path) -> Path:
 
 def _resolve_dataset_output(destination: str | Path) -> Path:
     """Resolve a CLI destination as a directory or an explicit JSONL file."""
+    return _resolve_output(destination, None)
+
+
+def _resolve_output(destination: str | Path, filename: str | None) -> Path:
+    """Use existing directories, trailing separators and suffixless new paths as directories.
+
+    Existing files and new paths with a suffix name the output file directly.
+    A dataset directory uses a collision-safe timestamp instead of a fixed filename.
+    """
+    raw = str(destination)
     path = Path(destination)
-    if path.is_file() or path.suffix.lower() == ".jsonl":
+    directory = path.is_dir() or raw.endswith(("/", "\\"))
+    if not directory and (path.is_file() or path.suffix):
         return path
-    path.mkdir(parents=True, exist_ok=True)
-    return _timestamped_dataset_output(path)
+    return path / filename if filename is not None else _timestamped_dataset_output(path)
+
+
+def _display_command(arguments: Sequence[str]) -> str:
+    return subprocess.list2cmdline(arguments) if os.name == "nt" else shlex.join(arguments)
+
+
+def _show_work_summary(stage: str, output: str | Path, *, situation: bool = False,
+                       situation_config: str | None = None) -> None:
+    """Describe successful workflow artifacts using their actual absolute paths."""
+    path = Path(output).resolve()
+    descriptions = {
+        "test-dataset": "Generated questions and source-supported expected answers for testing an Agent.",
+        "situation": "Compiled instructions into a reusable multi-turn situation configuration.",
+        "run-agent": "Ran the target Agent and saved its responses and execution evidence.",
+        "eval": "Evaluated saved responses and recorded judgments and aggregate results.",
+        "report": "Rendered the saved evaluation into a readable Markdown report.",
+    }
+    main_descriptions = {
+        "test-dataset": "Test records: questions, expected answers and empty actual_response fields.",
+        "situation": "Situation instructions, stopping rules, variation axes, methods and evaluation rubric.",
+        "run-agent": ("Multi-turn conversation transcripts for each situation trial." if situation else
+                      "Questions, expected answers and actual Agent responses."),
+        "eval": "Per-trial judgments, reasons, evaluation settings and summary statistics.",
+        "report": "Human-readable findings, result tables and limitations based on saved evaluation evidence.",
+    }
+    sidecars = {
+        "test-dataset": [
+            (".generation.json", "Generation methods, source provenance and validation results."),
+            (".graph.json", "Knowledge graph and declared control dimensions used for generation."),
+        ],
+        "run-agent": ([
+            (".turns.jsonl", "Individual conversation turns and their identifiers."),
+            (".scenarios.jsonl", "Generated scenarios, starting messages and selected variations."),
+            (".calibration.json", "Session adapter calibration evidence."),
+            (".run.json", "Run configuration, identity, adapter evidence and execution errors."),
+        ] if situation else [
+            (".trials.jsonl", "Individual repeated trials, responses and failure diagnostics."),
+            (".run.json", "Run configuration, selected cases, target evidence and execution metadata."),
+        ]),
+    }
+    print("\nWork summary")
+    print(f"  Work: {descriptions[stage]}")
+    print(f"  Output directory: {path.parent}")
+    print("  Files:")
+    print(f"    {path}\n      {main_descriptions[stage]}")
+    for suffix, description in sidecars.get(stage, []):
+        artifact = Path(str(path) + suffix)
+        if artifact.is_file():
+            print(f"    {artifact}\n      {description}")
+    if stage == "test-dataset":
+        next_step = ["lladar", "run-agent", str(path), "--project", "PROJECT"]
+    elif stage == "situation":
+        next_step = ["lladar", "run-agent", "--situation-config", str(path),
+                     "--project", "PROJECT", "--num-scenarios", "N"]
+    elif stage == "run-agent":
+        next_step = ["lladar", "eval", str(path)]
+        if situation_config:
+            next_step += ["--situation-config", str(Path(situation_config).resolve())]
+    elif stage == "eval":
+        next_step = ["lladar", "report", str(path)]
+    else:
+        print(f"  Next: Open {path} to review the report.")
+        return
+    print(f"  Next: {_display_command(next_step)}")
+    if stage in {"test-dataset", "situation"}:
+        print("    Replace PROJECT with your target project directory." +
+              (" Replace N with a positive scenario count." if stage == "situation" else ""))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -139,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                          help="Local method directory containing SKILL.md; selects direct QA or optional graph generation. Only one is supported (default: bundled knowledge-point-qa).")
     dataset.add_argument("--output", default=".", metavar="PATH",
-                         help=f"Output directory or explicit .jsonl path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
+                         help=f"Output directory or file path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file; new paths without a suffix are directories (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
     dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
                          default="free", help="Preferred generated question type; free uses source-grounded open answers (default: free).")
@@ -189,8 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Maximum target Agent turns per scenario; must be positive (required; no default).")
     situation.add_argument("--knowledge", action="append", default=[], metavar="PATH",
                            help="Optional .md or .txt knowledge file; repeat for multiple files (default: no knowledge files).")
-    situation.add_argument("--output", required=True, metavar="PATH",
-                           help="Destination situation JSON (required; no default; existing file requires --force).")
+    situation.add_argument("--output", default="situation.json", metavar="PATH",
+                           help="Output directory or situation JSON file path; a directory gets situation.json (default: situation.json; existing file requires --force).")
     situation.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                            help="Local situation-authoring skill directory containing SKILL.md (default: bundled create-situation).")
     situation.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
@@ -254,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument(
         "--output", default="responses.jsonl", metavar="PATH",
-        help="Destination responses JSONL (default: responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
+        help="Output directory or responses JSONL file path; a directory gets responses.jsonl (default: responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
     )
     runner.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                         help="Use a local method directory containing SKILL.md for single-question runs (default: bundled run-agent-stability; unavailable with --situation-config).")
@@ -340,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
     evaluation.add_argument("responses", metavar="RESPONSES",
                             help="Responses JSONL from run-agent (required; no default).")
     evaluation.add_argument("--output", default="evaluation.json", metavar="PATH",
-                            help="Destination evaluation JSON (default: evaluation.json).")
+                            help="Output directory or evaluation JSON file path; a directory gets evaluation.json (default: evaluation.json).")
     evaluation_method = evaluation.add_mutually_exclusive_group()
     evaluation_method.add_argument("--criteria", metavar="TEXT",
                                    help="Evaluation requirements for the built-in method; mutually exclusive with --skill (default: saved situation rubric or answer correctness).")
@@ -372,7 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("eval_output", metavar="EVALUATION",
                         help="Evaluation JSON produced by eval (required; no default).")
     report.add_argument("--output", default="report.md", metavar="PATH",
-                        help="Destination Markdown report (default: report.md).")
+                        help="Output directory or Markdown file path; a directory gets report.md (default: report.md).")
     report.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                         help="Local report-writing skill directory containing SKILL.md (default: bundled report-evidence-summary for single-question reports; situation reports use built-in rendering unless a skill is supplied).")
     report.add_argument("--model", default=DEFAULT_REPORT_MODEL, metavar="MODEL",
@@ -432,6 +509,11 @@ def _execute(
     situation_provider_factory,
 ) -> int:
     try:
+        filenames = {"run-agent": "responses.jsonl", "eval": "evaluation.json", "report": "report.md"}
+        if args.command in filenames:
+            args.output = str(_resolve_output(args.output, filenames[args.command]))
+        elif args.command == "create" and args.create_command == "situation":
+            args.output = str(_resolve_output(args.output, "situation.json"))
         if args.command == "create":
             if args.create_command.endswith("-skill"):
                 stage = args.create_command.removesuffix("-skill")
@@ -448,6 +530,12 @@ def _execute(
                 skill_arg = (subprocess.list2cmdline([str(destination)]) if os.name == "nt"
                              else shlex.quote(str(destination)))
                 print("Use: " + uses[stage].format(skill=skill_arg))
+                print("\nWork summary")
+                print(f"  Work: Created an editable {stage} method template.")
+                print(f"  Output directory: {destination}")
+                print("  Files:")
+                print(f"    {destination / 'SKILL.md'}\n      Active method instructions loaded by --skill.")
+                print(f"    {destination / 'AUTHORING.md'}\n      Tool contracts, customization guidance and usage examples.")
                 return 0
             if args.create_command == "situation":
                 instructions = args.instructions if args.instructions is not None else args.observe
@@ -463,6 +551,7 @@ def _execute(
                     skill_agent_factory=skill_agent_factory, force=args.force,
                 )
                 print(f"Created situation configuration at {args.output}")
+                _show_work_summary("situation", args.output)
                 return 0
             if args.controlled_variant_probes and args.controlled_variant_topics:
                 parser.error("--controlled-variant-probes and --controlled-variant-topics cannot be used together")
@@ -511,6 +600,7 @@ def _execute(
                 f"provenance={output}.generation.json)"
             )
             print(f"Generated {len(records)} record(s) at {output}{status}")
+            _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
             if args.adapt is not None and (args.project is None or args.page_url is not None):
@@ -541,6 +631,8 @@ def _execute(
                     adapt=args.adapt,
                 )
                 print(f"Completed {completed} situation trial(s) at {args.output}")
+                _show_work_summary("run-agent", args.output, situation=True,
+                                   situation_config=args.situation_config)
                 return 0
             if args.dataset is None:
                 parser.error("DATASET is required unless --situation-config is set")
@@ -578,6 +670,7 @@ def _execute(
                 strategy_agent_factory=skill_agent_factory,
             )
             print(f"Answered {completed} record(s) at {args.output}")
+            _show_work_summary("run-agent", args.output)
             return 0
         if args.command == "eval":
             if args.situation_config:
@@ -597,6 +690,7 @@ def _execute(
                       f"judge_error={summary['judge_error']}, "
                       f"execution_error={summary['execution_error']}, "
                       f"invalid={summary['invalid']}, indeterminate={summary['indeterminate']})")
+                _show_work_summary("eval", args.output, situation=True)
                 return 0
             result = evaluate(
                 args.responses,
@@ -612,6 +706,7 @@ def _execute(
                 skill_agent_factory=skill_agent_factory,
             )
             print(f"Evaluated {result['summary']['evaluated']} record(s) at {args.output}")
+            _show_work_summary("eval", args.output)
             return 0
         destination = create_report(
             args.eval_output,
@@ -622,6 +717,7 @@ def _execute(
             force=args.force,
         )
         print(f"Created evaluation report at {destination}")
+        _show_work_summary("report", destination)
         return 0
     except NeedsConfirmation as error:
         print(f"lladar: {error}", file=sys.stderr)
