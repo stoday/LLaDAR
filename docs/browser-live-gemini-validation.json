@@ -1,0 +1,70 @@
+{
+  "recorded_at": "2026-10-09T13:42:23.198629+08:00",
+  "model": "gemini:gemini-3.8-flash",
+  "route": "dom",
+  "dom_binding_version": 1,
+  "completion_observation": "busy_to_idle",
+  "verification": "automated_independent_local_ui_reference",
+  "calls": 4,
+  "max_calls": 4,
+  "exact_dataset_answers": 2,
+  "live_test_seconds": 35.98,
+  "website_timeout_seconds": 60,
+  "provider_call_timeout_seconds": 180,
+  "events": [
+    {
+      "stage": "calibration",
+      "status": "final",
+      "usage": {
+        "promptTokenCount": 314,
+        "candidatesTokenCount": 11,
+        "totalTokenCount": 397,
+        "thoughtsTokenCount": 72
+      }
+    },
+    {
+      "stage": "verification",
+      "status": "final",
+      "usage": {
+        "promptTokenCount": 314,
+        "candidatesTokenCount": 11,
+        "totalTokenCount": 406,
+        "thoughtsTokenCount": 81
+      }
+    },
+    {
+      "stage": "dataset",
+      "status": "final",
+      "usage": {
+        "promptTokenCount": 326,
+        "candidatesTokenCount": 23,
+        "totalTokenCount": 588,
+        "thoughtsTokenCount": 239
+      }
+    },
+    {
+      "stage": "dataset",
+      "status": "final",
+      "usage": {
+        "promptTokenCount": 318,
+        "candidatesTokenCount": 15,
+        "totalTokenCount": 666,
+        "thoughtsTokenCount": 333
+      }
+    }
+  ],
+  "total_usage": {
+    "promptTokenCount": 1272,
+    "candidatesTokenCount": 60,
+    "thoughtsTokenCount": 725,
+    "totalTokenCount": 2057
+  },
+  "deadline_regression": {
+    "timeout_seconds": 10,
+    "requests": 1,
+    "retry": false,
+    "worker_terminated": true,
+    "full_provider_suite_passed": 23
+  },
+  "scope": "Synthetic Streamlit 1.65.0 answers extracted by the real Gemini API; not arbitrary-site or human MATCH acceptance."
+}

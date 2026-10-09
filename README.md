@@ -109,6 +109,8 @@ Which target option should you use?
 - `--project PATH --service-url URL`: inspect the same project, but use an already running test service. The URL supplies its **base address**, not its startup command or API contract. LLaDAR still learns the HTTP method, route, payload, authentication requirements, and response format from the project; it does not start or stop that existing service.
 - `--page-url URL`: use a normal question webpage without providing project source. Sign in and submit a calibration question in LLaDAR's browser; LLaDAR records the request for replay and uses the model to extract answers from the captured responses.
 
+Native WebSocket supports sequential text/JSON question frames when the server normally closes the connection after each answer (code 1000). During calibration, a completed, correlated DOM interaction can provide a fallback for persistent or binary protocols. The selected route is frozen for verification and dataset trials; a failure stops later submissions. DOM support covers native Streamlit chat (validated with 1.65.0) and accessible form chats with a unique input placeholder, named submit button, named conversation log, user/assistant message roles and observed busy-to-idle completion, including named same-origin iframes. Other page structures require adaptation; unchanged text alone is never completion evidence.
+
 For an already running test service:
 
 ```bash

@@ -284,7 +284,7 @@ def test_run_agent_help_explains_browser_setup_handoffs_and_artifacts(capsys):
         "--service-url does not discover an arbitrary API",
         "3600 seconds / 60 minutes",
         "300 seconds (5 minutes)",
-        "--timeout controls website requests, not navigation",
+        "--timeout controls website response waiting, not navigation",
         "--allow-response-model-transfer",
         "real response content",
         "gemini:gemini-3.8-flash",
@@ -298,6 +298,15 @@ def test_run_agent_help_explains_browser_setup_handoffs_and_artifacts(capsys):
         "project mode only",
         "requires terminal stdin and stderr",
         "stops before opening the browser",
+        "Additional guidance:",
+        "Sign-in and calibration:",
+        "Review and approval:",
+        "Execution limits:",
+        "Outputs and local session:",
+        "scheduled dataset trials (including repeats)",
+        "deadline starts after approval",
+        "retains local sign-in state",
+        "removed when the browser target closes",
     ):
         assert explanation in help_text
 

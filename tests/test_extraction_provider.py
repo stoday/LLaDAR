@@ -110,15 +110,18 @@ def test_finish_categories_do_not_collapse_or_echo_provider_text(finish, reason)
 
 
 def test_deadline_kills_dripping_worker_and_does_not_retry():
+    # Allow Windows worker startup to reach the deliberately dripping response.
+    # The wall-clock deadline must still kill it with one request and no retry.
+    timeout_seconds = 10
     with provider_site(drip=True) as (endpoint, requests, disconnected):
-        provider = GeminiExtractionProvider(model_destination="gemini:fixture-model", timeout_seconds=2,
+        provider = GeminiExtractionProvider(model_destination="gemini:fixture-model", timeout_seconds=timeout_seconds,
                                             max_output_tokens=8192, api_key="fixture-key", endpoint=endpoint)
         started = time.monotonic()
         with pytest.raises(ExtractionError, match="extraction_time_exhausted"):
-            provider.extract({"content_type":"text/plain", "body":"raw answer"}, timeout_seconds=2)
-        assert time.monotonic() - started < 4
+            provider.extract({"content_type":"text/plain", "body":"raw answer"}, timeout_seconds=timeout_seconds)
+        assert timeout_seconds <= time.monotonic() - started < timeout_seconds + 3
         assert len(requests) == 1
-        assert disconnected.wait(2)
+        assert disconnected.wait(5)
 
 
 @pytest.mark.parametrize("model_input", [

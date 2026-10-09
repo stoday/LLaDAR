@@ -93,6 +93,8 @@ lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 - `--project PATH --service-url URL`：仍檢查專案，但改用已啟動的測試服務。URL 提供的是**服務基底位址**，不是啟動指令或 API 契約；HTTP 方法、路徑、Payload、驗證需求與回應格式仍從專案理解，不會啟動或關閉該既有服務。
 - `--page-url URL`：不必提供專案原始碼，改用正常問答網頁。在 LLaDAR 瀏覽器登入並送出校正題後，錄製請求供重播，再由模型從擷取的回應中抽取答案。
 
+原生 WebSocket 支援文字／JSON 問句 frame，但伺服器須在每題回答後正常關閉連線（code 1000）。校正時，持續開啟或二進位協定可退回同次互動的 DOM 路徑，但必須確認本題答案及完成狀態。選定路徑後，驗證與資料集測試固定使用；失敗停止後續派送。DOM 支援原生 Streamlit chat（已驗證 1.65.0），以及具有唯一輸入 placeholder、具名送出按鈕、具名對話 log、user／assistant 訊息角色及 busy→idle 完成狀態的表單式聊天頁，包含具名同源 iframe。其他頁面結構須另行適配；文字不再變動不代表完成。
+
 已啟動測試服務的範例：
 
 ```bash

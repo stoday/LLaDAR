@@ -6,6 +6,7 @@ import os
 import shlex
 import subprocess
 import sys
+import textwrap
 from typing import Callable, Any
 from collections.abc import Sequence
 from datetime import datetime
@@ -13,6 +14,7 @@ from importlib import metadata
 from pathlib import Path
 
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
+from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
 from .command_log import command_log
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
@@ -25,6 +27,15 @@ from .situation import create_situation, evaluate_situation, run_situation
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    def _fill_text(self, text: str, width: int, indent: str) -> str:
+        if text.startswith("Additional guidance:"):
+            return "\n".join(
+                textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent)
+                if line else ""
+                for line in text.splitlines()
+            )
+        return super()._fill_text(text, width, indent)
+
     def _get_help_string(self, action: argparse.Action) -> str:
         if action.help is not None and (
             action.default is None or "(default:" in action.help
@@ -176,7 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="Create a test dataset, situation configuration, or editable skill template.",
         formatter_class=_HelpFormatter,
         parents=[log_options],
-        epilog="\n\n".join(
+        epilog="Available commands:\n\n" + "\n\n".join(
             f"{title}:\n" + "\n".join(
                 f"  {name:<20} {description}"
                 for name, description in entries.items()
@@ -290,24 +301,36 @@ def build_parser() -> argparse.ArgumentParser:
             "or use --situation-config for generated multi-turn conversations with a project session driver."
         ),
         epilog=(
-            "Browser setup: python -m playwright install chromium. --page-url always uses the guided terminal workflow; "
+            "Additional guidance:\n\n"
+            "Browser setup:\n"
+            "Install Chromium: python -m playwright install chromium. --page-url always uses the guided terminal workflow; "
             "omit --interactive and --no-interactive (project mode only). "
-            "Browser mode requires terminal stdin and stderr; without them it stops before opening the browser. With --page-url, "
+            "Browser mode requires terminal stdin and stderr; without them it stops before opening the browser.\n\n"
+            "Sign-in and calibration:\n"
+            "With --page-url, "
             "sign in yourself in the isolated browser, submit the exact calibration question "
-            "shown in the terminal, and wait for the site's final answer before pressing Enter. "
+            "shown in the terminal, and wait for the site's final answer before pressing Enter.\n\n"
+            "Review and approval:\n"
             "Review the website requests, model destination, real response content transfer and budgets together. "
             "One YES approves BOTH website requests and model transfer; the two approval flags still grant only their named scopes. "
             "Then type MATCH after independent verification in the color terminal review (stderr), not an HTML tab. "
             "Approval flags do not skip review. NO_COLOR or TERM=dumb disables color; redirected review output is refused. "
             "The full verification response appears in terminal scrollback; no review file is created. "
-            "Browser sign-in and capture are still required. "
-            "At most N+2 model calls for N scheduled trials, each capped at 8192 output tokens, share 60 minutes. "
-            "Input is capped at 120 KiB including JSON framing; no truncation, retries or parser cache. "
-            "On HTTP 401/403, the run stops; sign in again before starting a newly approved run. "
-            "Final answers are saved in responses and trials; cookies, tokens and raw streams are not. "
-            "Each captured response is limited to 1 MiB of decoded bytes; --timeout does not raise this limit. "
-            "Browser startup and page navigation separately allow 300 seconds (5 minutes); --timeout controls website requests, not navigation. "
-            "The local session stays in .lladar/browser-profiles. "
+            "Browser sign-in and capture are still required.\n\n"
+            "Execution limits:\n"
+            "At most N+2 model calls: calibration + verification + N scheduled dataset trials (including repeats). "
+            "Each call is capped at 8192 output tokens. A shared 60-minute deadline starts after approval, "
+            "before calibration extraction, and also includes verification, MATCH review and dataset execution. "
+            f"Input is capped at {MAX_INPUT_BYTES // 1024} KiB including JSON framing; no truncation, chunking or automatic extraction retries. "
+            "On HTTP 401/403, further browser requests are blocked; sign in again before starting a newly approved run. "
+            f"Each captured response is limited to {MAX_CAPTURE_BYTES // (1024 * 1024)} MiB of decoded bytes; --timeout does not raise this limit. "
+            "Browser startup and page navigation separately allow 300 seconds (5 minutes); --timeout controls website response waiting, not navigation. "
+            "Verification and dataset requests are also bounded by the remaining shared deadline.\n\n"
+            "Outputs and local session:\n"
+            "Final answers are saved in responses and trials; these output files exclude cookies, tokens and raw streams. "
+            "By default, the isolated browser profile retains local sign-in state in .lladar/browser-profiles "
+            "under the working directory. --fresh-browser-profile uses a temporary signed-out profile removed when the browser target closes.\n\n"
+            "Project mode:\n"
             "--service-url does not discover an arbitrary API; it is for an inspected project."
         ),
         formatter_class=_HelpFormatter,
@@ -345,7 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Deterministic random selection seed for single-question trials (default: 0).")
     runner.add_argument(
         "--model", default=None, metavar="MODEL",
-        help=f"Project coding model (default: {DEFAULT_ADAPTER_MODEL}), or browser answer extraction model (default: gemini:gemini-3.8-flash; Gemini API only).",
+        help=f"Project coding model (default: {DEFAULT_ADAPTER_MODEL}), or browser answer extraction model (default: {DEFAULT_EXTRACTION_MODEL}; Gemini API only).",
     )
     runner.add_argument(
         "--max-input-tokens", type=int, metavar="N",
@@ -393,7 +416,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument(
         "--allow-response-model-transfer", action="store_true",
-        help="Approve real captured response content transfer to --model for this run only; N+2 calls for N trials, 8192 output tokens per call, shared 60 minutes. Website requests and local verification remain separate (default: off).",
+        help="Approve real captured response content transfer to --model for this run only; at most N+2 calls for N scheduled dataset trials including repeats, 8192 output tokens per call, shared 60 minutes from post-approval calibration extraction. Website requests and local verification remain separate (default: off).",
     )
     runner.add_argument(
         "--interactive", action=argparse.BooleanOptionalAction, default=None,

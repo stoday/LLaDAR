@@ -19,6 +19,7 @@ MAX_OUTPUT_BYTES = 256 * 1024
 _REASONS = frozenset({
     "response_transfer_not_approved", "reference_required", "reference_declined", "reference_mismatch",
     "request_identity_mismatch", "independent_observation_required", "completion_unconfirmed",
+    "dom_binding_ambiguous", "dom_binding_lost", "dom_question_ambiguous", "dom_completion_unconfirmed", "dom_submission_failed",
     "unsupported_response_protocol", "response_size_limit", "provider_input_limit", "sensitive_response",
     "model_incomplete", "model_ambiguous", "model_unsupported", "model_invalid", "extraction_blocked",
     "extraction_budget_exhausted", "extraction_time_exhausted", "invalid_provider_budget",

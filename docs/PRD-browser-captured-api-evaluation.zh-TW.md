@@ -2,6 +2,10 @@
 
 ## Status
 
+2026-10-09 新增設計規格：[校正階段選路與 DOM／可存取性 fallback](PRD-browser-dom-fallback.zh-TW.md)。
+此設計已由使用者確認並實作，支援範圍與驗收證據見補充 PRD：校正時優先通訊擷取，能力不足時評估同次互動的 DOM 路徑；獨立驗證與正式執行固定路徑，失敗立即停止派送。
+只擴充材料擷取，不新增 parser 或長連線重播；本文件其餘直接模型抽取與授權契約維持。
+
 2026-09-25 最新決策：使用者明確要求移除程式解析，不保留為選項。
 本修訂將 browser mode 的答案抽取收斂成唯一途徑：**模型直接閱讀本次回應的結構與內容，
 選取／拼接既有的最終回答，不生成或執行解析程式。**
@@ -69,7 +73,7 @@ session 可重播的提問方式，一次完整揭露並取得網站請求及回
 - 模型直接輸出答案文字，不輸出 Python、腳本、正規表示式、JSON path 或解析 DSL。
 - 所有已支援的文字回應均走這條路，包括看似簡單的 plain text／JSON；沒有無模型捷徑。
 - 每次目標回應獨立抽取，不把前一題回答、期望答案或評分結果混入輸入。
-- 固定本機程式仍接收 HTTP／SSE、解碼字元與標準傳輸封裝、關聯 request、處理大小限制。
+- 固定本機程式接收 HTTP／SSE／原生文字 WebSocket、解碼字元與標準傳輸封裝、關聯 request、處理大小限制。
   它不依答案欄位名／事件名選答案，不以另一套語意規則覆蓋模型結果。
 - 結果格式／長度／身分／完成狀態檢查不等於內容正確的證明；忠實度另由 fixture
   的獨立基準與真網站的本機人工核對驗收。
@@ -83,7 +87,7 @@ session 可重播的提問方式，一次完整揭露並取得網站請求及回
 1. 使用者只提供網站頁面 URL，不需知道 method、endpoint、headers、Cookie 或 payload。
 2. 使用者在 LLaDAR 專用瀏覽器手動登入，不把密碼、OTP、CAPTCHA 或 session 貼進 CLI。
 3. 使用者只做一次正常 UI 校準，不需撰寫 parser、指定欄位或辨認網站框架。
-4. 同一流程支援已能擷取的文字／JSON／NDJSON／SSE 回應，模型逐次理解封裝。
+4. 同一流程支援已能擷取的文字／JSON／NDJSON／SSE 與每題正常關閉的原生文字 WebSocket 回應，模型逐次理解封裝。
 5. 模型保留目標的完整最終回答，包括錯誤、不確定、拒答與原有語言，不代答或美化。
 6. 使用者在同一個提示核准網站請求數、模型目的地、真實回應傳輸範圍與模型用量／時間上限。
 7. 使用者能重用仍有效的 LLaDAR-owned profile，或明確選擇全新 profile。
@@ -120,8 +124,9 @@ Transport capability 與答案抽取為不同 Seam；前者新增可觀察協定
   材料及 request body 不交給抽取模型，也不存進一般 sidecar。
 - 支援範圍按可觀察 transport 區分，不按 React、Vue、Angular 等框架列名單。初期擷取
   HTTP fetch/XHR、GraphQL-over-HTTP 的 plain text、JSON、NDJSON、SSE 文字材料。
-- 文字 WebSocket、其他 custom streaming、binary、gRPC-web 或 rendered-answer route
-  仍須各自實作並驗證擷取能力，不能宣稱換成 LLM 就自動支援。
+- 原生文字 WebSocket 支援每題正常關閉的單一問句 frame，詳見 2026-10-09 修訂。
+  長連線及二進位協定的直接 transport 重播仍須個別實作；已支援的 DOM 路徑可使用同次
+  校正互動的可見答案與可信完成證據，詳見 DOM fallback 補充 PRD。不能宣稱換成 LLM 就自動支援。
 - 不讀取頁面任意最後一則訊息、不混用其他 request 或前一題的回應。可信宿主產生
   request identity 與 provenance，模型回傳的身分字串不能取代它。
 - 完成狀態來自可信的傳輸結束或明確本機觀察，不由看到某個常見答案欄位決定。持續
@@ -359,3 +364,18 @@ Browser 測試在明確配置 Chromium 的專用 CI job 執行；非 browser 測
 
 本版有意採單一路徑，不再維護多種答案解析政策。代價是每題模型成本與真實回答的資料
 傳輸要求；不同意資料傳輸時就不執行 browser mode。這個限制必須在開始批次前清楚揭露。
+
+## 2026-10-09：每題關閉的文字 WebSocket
+
+使用者確認第一版僅支援「每題回答後會關閉」的原生 WebSocket。
+
+- 問句為文字／JSON frame，校準 marker 在單一送出 frame 值中恰好出現一次。
+- 收到的文字 frame 順序及邊界保留為 JSON 字串陣列，沿用既有模型抽取，不依事件名選答案。
+- 校準及每次重播必須觀察正常關閉（code 1000 且 wasClean）；人工完成確認或常見 done 欄位不能取代此要求。
+- 校準若完成手動操作後連線仍開啟，回報 completion_unconfirmed；自動重播若未正常關閉則逾時停止，不接受部分答案。
+- 每題重建相同 URL／subprotocol 的原生連線，沿用受控瀏覽器 Cookie。只送出一個替換後的問句 frame，不重播登入或初始化操作，不自動重試。
+- 重疊送出、二進位回應、異常關閉及超過 1 MiB 都停止；frame 累計及 JSON envelope 都受大小限制。
+- 不支援長連線、Socket.IO、二進位 Streamlit、額外初始化協定、並行多工或無法關聯的推播，不宣稱支援所有 WebSocket 網站。
+- 本機真 WebSocket／Chromium fixture 須驗證校準、重播、多題隔離、JSON escaping、完成、逾時與限制。真網站／真模型驗收另計。
+
+2026-10-09 補充實測：原生 Streamlit 1.65.0 問答頁正常回覆，但使用二進位長連線，現有 `--page-url` 校正擷取逾時。此案例保留為負向相容性測試，詳見 [Streamlit 實測紀錄](streamlit-browser-validation.zh-TW.md)，不擴大本版支援範圍。

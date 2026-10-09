@@ -89,6 +89,9 @@ class CapturedInteraction:
     headers: dict[str, str]
     request_body: str
     response: ObservedResponse
+    socket_protocols: tuple[str, ...] = ()
+    dom_binding: dict[str, Any] | None = None
+    protected_values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, repr=False)
@@ -101,13 +104,15 @@ class RequestTemplate:
     request_body: str
     marker: str
     question_location: str
+    socket_protocols: tuple[str, ...] = ()
+    dom_binding: dict[str, Any] | None = None
 
     @classmethod
     def from_interaction(cls, interaction: CapturedInteraction, marker: str) -> "RequestTemplate":
         content_type = cls._content_type(interaction.headers)
         if content_type.startswith("multipart/"):
             raise ValueError("Captured multipart requests are not supported for safe replay")
-        query_count = sum(
+        query_count = 0 if interaction.method == "WEBSOCKET" else sum(
             value.count(marker)
             for _name, value in parse_qsl(urlsplit(interaction.url).query, keep_blank_values=True)
         )
@@ -121,6 +126,8 @@ class RequestTemplate:
             request_body=interaction.request_body,
             marker=marker,
             question_location="query" if query_count else "body",
+            socket_protocols=interaction.socket_protocols,
+            dom_binding=interaction.dom_binding,
         )
 
     @staticmethod
@@ -230,6 +237,14 @@ class BrowserRequestFailure(RuntimeError):
         super().__init__("Browser request failed: " + self.reason)
 
 
+class BrowserDomFailure(ExtractionError):
+    """Host-authored DOM failure with explicit submission evidence."""
+
+    def __init__(self, reason: str, *, request_attempted: bool):
+        self.request_attempted = request_attempted
+        super().__init__(reason)
+
+
 class BrowserRequestTimeout(TimeoutError):
     """A bounded website wait expired; only numeric transport metadata is retained."""
 
@@ -280,6 +295,8 @@ def browser_failure_diagnostic(error: BaseException, evidence: dict) -> dict:
         },
         "requests_stopped": True,
     }
+    if isinstance(error, BrowserDomFailure):
+        diagnostic["request_attempted"] = error.request_attempted
     if isinstance(error, (BrowserRequestFailure, BrowserAuthenticationRequired, BrowserRequestTimeout)):
         status = _safe_http_status(error.http_status)
         if status is not None:
@@ -488,7 +505,8 @@ class BrowserTarget:
         marker = self.calibration_question if self.calibration_question is not None else "LLaDAR calibration " + secrets.token_hex(12)
         try:
             with self._progress.waiting("Capturing calibration request and website response"):
-                interaction = self.driver.capture_calibration(marker, self._manual_calibration)
+                calibrate = getattr(self.driver, "capture_route_calibration", self.driver.capture_calibration)
+                interaction = calibrate(marker, self._manual_calibration)
             self._response_progress(interaction.response)
             with self._progress.waiting("Parsing captured request"):
                 template = RequestTemplate.from_interaction(interaction, marker)
@@ -497,6 +515,7 @@ class BrowserTarget:
             raise
         self.evidence = {
             "mode": "browser",
+            "browser_route": "dom" if interaction.method == "DOM" else "transport",
             "origin": self.origin,
             "path_shape": _redacted_path_shape(interaction.url),
             "method": interaction.method.upper(),
@@ -505,6 +524,12 @@ class BrowserTarget:
             "status": "calibrated",
             "stage": "run_consent",
         }
+        if interaction.method == "DOM":
+            self.evidence["dom_binding_version"] = 1
+            self.evidence["completion_observation"] = "busy_to_idle"
+            self.output_fn("Using webpage components; completion is observed from this question's busy-to-idle state.")
+        else:
+            self.output_fn("Using captured website traffic for replay.")
         try:
             options = self.extraction_options
             response_input(interaction.response, _protected_values(interaction))
@@ -601,7 +626,7 @@ class BrowserTarget:
 
 def _protected_values(interaction: CapturedInteraction) -> tuple[str, ...]:
     """Known request credentials stay local; echoed values block transfer entirely."""
-    values = []
+    values = [*interaction.socket_protocols, *interaction.protected_values]
     for name, value in interaction.headers.items():
         if name.lower() in {"authorization", "proxy-authorization", "x-api-key", "api-key", "x-csrf-token", "x-xsrf-token"}:
             values.extend((value, value.removeprefix("Bearer ")))

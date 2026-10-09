@@ -27,7 +27,8 @@ classifiers = [
 lladar = "lladar.cli:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "websockets>=15,<16"]
+streamlit-test = ["streamlit>=1.57,<2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -40,4 +41,5 @@ addopts = "-q -m 'not browser'"
 testpaths = ["tests"]
 markers = [
   "browser: tests that launch the explicitly provisioned Playwright Chromium browser",
+  "live_gemini: opt-in tests that send synthetic answers to the real Gemini API and may incur charges",
 ]
