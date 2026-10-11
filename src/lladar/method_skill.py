@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from .exceptions import LladarError
+from .exceptions import LladarError, ProviderError
 from .model_profiles import resolve_model_profile
 
 
@@ -25,7 +25,7 @@ def resolve_skill(skill: str | Path | None, builtin: Path) -> Path:
     return path
 
 
-def invoke_skill(
+def _invoke_skill(
     *,
     skill: Path,
     tools: dict[str, Callable[..., Any]],
@@ -55,3 +55,13 @@ def invoke_skill(
     if not isinstance(files, dict) or "SKILL.md" not in files:
         raise LladarError("skill execution did not provide SKILL.md evidence")
     return evidence
+
+
+def invoke_skill(**options) -> dict[str, Any]:
+    """Bound provider retries without retrying target-Agent requests."""
+    for attempt in range(1, 4):
+        try:
+            return _invoke_skill(**options)
+        except ProviderError:
+            if attempt == 3:
+                raise

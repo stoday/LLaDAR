@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 from threading import Event, Thread
 from typing import Any, TextIO
+
+from tqdm import tqdm
 
 
 _COLORS = {
@@ -38,6 +40,13 @@ class ProgressReporter:
         self.enabled = enabled
         self.stream = stream if stream is not None else sys.stderr
         self.started_at = time.perf_counter()
+        self.terminal = getattr(self.stream, "terminal", self.stream)
+        self.bars: dict[str, tqdm] = {}
+        self.last_progress: dict[str, float] = {}
+        from .work_session import current_session
+        session = current_session()
+        if session is not None:
+            session.reporters.append(self)
         self.use_color = bool(
             enabled
             and getattr(self.stream, "isatty", lambda: False)()
@@ -60,7 +69,8 @@ class ProgressReporter:
         marker = f"[{label}]"
         if self.use_color:
             marker = f"{_COLORS.get(label, '')}{marker}{_RESET}"
-        print(f"{timestamp} [+{elapsed:.3f}s] {marker} {message}", file=self.stream, flush=True)
+        with tqdm.external_write_mode(file=self.terminal) if self.bars else nullcontext():
+            print(f"{timestamp} [+{elapsed:.3f}s] {marker} {message}", file=self.stream, flush=True)
 
     def pair(self, completed: int, total: int, message: str) -> None:
         """Report legacy pair/runner progress."""
@@ -118,7 +128,26 @@ class ProgressReporter:
         self._progress("GROUP", completed, total, message)
 
     def _progress(self, label: str, completed: int, total: int, message: str) -> None:
-        elapsed = time.perf_counter() - self.started_at
+        if not self.enabled:
+            return
+        if getattr(self.terminal, "isatty", lambda: False)():
+            bar = self.bars.get(label)
+            if bar is None:
+                bar = tqdm(total=total, initial=completed, desc=message,
+                           file=self.terminal, dynamic_ncols=True, ascii=True)
+                self.bars[label] = bar
+            else:
+                bar.total = total
+                bar.set_description_str(message, refresh=False)
+                bar.update(max(0, completed - bar.n))
+            if completed >= total:
+                bar.close()
+                del self.bars[label]
+        now = time.perf_counter()
+        if completed < total and label in self.last_progress and now - self.last_progress[label] < 1.0:
+            return
+        self.last_progress[label] = now
+        elapsed = now - self.started_at
         remaining = max(total - completed, 0)
         eta = elapsed / completed * remaining if completed else None
         eta_text = "estimating" if eta is None else _duration(eta)
@@ -127,7 +156,15 @@ class ProgressReporter:
             f"{completed}/{total} {message} elapsed={_duration(elapsed)} ETA={eta_text}",
         )
 
+    def close(self):
+        for bar in self.bars.values():
+            bar.close()
+        self.bars.clear()
+
     def done(self, item_count: int, *, metric: str = "generated") -> None:
+        for bar in self.bars.values():
+            bar.close()
+        self.bars.clear()
         elapsed = time.perf_counter() - self.started_at
         self.emit("DONE", f"{metric}={item_count} elapsed={_duration(elapsed)}")
 

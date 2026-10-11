@@ -284,7 +284,7 @@ def test_run_agent_help_explains_browser_setup_handoffs_and_artifacts(capsys):
         "--service-url does not discover an arbitrary API",
         "3600 seconds / 60 minutes",
         "300 seconds (5 minutes)",
-        "--timeout controls website requests, not navigation",
+        "--timeout controls website response waiting, not navigation",
         "--allow-response-model-transfer",
         "real response content",
         "gemini:gemini-3.8-flash",
@@ -298,6 +298,15 @@ def test_run_agent_help_explains_browser_setup_handoffs_and_artifacts(capsys):
         "project mode only",
         "requires terminal stdin and stderr",
         "stops before opening the browser",
+        "Additional guidance:",
+        "Sign-in and calibration:",
+        "Review and approval:",
+        "Execution limits:",
+        "Outputs and local session:",
+        "scheduled dataset trials (including repeats)",
+        "deadline starts after approval",
+        "retains local sign-in state",
+        "removed when the browser target closes",
     ):
         assert explanation in help_text
 
@@ -455,7 +464,7 @@ def test_browser_progress_redacts_private_page_path_and_query(tmp_path: Path, ca
     assert received == [page_url]
     captured = capsys.readouterr()
     evidence = captured.out + captured.err + "".join(
-        path.read_text(encoding="utf-8") for path in tmp_path.glob("responses.jsonl*")
+        path.read_text(encoding="utf-8") for path in tmp_path.rglob("*") if path.is_file()
     )
     assert "fixture-url-secret" not in evidence
     assert "private-page-secret" not in evidence
@@ -481,7 +490,7 @@ def test_browser_execution_failure_persists_no_raw_transport_diagnostic(tmp_path
     assert run["failed"] == 3
     captured = capsys.readouterr()
     evidence = captured.out + captured.err + "".join(
-        path.read_text(encoding="utf-8") for path in tmp_path.glob("responses.jsonl*")
+        path.read_text(encoding="utf-8") for path in tmp_path.rglob("*") if path.is_file()
     )
     assert "fixture-error-secret" not in evidence
     assert "fixture-private-body" not in evidence
@@ -567,8 +576,12 @@ def test_safe_browser_cli_errors_keep_actionable_instructions(tmp_path: Path, ca
 
 @pytest.mark.parametrize("save_log", [False, True])
 @pytest.mark.parametrize("calibration_question", [None, "客服幾點開？"])
-def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, calibration_question):
+@pytest.mark.parametrize("output_directory", [False, True])
+def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, calibration_question, output_directory):
     source, output = tmp_path / "dataset.jsonl", tmp_path / "responses.jsonl"
+    destination = tmp_path / "nested" / "results" if output_directory else output
+    if output_directory:
+        output = destination / "responses.jsonl"
     log = tmp_path / "runner.log"
     make_dataset(source, count=1)
 
@@ -580,7 +593,7 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, ca
         exit_code = main(
             [
                 "run-agent", str(source), "--page-url", "https://example.test/chat",
-                "--output", str(output), "--no-verbose",
+                "--output", str(destination), "--no-verbose",
                 *(["--log", str(log)] if save_log else []),
                 *(["--calibration-question", calibration_question] if calibration_question is not None else []),
             ],
@@ -589,9 +602,16 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, ca
         )
 
     assert exit_code == 0 and read_records(output)[0]["actual_response"] == "browser:question-1"
+    assert Path(str(output) + ".trials.jsonl").is_file()
+    assert Path(str(output) + ".run.json").is_file()
     assert log.exists() is save_log
     if save_log:
         assert "Answered 1 record(s)" in log.read_text(encoding="utf-8")
+        saved_log = log.read_text(encoding="utf-8")
+        assert "Work summary" in saved_log
+        assert str(output.resolve()) in saved_log
+        assert str(Path(str(output.resolve()) + ".trials.jsonl")) in saved_log
+        assert "Individual repeated trials" in saved_log
 
 
 def test_calibration_question_requires_browser_target_before_execution(tmp_path):

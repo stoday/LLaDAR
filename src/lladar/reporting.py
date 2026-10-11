@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .exceptions import EvaluationError
+from .model_profiles import resolve_model_profile
 from .method_skill import SkillAgentFactory, invoke_skill, resolve_skill
 
 
@@ -18,23 +19,86 @@ Use only the supplied evaluation facts. Submit overview, findings, and
 limitations; the host renders all measurements and record evidence."""
 
 
+from .work_session import current_session, stage_session, publish_bundle, publication_metadata
+from .submissions import Submissions
+from .progress import ProgressReporter
+
+
 class ReportWorkspace:
-    def __init__(self) -> None:
-        self.narrative: dict[str, str] | None = None
+    def __init__(self, evaluation=None, reporter=None):
+        self.submissions = Submissions("report_sections")
+        self.facts = evaluation or {}
+        self.references = {"facts": self.facts, **self.facts}
+        for item in self.facts.get("items", []):
+            self.references[item.get("trial_id", f"trial_{item['record_index']}_{item['trial']}")] = item
+        self.reporter = reporter
 
-    def submit_report(self, narrative: dict[str, str]) -> dict[str, bool]:
-        fields = {"overview", "findings", "limitations"}
-        if not isinstance(narrative, dict) or set(narrative) != fields or any(not isinstance(narrative[key], str) or not narrative[key].strip() for key in fields):
-            raise ValueError("report must contain non-empty overview, findings, and limitations")
-        if any(re.search(r"\d", narrative[key]) for key in fields):
-            raise ValueError("report prose must not introduce numeric claims")
-        self.narrative = {key: narrative[key].strip() for key in fields}
-        return {"accepted": True}
+    @property
+    def narrative(self):
+        values = {key: self.submissions.get(key) for key in ("overview", "findings", "limitations")}
+        if all(value.get("status") == "accepted" for value in values.values()):
+            return {key: value["value"]["text"] for key, value in values.items()}
+        return None
 
+    def validate(self, payload):
+        if not isinstance(payload["text"], str) or not payload["text"].strip():
+            raise ValueError("text must be non-empty")
+        refs = payload["source_refs"]
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or ref not in self.references for ref in refs):
+            raise ValueError("source_refs must identify frozen facts or trials from this evaluation")
+        if re.search(r"\d", payload["text"]):
+            raise ValueError("report prose must not introduce numeric claims; use the deterministic tables")
+        return payload
+
+    def submit_section(self, section: str, text: str, source_refs: list[str], request_id: str | None = None) -> dict:
+        if section not in {"overview", "findings", "limitations"}:
+            return {"status": "needs_revision", "issues": [{"field": "section", "code": "unknown_section",
+                    "message": "Use overview, findings or limitations", "repair_action": "replace_section"}]}
+        result = self.submissions.submit(section, {"text": text, "source_refs": source_refs}, self.validate,
+                                         request_id=request_id, frozen=True)
+        if self.reporter:
+            completed = sum(self.submissions.get(key).get("status") == "accepted"
+                for key in ("overview", "findings", "limitations"))
+            self.reporter.group(completed, 3, "Report sections")
+        return result
+
+    def revise_section(self, item_id: str, request_id: str, revision: int, text: str, source_refs: list[str]) -> dict:
+        if item_id not in {"overview", "findings", "limitations"}:
+            return self.submissions.get("unknown")
+        return self.submissions.submit(item_id, {"text": text, "source_refs": source_refs}, self.validate,
+                                       request_id=request_id, revision=revision, frozen=True)
+
+    def get_section(self, item_id: str) -> dict:
+        return self.submissions.get(item_id)
+
+    def read_report_fact(self, reference: str, start_char: int = 0) -> dict:
+        if reference not in self.references:
+            raise ValueError("unknown fact reference")
+        text = json.dumps(self.references[reference], ensure_ascii=False, sort_keys=True)
+        if type(start_char) is not int or not 0 <= start_char < len(text):
+            raise ValueError("invalid fact start_char")
+        end = min(len(text), start_char + 12000)
+        return {"reference": reference, "start_char": start_char, "end_char": end,
+                "text": text[start_char:end], "next_start": end if end < len(text) else None}
+
+    def submit_report(self, narrative: dict[str, str]) -> dict:
+        if not isinstance(narrative, dict) or set(narrative) != {"overview", "findings", "limitations"}:
+            return {"status": "needs_revision", "issues": [{"field": "narrative", "code": "invalid_fields",
+                "message": "Submit overview, findings and limitations", "repair_action": "revise_item"}]}
+        results = {key: self.submit_section(key, text, ["facts"]) for key, text in narrative.items()}
+        return {"accepted": True} if self.narrative is not None else {"status": "needs_revision", "accepted": False,
+            "sections": results, "error": "report has unresolved sections"}
+
+
+@stage_session("report")
 
 def create_report(eval_output: str | Path, output: str | Path, *, skill: str | Path | None = None,
                   model: str = DEFAULT_REPORT_MODEL, env_file: str | Path = ".env",
-                  skill_agent_factory: SkillAgentFactory | None = None, force: bool = False) -> Path:
+                  skill_agent_factory: SkillAgentFactory | None = None, force: bool = False,
+                  review_agent_factory: SkillAgentFactory | None = None,
+                  verbose: bool = True, resume: str | Path | None = None,
+                  max_input_tokens: int | None = None, max_output_tokens: int | None = None) -> Path:
+    profile = resolve_model_profile(model,max_input_tokens=max_input_tokens,max_output_tokens=max_output_tokens)
     source, target = Path(eval_output), Path(output)
     if target.exists() and not force:
         raise FileExistsError(f"output already exists: {target}")
@@ -44,19 +108,83 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         raise EvaluationError(f"could not read evaluation JSON: {source}") from error
     if isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation":
         return _situation_report(evaluation, target, skill=skill, model=model,
-                                 env_file=env_file, skill_agent_factory=skill_agent_factory)
+                                 env_file=env_file, skill_agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
     required = {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"}
-    optional = {"evaluation_settings", "max_input_tokens", "max_output_tokens"}
+    optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
     if not isinstance(evaluation, dict) or not required <= set(evaluation) <= required | optional:
         raise EvaluationError("evaluation JSON does not match the current contract")
     selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
-    workspace = ReportWorkspace()
-    evidence = invoke_skill(skill=selected_skill, tools={"submit_report": workspace.submit_report},
-                            request={"stage": "report", "facts": {key: evaluation[key] for key in ("plan", "summary", "aggregates", "stability", "evaluation_settings") if key in evaluation}},
-                            model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
-                            agent_factory=skill_agent_factory)
+    reporter = ProgressReporter(verbose)
+    workspace = ReportWorkspace(evaluation, reporter)
+    if workspace.narrative is None:
+        with reporter.waiting("Writing report", label="REPORT"):
+            evidence = invoke_skill(skill=selected_skill, tools={"submit_report": workspace.submit_report, "submit_section": workspace.submit_section,
+                    "revise_section": workspace.revise_section, "get_section": workspace.get_section,
+                    "read_report_fact": workspace.read_report_fact},
+                                    request={"stage": "report", "completed_sections": [key for key in ("overview", "findings", "limitations")
+                                        if workspace.submissions.get(key).get("status") == "accepted"],
+                                        "facts": {key: evaluation[key] for key in ("plan", "summary", "aggregates", "evaluation_settings") if key in evaluation}},
+                                    model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
+                                    agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
     if workspace.narrative is None:
         raise EvaluationError("report skill did not submit a report")
+    session = current_session()
+    semantic_review = "not_run_injected_author"
+    if skill_agent_factory is None or review_agent_factory is not None:
+        semantic_review = "passed"
+        for repair in range(4):
+            revisions = {key: workspace.submissions.get(key)["revision"] for key in
+                         ("overview", "findings", "limitations")}
+            prior = session.data["state"].get("report_review") if session else None
+            reviews = []
+            def submit_section_review(judgments: list[dict]) -> dict:
+                if not isinstance(judgments, list) or len(judgments) != 3 or {
+                    item.get("section") for item in judgments if isinstance(item, dict)
+                } != set(revisions) or any(set(item) != {"section", "approved", "reason"}
+                    or type(item["approved"]) is not bool or not isinstance(item["reason"], str)
+                    or not item["reason"].strip() for item in judgments):
+                    raise ValueError("review must judge every required section with approved and evidence-bounded reason")
+                reviews[:] = judgments
+                if session:
+                    session.put("report_review", {"revisions": revisions, "judgments": judgments})
+                return {"accepted": True}
+            if prior and prior["revisions"] == revisions and all(item["approved"] for item in prior["judgments"]):
+                reviews = prior["judgments"]
+            else:
+                with reporter.waiting("Checking report support", label="REPORT"):
+                    invoke_skill(skill=selected_skill, tools={"submit_section_review": submit_section_review,
+                        "read_report_fact": workspace.read_report_fact},
+                        request={"stage": "report_review", "sections": workspace.narrative,
+                                 "facts": {key: evaluation[key] for key in ("plan", "summary", "aggregates")}},
+                        model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
+                        agent_factory=review_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
+            if not reviews:
+                raise EvaluationError("report review did not submit all section judgments")
+            unsupported = [item for item in reviews if not item["approved"]]
+            if not unsupported:
+                break
+            updated = dict(workspace.submissions.state)
+            for review in unsupported:
+                draft = dict(updated[review["section"]])
+                draft.update(status="rejected" if draft["revision"] >= 4 else "needs_revision",
+                    issues=[{"field": "text", "code": "unsupported_claim", "message": review["reason"],
+                             "repair_action": "revise_item"}])
+                updated[review["section"]] = draft
+            if session:
+                session.put("report_sections", updated)
+            workspace.submissions.state = updated
+            if repair == 3 or any(updated[item["section"]]["status"] == "rejected" for item in unsupported):
+                raise EvaluationError("report review found unsupported sections; saved drafts require revision")
+            invoke_skill(skill=selected_skill, tools={"submit_report": workspace.submit_report,
+                "submit_section": workspace.submit_section, "revise_section": workspace.revise_section,
+                "get_section": workspace.get_section, "read_report_fact": workspace.read_report_fact},
+                request={"stage": "report", "completed_sections": [key for key in revisions
+                    if updated[key]["status"] == "accepted"], "revision_issues": unsupported,
+                    "facts": {key: evaluation[key] for key in ("plan", "summary", "aggregates")}},
+                model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
+                agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
+            if workspace.narrative is None:
+                raise EvaluationError("report sections remain incomplete after review")
     lines = ["# LLaDAR evaluation report", "", workspace.narrative["overview"], "", "## Summary", "", "| Metric | Value |", "| --- | ---: |"]
     lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in evaluation["summary"].items()]
     lines += _evaluation_settings_lines(evaluation)
@@ -90,7 +218,14 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     for item in evaluation["items"]:
         lines.append("| {record_index} | {trial} | {question} | {expected_answer} | {actual_response} | {status} | {values} | {reason} |".format(**{key: _cell(json.dumps(value, ensure_ascii=False, sort_keys=True) if key == "values" else value) for key, value in item.items()}))
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
+    report_sidecar = Path(str(target) + ".report.json")
+    publish_bundle({target: "\n".join(lines).rstrip() + "\n", report_sidecar: json.dumps({
+        "schema_version": 1, "session": publication_metadata(), "status": "complete",
+        "semantic_review": semantic_review,
+        "sections": {key: workspace.submissions.get(key) for key in ("overview", "findings", "limitations")},
+        "source": str(source.resolve())}, ensure_ascii=False, indent=2) + "\n"}, force=force, result=target)
+    reporter.emit("WRITE", f"Report: {target.resolve()}")
+    reporter.done(3, metric="sections")
     return target
 
 
@@ -110,10 +245,11 @@ def _evaluation_settings_lines(evaluation: dict[str, Any]) -> list[str]:
 
 def _situation_report(evaluation: dict[str, Any], target: Path, *,
                       skill: str | Path | None, model: str, env_file: str | Path,
-                      skill_agent_factory: SkillAgentFactory | None) -> Path:
+                      skill_agent_factory: SkillAgentFactory | None,
+                      max_input_tokens: int, max_output_tokens: int) -> Path:
     required = {"kind", "source", "situation_config", "situation_sha256",
                 "evaluator_model", "method", "observe", "summary", "items"}
-    optional = {"evaluation_settings", "max_input_tokens", "max_output_tokens"}
+    optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
     if not required <= set(evaluation) <= required | optional or not isinstance(evaluation["items"], list):
         raise EvaluationError("situation evaluation JSON does not match the current contract")
     narrative = None
@@ -133,7 +269,8 @@ def _situation_report(evaluation: dict[str, Any], target: Path, *,
                          ],
                      }},
                      model=model, env_file=env_file, system_prompt=REPORT_SYSTEM_PROMPT,
-                     agent_factory=skill_agent_factory)
+                     agent_factory=skill_agent_factory,
+                     max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens)
         if workspace.narrative is None:
             raise EvaluationError("report skill did not submit a report")
         narrative = workspace.narrative

@@ -1,40 +1,47 @@
 # LLaDAR
 
-[English](https://stoday.github.io/LLaDAR/) | [繁體中文](https://stoday.github.io/LLaDAR/zh-TW/)
+[English](README.md) | [繁體中文](README.zh-TW.md) · [Documentation](https://stoday.github.io/LLaDAR/)
 
-LLaDAR is a small Agent-evaluation pipeline with four workflows:
+**Generate test cases, run your Agent, and evaluate what it actually says.**
 
-1. Generate questions and expected answers from knowledge.
-2. Run a target Agent and capture its actual responses.
-3. Let an evaluator Agent choose or follow an evaluation method, then compute
-   statistics deterministically in Python.
-4. Render an evidence-bounded Markdown report.
+LLaDAR is a command-line tool for testing Agents and chat websites. Turn your
+knowledge documents into questions and expected answers, collect real responses,
+and get a report with judgments, statistics, and the evidence behind them.
 
-## Installation
+Start with a question set, or create a multi-turn situation to observe how an
+Agent responds as a conversation develops. Describe what you want to evaluate
+in plain language; use a local Skill when you need more control over the method.
+
+## What can you test?
+
+| What you want to learn | How LLaDAR helps |
+| --- | --- |
+| Does the Agent answer according to your documents? | Generate questions and expected answers from your knowledge, then test the target Agent. |
+| How does a deployed chat website respond? | Test supported question pages through a guided browser flow, without supplying project source. |
+| Does the Agent stay consistent across follow-up questions? | Create multi-turn situations with an observation goal and stopping rules. |
+| Does it meet your own evaluation criteria? | Describe the criteria in plain language, or supply a Skill for a custom method. |
+
+For example, you could check whether a support Agent invents a refund policy,
+asks for missing information, or stays consistent when a user follows up.
+
+An evaluator Agent judges the responses; Python computes the statistics.
+Saved answers and record-level evidence let you inspect the judgments and
+reevaluate the same responses with different criteria.
+
+## Quick start
+
+Install LLaDAR (Python 3.11 or 3.12):
 
 ```bash
 python -m pip install lladar
 ```
 
-Python 3.11 and 3.12 are supported. The default model provider reads its
-credentials from `.env` or the process environment.
+Configure your model provider's credentials in `.env` or the process environment.
+Your target Agent also needs its own runtime configuration. Check the installed
+version with `lladar --version`.
 
-Check the installed version with `lladar --version`.
-
-## Record format
-
-Every JSONL line has exactly three fields:
-
-```json
-{"question":"What is Taiwan's capital?","expected_answer":"Taipei","actual_response":null}
-```
-
-`question` and `expected_answer` are non-empty strings. `actual_response` is a
-string or `null`. There are no schema versions and unknown fields are rejected.
-
-## Quick start
-
-Prepare your knowledge documents and target Agent project, then run:
+With your knowledge documents in `./knowledge` and an Agent project in
+`../my-agent`, run:
 
 ```bash
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
@@ -43,10 +50,56 @@ lladar eval responses.jsonl --output evaluation.json
 lladar report evaluation.json --output report.md
 ```
 
-Open `report.md` to review the results. See the workflow options below for
-browser targets, custom evaluation criteria, and multi-turn situations.
+This takes you from **documents → test questions → actual responses → evaluation
+→ report**. Open `report.md` to review the results and individual test evidence.
+You can also use an existing question set or reevaluate saved responses.
+
+### Have a chat website instead?
+
+Replace the `run-agent` command above with:
+
+```bash
+python -m playwright install chromium
+lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl
+```
+
+Use your own question-page URL. LLaDAR opens a browser and guides you through
+sign-in, calibration, approval, and answer verification before running the tests.
+See the [target selection guide](site/guides/run-agent.html#choose-target)
+for supported pages and setup details.
+
+### Decide what a good answer means
+
+For example, evaluate whether the Agent recognizes missing information:
+
+```bash
+lladar eval responses.jsonl --criteria "Check whether the answer asks for missing information rather than inventing facts. Cite evidence from the response." --output evaluation-missing-info.json
+lladar report evaluation-missing-info.json --output report-missing-info.md
+```
+
+For more control, provide a local `SKILL.md` directory with `--skill` to customize
+generation, test scheduling, evaluation, or reporting. The workflow options below
+explain where each method applies.
+
+For adaptive conversations, start with the
+[multi-turn situation example](example_project/situation_demo/README.md).
+For a complete walkthrough with custom methods, see the
+[user guide](site/index.html).
 
 ## Workflow options
+
+All main workflow commands accept an optional `--output` directory or file path.
+Omitting it writes into the current directory: a timestamped
+`test-dataset-YYYYMMDD-HHMMSS.jsonl`, `situation.json`, `responses.jsonl`,
+`evaluation.json`, or `report.md`. With `--output ./artifacts`, the same names
+and their sidecars go into `./artifacts/`. Existing directories, trailing
+separators, and new paths without a suffix are directories; existing files and
+new paths with a suffix are filenames. For a new directory containing a dot,
+use `./results.v1/`. Existing outputs still require `--force`.
+
+After each successful stage, a work summary lists the absolute output directory,
+each generated file and its purpose, and the next command or reading step.
+This summary remains visible with `--no-verbose` and is also saved by `--log`.
 
 Generate a dataset. `--output` accepts an explicit `.jsonl` path (as below),
 or a directory in which the CLI creates a timestamped dataset.
@@ -61,6 +114,23 @@ direct QA or an evidence graph for concept and controlled-variant probes; graphs
 are optional. Python can also produce or repair candidates. Final results are
 validated before publishing. Every dataset includes `dataset.jsonl.generation.json`;
 `dataset.jsonl.graph.json` is written only when a valid graph is used.
+
+To let the Agent discover actual datasets in a public GitHub repository:
+
+```bash
+lladar create test-dataset --from-github https://github.com/hsinmosyi/TWBias --count 20 --output dataset.jsonl
+```
+
+Choose `--knowledge` or `--from-github`. GitHub mode reads repository documents,
+inspects CSV/JSON/JSONL or text data, and can follow documented public direct
+data links. It saves `dataset.generation-report.md` and `dataset.sources.json`
+alongside the usual generation sidecar. The report covers every output question:
+original samples, fixed-version links, transformations, answer origin, model
+review and limits. Generated criteria are identified separately from original
+answers or annotations; review them before using the dataset. Repository code
+is read for context, not executed. Private repositories, sign-in downloads,
+archives and binary formats are not supported. See [GitHub generation](docs/github-dataset-generation.md)
+for resource limits and custom Skill stages.
 
 Graph probes observe how a target maps an inferred concept such as “meal” to
 source-backed peers; they do not have a single correct answer and are reported
@@ -95,6 +165,8 @@ Which target option should you use?
 - `--project PATH`: inspect the project's source and documentation to learn its public interface. A project alone can be enough: when startup details and the required runtime configuration are available, LLaDAR can start the service in an isolated project copy, test it, and stop only the service it started.
 - `--project PATH --service-url URL`: inspect the same project, but use an already running test service. The URL supplies its **base address**, not its startup command or API contract. LLaDAR still learns the HTTP method, route, payload, authentication requirements, and response format from the project; it does not start or stop that existing service.
 - `--page-url URL`: use a normal question webpage without providing project source. Sign in and submit a calibration question in LLaDAR's browser; LLaDAR records the request for replay and uses the model to extract answers from the captured responses.
+
+Native WebSocket supports sequential text/JSON question frames when the server normally closes the connection after each answer (code 1000). During calibration, a completed, correlated DOM interaction can provide a fallback for persistent or binary protocols. The selected route is frozen for verification and dataset trials; a failure stops later submissions. DOM support covers native Streamlit chat (validated with 1.65.0) and accessible form chats with a unique input placeholder, named submit button, named conversation log, user/assistant message roles and observed busy-to-idle completion, including named same-origin iframes. Other page structures require adaptation; unchanged text alone is never completion evidence.
 
 For an already running test service:
 
@@ -326,6 +398,17 @@ The walkthrough deliberately uses:
 See the [Traditional Chinese guide](site/zh-TW/index.html) for the same
 copy-and-run instructions in Chinese.
 
+## Record format
+
+Every JSONL line has exactly three fields:
+
+```json
+{"question":"What is Taiwan's capital?","expected_answer":"Taipei","actual_response":null}
+```
+
+`question` and `expected_answer` are non-empty strings. `actual_response` is a
+string or `null`. There are no schema versions and unknown fields are rejected.
+
 ## Outputs
 
 - `create test-dataset`: three-field JSONL with `actual_response: null` and `<output>.generation.json`; `<output>.graph.json` only when a valid graph is used
@@ -415,3 +498,79 @@ For target integration, also see `adapter_workspace.py`, `project_inventory.py`,
 `target_environment.py` and `service_runtime.py` for execution environments and
 managed services; and `playwright_driver.py`, `response_capture.py`, and
 `answer_extraction.py` for browser operation and response extraction.
+
+## Large inputs and model limits
+
+LLaDAR's download and sampling limits are application safeguards, rather than the
+language model's context limits. The current GitHub-generation budgets are:
+
+| Budget | Current maximum | Purpose |
+| --- | ---: | --- |
+| Ordinary text download | 2 MiB per response | Bound source downloads |
+| CSV/JSONL streaming download for sampling | 16 MiB per file | Bound downloaded source size |
+| Cumulative downloads | 20 MiB | Bound total transfer |
+| Sampling scan | 200,000 logical rows | Bound scanning work |
+| Retained sample | 100 rows | Bound subsequent generation work |
+
+A retained sample must also fit the selected-text and model budgets; 100 rows
+does not guarantee that a sample fits. These limits apply to GitHub generation,
+not to every input or browser response in the pipeline.
+
+Model input/output token budgets are separate. Built-in generation assigns
+source batches of at most 24,000 characters, reduced when the configured model
+input budget is smaller. Characters, UTF-8 bytes and tokens are different units.
+The model receives selected or batched evidence, rather than an entire downloaded
+file in one request.
+
+Increasing `--max-input-tokens` or `--max-output-tokens` does not raise the
+download or sampling caps, or extend the provider's actual model capacity.
+Download caps are currently built-in safeguards, not dedicated CLI options.
+Raising them requires checking scanning, storage, batch merging, cross-batch
+relationships and runtime cost.
+
+Offline tests cover a 100,000-row CSV larger than 2 MiB, CSV fields containing
+newlines, limited JSONL scans, an 84,000-character local text source, and complete
+captures of about 1.7 MB per trial through a callable target. The callable test
+does not change browser capture limits. GB/TB-scale inputs have not been
+validated. Exceeding a budget or encountering a provider/disk failure can still
+stop a stage; a saved session can be resumed using the interruption instructions.
+Sampling and full-data processing are distinguished in the saved evidence.
+
+See the [validation record](docs/validation/recoverable-stages-2026-10-11.zh-TW.md)
+for tested scope and remaining acceptance work.
+
+## Resume interrupted work
+
+Generation, `run-agent`, `eval`, and `report` save a work session next to their
+output, usually `<output>.work`. Continue explicitly with the same inputs,
+model, method and options:
+
+```bash
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl --resume dataset.jsonl.work
+lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl --resume responses.jsonl.work
+lladar eval responses.jsonl --output evaluation.json --resume evaluation.json.work
+lladar report evaluation.json --output report.md --resume report.md.work
+```
+
+Use the session path printed in the work summary if it has a suffix. Python APIs
+accept `resume=Path(...)` too. `--resume` cannot be combined with `--force`.
+Normal runs still support `--force`. If a stage is interrupted, the CLI prints the
+working directory, input/output locations, actual session directory, and a complete
+quoted command to resume with the original options. A run originally authorized
+with `--force` retains that authorization in its session; the suggested resume
+command omits `--force`. Private browser/service URLs are entered locally rather
+than echoed into the command or log.
+Changed inputs, saved evidence, criteria, Skill files or model settings are
+rejected. Completed requests and accepted judgments are reused; a target request
+whose completion is unknown is recorded without automatic replay. Starting a new
+run creates distinct trials.
+
+Keep the work directory until recovery and review are finished. It contains
+source evidence, drafts and captured responses, so apply the same access controls
+as to the original inputs. Credentials are not saved in the session configuration.
+
+Built-in free-question generation uses atomic tools rather than model-written
+candidate files. Large CSV/JSONL sources can be streamed and reproducibly sampled;
+sampling limits and original row IDs are included in the generation report. A
+sample is not a reproduction of the original benchmark. See the
+[implementation and validation record](docs/validation/recoverable-stages-2026-10-11.zh-TW.md).

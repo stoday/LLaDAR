@@ -14,10 +14,11 @@ from .browser_target import (
     CapturedInteraction, RequestTemplate,
     BrowserRequestFailure,
     BrowserRequestTimeout,
-    request_body_marker_count,
+    request_body_marker_count, _protected_values,
 )
-from .answer_extraction import ExtractionError
+from .answer_extraction import ExtractionError, response_input
 from .response_capture import ObservedResponse, ResponseObservationSource
+from .websocket_capture import WEBSOCKET_CAPTURE_SCRIPT
 
 
 _FORBIDDEN_REPLAY_HEADERS = {
@@ -383,7 +384,7 @@ class PlaywrightBrowserDriver:
             raise RuntimeError(CHROMIUM_SETUP_MESSAGE) from error
         try:
             self.context.set_default_navigation_timeout(_NAVIGATION_TIMEOUT_MS)
-            self.context.add_init_script(_STREAM_CAPTURE_SCRIPT)
+            self.context.add_init_script(_STREAM_CAPTURE_SCRIPT + WEBSOCKET_CAPTURE_SCRIPT)
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             navigation = self.page.goto(
                 page_url,
@@ -420,10 +421,33 @@ class PlaywrightBrowserDriver:
     def _matches_marker(cls, request, marker: str) -> bool:
         return cls._marker_count(request, marker) == 1
 
-    def capture_calibration(
+    def capture_calibration(self, marker, prompt):
+        return self._capture_calibration(marker, prompt)
+
+    def capture_route_calibration(self, marker, prompt):
+        from .dom_capture import DOM_CAPTURE_SCRIPT
+        self.context.add_init_script(DOM_CAPTURE_SCRIPT)
+        self.context.add_init_script("globalThis.__lladarDomMarker = " + json.dumps(marker) + ";")
+        for page in self.context.pages:
+            for frame in self._dom_frames(page):
+                frame.evaluate(DOM_CAPTURE_SCRIPT)
+                frame.evaluate("m => globalThis.__lladarDom.start(m)", marker)
+        try:
+            return self._capture_calibration(marker, prompt, dom_fallback=True)
+        finally:
+            self.context.add_init_script("globalThis.__lladarDomMarker = null;")
+            for page in self.context.pages:
+                for frame in self._dom_frames(page):
+                    try:
+                        frame.evaluate("() => globalThis.__lladarDom?.stop()")
+                    except Exception:
+                        pass
+
+    def _capture_calibration(
         self,
         marker: str,
         prompt: Callable[[str], bool | None],
+        *, dom_fallback: bool = False,
     ) -> CapturedInteraction:
         capture = self._observations.begin_request(marker)
         matches = []
@@ -452,10 +476,11 @@ class PlaywrightBrowserDriver:
         )
         self.context.add_init_script(
             "globalThis.__lladarCalibrationMarker = " + json.dumps(marker) + ";"
+            "globalThis.__lladarWebSockets.setMarker(globalThis.__lladarCalibrationMarker);"
         )
         for page in self.context.pages:
             try:
-                page.evaluate("marker => globalThis.__lladarStreams.setMarker(marker)", marker)
+                page.evaluate("marker => { globalThis.__lladarStreams.setMarker(marker); globalThis.__lladarWebSockets.setMarker(marker); }", marker)
             except Exception:
                 continue
         try:
@@ -481,8 +506,33 @@ class PlaywrightBrowserDriver:
                         flush=True,
                     )
                     progress_at = time.monotonic() + 30
-                if len(matches) > 1 or len(captures) > 1:
+                if len(matches) > 1 or len(captures) > 1 or (matches and any(x.get("method") == "WEBSOCKET" for _, x in captures)):
                     raise RuntimeError("Calibration marker appeared in multiple requests")
+                websocket_capture = captures and captures[0][1].get("method") == "WEBSOCKET"
+                if websocket_capture:
+                    capture_page, snapshot = captures[0]
+                    if snapshot["failed"]:
+                        if dom_fallback and snapshot.get("failureReason") == "unsupported_websocket_frame":
+                            self.page = capture_page
+                            dom = self._dom_calibration(marker, capture, self._websocket_headers(snapshot), snapshot["requestBody"], snapshot["url"], tuple(snapshot["protocols"]))
+                            if dom:
+                                return dom
+                            continue
+                        raise _stream_failure(snapshot)
+                    if snapshot["done"] or (manual_complete and snapshot["body"] != "[]"):
+                        self.page = capture_page
+                        candidate = CapturedInteraction(
+                            method="WEBSOCKET", url=snapshot["url"], headers=self._websocket_headers(snapshot),
+                            request_body=snapshot["requestBody"],
+                            socket_protocols=tuple(snapshot["protocols"]),
+                            response=capture.observe("application/json", snapshot["body"],
+                                                     stream_closed=snapshot["done"], manual_complete=manual_complete),
+                        )
+                if dom_fallback and websocket_capture and not snapshot["done"]:
+                    self.page = capture_page
+                    dom = self._dom_calibration(marker, capture, self._websocket_headers(snapshot), snapshot["requestBody"], snapshot["url"], tuple(snapshot["protocols"]))
+                    if dom:
+                        return dom
                 if len(matches) == 1 and captures:
                     capture_page, snapshot = captures[0]
                     last_snapshot = snapshot
@@ -534,14 +584,49 @@ class PlaywrightBrowserDriver:
                                 stream_closed=True,
                             ),
                         )
+                if dom_fallback and not matches and not captures:
+                    dom = self._dom_calibration(marker, capture)
+                    if dom:
+                        return dom
                 if candidate is not None:
                     self.page.wait_for_timeout(min(250, self.timeout_ms))
                     response_budget.check_limit()
                     captures = self._capture_snapshots(marker)
                     if any(snapshot["overLimit"] for _page, snapshot in captures):
                         raise BrowserResponseLimitExceeded()
-                    if len(matches) > 1 or len(captures) > 1:
+                    if len(matches) > 1 or len(captures) > 1 or (matches and any(x.get("method") == "WEBSOCKET" for _, x in captures)):
                         raise RuntimeError("Calibration marker appeared in multiple requests")
+                    if candidate.method == "WEBSOCKET":
+                        snapshot = captures[0][1]
+                        if snapshot["failed"]:
+                            raise _stream_failure(snapshot)
+                        if not snapshot["done"]:
+                            if dom_fallback:
+                                dom = self._dom_calibration(marker, capture, candidate.headers, candidate.request_body, candidate.url, candidate.socket_protocols)
+                                if dom:
+                                    return dom
+                            raise ExtractionError("completion_unconfirmed")
+                        candidate = CapturedInteraction(
+                            method=candidate.method, url=candidate.url, headers=candidate.headers,
+                            request_body=candidate.request_body,
+                            socket_protocols=candidate.socket_protocols,
+                            response=capture.observe("application/json", snapshot["body"],
+                                                     stream_closed=True),
+                        )
+                    if dom_fallback:
+                        if not candidate.response.stream_closed:
+                            dom = self._dom_calibration(marker, capture, candidate.headers, candidate.request_body, candidate.url, candidate.socket_protocols)
+                            if dom:
+                                return dom
+                        try:
+                            response_input(candidate.response)
+                        except ExtractionError as error:
+                            if error.reason != "unsupported_response_protocol":
+                                raise
+                            dom = self._dom_calibration(marker, capture, candidate.headers, candidate.request_body, candidate.url, candidate.socket_protocols)
+                            if dom:
+                                return dom
+                            raise
                     return candidate
             response_type = (
                 last_snapshot["contentType"].partition(";")[0].strip().lower()
@@ -559,21 +644,60 @@ class PlaywrightBrowserDriver:
             )
         finally:
             response_budget.close()
-            self.context.add_init_script("globalThis.__lladarCalibrationMarker = null;")
+            self.context.add_init_script("globalThis.__lladarCalibrationMarker = null; globalThis.__lladarWebSockets.stopCapture();")
             self.context.remove_listener("request", remember)
             self.context.remove_listener("requestfinished", remember_finished)
             for page in self.context.pages:
                 try:
-                    page.evaluate("() => globalThis.__lladarStreams.stopCapture()")
+                    page.evaluate("() => { globalThis.__lladarStreams.stopCapture(); globalThis.__lladarWebSockets.stopCapture(); }")
                 except Exception:
                     continue
+
+    @staticmethod
+    def _dom_frames(page):
+        origin = urlsplit(page.url)
+        return [frame for frame in page.frames
+                if (urlsplit(frame.url).scheme, urlsplit(frame.url).netloc) == (origin.scheme, origin.netloc)]
+
+    def _dom_calibration(self, marker, capture, request_headers=None, request_body="", request_url=None, socket_protocols=()):
+        from .dom_capture import observe
+
+        observations = []
+        for frame in self._dom_frames(self.page):
+            dom = observe(frame, capture)
+            if dom:
+                binding, response = dom
+                if frame is not self.page.main_frame:
+                    if not frame.name:
+                        raise ExtractionError("dom_binding_ambiguous")
+                    binding = dict(binding, frame_name=frame.name, frame_url=frame.url)
+                observations.append((binding, response))
+        if not observations:
+            return None
+        if len(observations) != 1:
+            raise ExtractionError("dom_question_ambiguous")
+        binding, response = observations[0]
+        known_credentials = _protected_values(CapturedInteraction(
+            method="DOM", url=request_url or self.page.url, headers=request_headers or {},
+            request_body=request_body, response=response, socket_protocols=socket_protocols,
+        ))
+        headers = dict(request_headers or {})
+        headers["content-type"] = "application/json"
+        cookies = self.context.cookies([frame.url for frame in self._dom_frames(self.page)])
+        if cookies:
+            headers["cookie"] = "; ".join(item["name"] + "=" + item["value"] for item in cookies)
+        return CapturedInteraction(
+            method="DOM", url=self.page.url, headers=headers,
+            request_body=json.dumps({"question": marker}), response=response, dom_binding=binding,
+            protected_values=known_credentials,
+        )
 
     def _capture_snapshots(self, marker: str):
         captures = []
         for page in self.context.pages:
             try:
                 snapshots = page.evaluate(
-                    "() => globalThis.__lladarStreams.captureSnapshots()"
+                    "() => [...globalThis.__lladarStreams.captureSnapshots(), ...globalThis.__lladarWebSockets.captureSnapshots()]"
                 )
             except Exception:
                 continue
@@ -583,6 +707,16 @@ class PlaywrightBrowserDriver:
                 if snapshot.get("marker") == marker
             )
         return captures
+
+    def _websocket_headers(self, snapshot):
+        headers = dict(snapshot["headers"])
+        # Owned browser cookies stay local; retain values only for echo screening.
+        url = snapshot["url"]
+        cookie_url = ("https:" + url[4:]) if url.startswith("wss:") else ("http:" + url[3:])
+        cookies = self.context.cookies([cookie_url])
+        if cookies:
+            headers["cookie"] = "; ".join(item["name"] + "=" + item["value"] for item in cookies)
+        return headers
 
     @staticmethod
     def _replay_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -617,6 +751,14 @@ class PlaywrightBrowserDriver:
     ) -> ObservedResponse:
         timeout_ms = self.timeout_ms if timeout_seconds is None else min(self.timeout_ms, max(1, int(timeout_seconds * 1000)))
         capture = self._observations.begin_request(request_id)
+        if template.method == "DOM":
+            from .dom_capture import replay
+            observation = replay(self.page, template, question, capture, timeout_ms)
+            cookies = self.context.cookies([frame.url for frame in self._dom_frames(self.page)])
+            response_input(observation, tuple(cookie["value"] for cookie in cookies))
+            return observation
+        if template.method == "WEBSOCKET":
+            return self._replay_websocket(template, question, request_id, timeout_ms, capture)
         self.page.evaluate(
             "options => globalThis.__lladarStreams.startReplay(options.key, options)",
             {
@@ -674,6 +816,37 @@ class PlaywrightBrowserDriver:
                 self.page.evaluate(
                     "key => globalThis.__lladarStreams.stopReplay(key)", request_id,
                 )
+            except Exception:
+                if not pending_error:
+                    raise
+
+    def _replay_websocket(self, template, question, request_id, timeout_ms, capture):
+        self.page.evaluate("o => globalThis.__lladarWebSockets.startReplay(o.key, o)", {
+            "key": request_id, "url": template.url,
+            "protocols": list(template.socket_protocols), "body": template.render_body(question),
+        })
+        deadline = time.monotonic() + timeout_ms / 1000
+        result = None
+        try:
+            while time.monotonic() < deadline:
+                self.page.wait_for_timeout(min(25, self.timeout_ms))
+                result = self.page.evaluate("key => globalThis.__lladarWebSockets.replaySnapshot(key)", request_id)
+                if not result:
+                    continue
+                if result["overLimit"]:
+                    raise BrowserResponseLimitExceeded()
+                if result["failed"]:
+                    raise _stream_failure(result)
+                if result["body"] == "[]":
+                    continue
+                if result["done"]:
+                    return capture.observe("application/json", result["body"], stream_closed=True)
+            raise BrowserRequestTimeout(timeout_seconds=timeout_ms / 1000, **_snapshot_metrics(result or {}))
+        finally:
+            import sys
+            pending_error = sys.exc_info()[0] is not None
+            try:
+                self.page.evaluate("key => globalThis.__lladarWebSockets.stopReplay(key)", request_id)
             except Exception:
                 if not pending_error:
                     raise

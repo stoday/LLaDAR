@@ -68,7 +68,7 @@ profile 預設。非正數須在模型執行前拒絕，設定 JSON 保存實際
 - --stop-criteria：必填，描述可以提早停止的語意條件。長文可改用互斥的 --stop-criteria-file PATH。
 - --max-turns：必填正整數，代表最多向目標送出多少則使用者訊息；由程式強制限制，不能由模型延長。
 - --knowledge：選填，可重複指定文件。它用於約束情境及評分規準，不會自動灌入受測服務；無知識文本時仍須可生成可評估的情境。
-- --output：情境 JSON 路徑。輸出檔不得無聲覆寫，明示 --force 才可取代既有檔案。
+- --output：可省略的目錄或情境 JSON 路徑；省略時為 ./situation.json，只指定目錄時在目錄內建立 situation.json。輸出檔不得無聲覆寫，明示 --force 才可取代既有檔案。完整規則見 [CLI 輸出路徑契約](PRD-cli-output.zh-TW.md)。
 - --skill DIRECTORY 選填，只在 create situation 選擇客製的「編製情境設定」方法；未指定時使用內建方法。它不與 --situation-config 同時使用，因為本命令是在產生該設定檔。
 - --model、--env-file 等生成器設定沿用 create 工作流程的既有慣例；不綁定特定模型提供者。
 

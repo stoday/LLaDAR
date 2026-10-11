@@ -289,7 +289,15 @@ def test_cli_direct_extraction_through_normal_login_form_and_local_review(tmp_pa
     run = json.loads(Path(str(output)+".run.json").read_text())
     assert run["target"]["extraction"]["calls"] == run["target"]["extraction"]["max_calls"] == 3
     assert not any(key in run["target"] for key in ("parser","parser_cache","response_plan_sha256"))
-    persisted = "".join(path.read_text(encoding="utf-8") for path in tmp_path.glob("responses.jsonl*"))
+    # Include recoverable session files as well as the ordinary output sidecars.
+    artifacts = [
+        path
+        for artifact in tmp_path.glob("responses.jsonl*")
+        for path in ([artifact] if artifact.is_file() else artifact.rglob("*"))
+        if path.is_file()
+    ]
+    assert any(".work" in str(path.relative_to(tmp_path)) for path in artifacts)
+    persisted = "".join(path.read_text(encoding="utf-8") for path in artifacts)
     for secret in ("fixture-cookie-secret", "fixture-request-secret", "fixture-stream-secret", "LLaDAR calibration ",
                    "fixture-tool-secret", "fixture-metadata-secret", "fixture-discarded-draft"):
         assert secret not in persisted

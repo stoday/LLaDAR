@@ -108,6 +108,11 @@ def copy_project(project: str | Path, *, runs_root: str | Path | None = None):
     yield workspace
 
 
+from .work_session import current_session, stage_session, publish_bundle, publication_metadata, file_sha
+from .run_strategy import ScheduledCase, StrategyCase
+
+
+@stage_session("run-agent")
 def run_agent(
     dataset: str | Path,
     output: str | Path,
@@ -115,6 +120,7 @@ def run_agent(
     answer: Answerer | None = None,
     project: str | Path | None = None,
     env_file: str | Path | None = None,
+    resume: str | Path | None = None,
     force: bool = False,
     verbose: bool = True,
     runs_root: str | Path | None = None,
@@ -194,7 +200,18 @@ def run_agent(
     strategy = SkillStrategy(records, skill=selected_skill, seed=seed, model=model,
                              env_file=env_file or ".env", runs_root=runs_root,
                              agent_factory=strategy_agent_factory)
-    schedule = strategy.generate()
+    session = current_session()
+    saved_schedule = session.data["state"].get("run_schedule") if session else None
+    if saved_schedule:
+        schedule = [ScheduledCase(StrategyCase(**item["case"]), item["repeats"])
+                    for item in saved_schedule["items"]]
+        strategy.evidence = saved_schedule["evidence"]
+    else:
+        schedule = strategy.generate()
+        if session:
+            from dataclasses import asdict
+            session.put("run_schedule", {"items": [asdict(item) for item in schedule], "evidence": strategy.evidence})
+    saved_trials = session.data["state"].get("run_trials", {}) if session else {}
 
     reporter = ProgressReporter(verbose)
     reporter.configuration(
@@ -221,7 +238,9 @@ def run_agent(
         "project": str(Path(project).resolve()) if project is not None else None,
         "adapter_model": model if project is not None else None,
     }
-    with context as workspace:
+    responses_spool = session.directory / "responses.pending.jsonl"
+    trials_spool = session.directory / "trials.pending.jsonl"
+    with context as workspace, responses_spool.open("w", encoding="utf-8", newline="\n") as response_stream, trials_spool.open("w", encoding="utf-8", newline="\n") as trial_stream:
         automatic = None
         browser_target = None
         adapter_sha256 = None
@@ -328,15 +347,35 @@ def run_agent(
                 result["actual_response"] = None
                 for trial in range(1, item.repeats + 1):
                     trial_result: dict[str, Any] = {
-                        "record_index": item.case.record_index,
+                        "record_index": schedule_index,
+                        "source_record_index": item.case.record_index,
                         "trial": trial,
                         "question": record["question"],
                         "expected_answer": record["expected_answer"],
                         "status": "execution_error",
                         "adapter_sha256": adapter_sha256,
                     }
+                    trial_id = f"trial_{item.case.record_index}_{trial}"
+                    trial_result["trial_id"] = trial_id
+                    previous = session.get_item("run_trials", trial_id)
+                    if previous:
+                        if previous.get("completion_state") == "completion_unknown":
+                            previous = {**previous, "status": "execution_error", "error": "completion_unknown: request was sent; no automatic retry"}
+                            errors.append({"line": item.case.record_index, "trial": trial, "error": previous["error"]})
+                        elif previous["status"] == "execution_error":
+                            errors.append({"line": item.case.record_index, "trial": trial, "error": previous.get("error", "execution_error")})
+                        if previous["status"] == "ok" and result["actual_response"] is None:
+                            result["actual_response"] = previous["actual_response"]
+                        reporter.session(len(trials) + 1, sum(item.repeats for item in schedule), "Resumed trials")
+                        trials.append({key: value for key, value in previous.items() if key != "actual_response"})
+                        json.dump(previous, trial_stream, ensure_ascii=False)
+                        trial_stream.write("\n")
+                        continue
                     started = time.perf_counter()
                     reporter.record(record, context=f"line={item.case.record_index} trial={trial}")
+                    if session:
+                        pending = {**trial_result, "completion_state": "completion_unknown"}
+                        session.put_item("run_trials", trial_id, pending)
                     try:
                         if browser_cancelled:
                             raise RuntimeError("Browser run cancelled")
@@ -387,26 +426,31 @@ def run_agent(
                             "WARN", detail
                         )
                     trial_result["duration_seconds"] = time.perf_counter() - started
-                    trials.append(trial_result)
+                    if session:
+                        session.put_item("run_trials", trial_id, trial_result)
+                    reporter.session(len(trials) + 1, sum(item.repeats for item in schedule), "Completed trials")
+                    trials.append({key: value for key, value in trial_result.items() if key != "actual_response"})
+                    json.dump(trial_result, trial_stream, ensure_ascii=False)
+                    trial_stream.write("\n")
                 status = "ok" if result["actual_response"] is not None else "execution_error"
                 if status == "ok":
                     completed += 1
-                results.append(result)
-                reporter.session(schedule_index, len(schedule), status)
+                json.dump(result, response_stream, ensure_ascii=False)
+                response_stream.write("\n")
+                reporter.emit("SESSION", f"record={item.case.record_index} status={status}")
         finally:
             if browser_target is not None:
                 target_evidence = dict(browser_target.evidence)
                 browser_target.close()
 
-    write_records(results, output_path, overwrite=force)
-    from .output import write_dataset
-    write_dataset(trials, trials_path, "jsonl", overwrite=force)
+
     run_record = {
         "run_id": datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f"),
         "dataset": str(Path(dataset).resolve()),
         "responses": str(output_path.resolve()),
-        "responses_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+        "responses_sha256": file_sha(responses_spool),
         "total": len(schedule),
+        "trial_schema_version": 2,
         "trials": len(trials),
         "completed": completed,
         "failed": len(errors),
@@ -421,10 +465,10 @@ def run_agent(
     if browser_cancelled:
         run_record["status"] = "cancelled"
     run_path.parent.mkdir(parents=True, exist_ok=True)
-    run_path.write_text(
-        json.dumps(run_record, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    run_record["session"] = publication_metadata()
+    publish_bundle({output_path: responses_spool, trials_path: trials_spool,
+                    run_path: json.dumps(run_record, ensure_ascii=False, indent=2) + "\n"},
+                   force=force, result=completed)
     reporter.done(completed, metric="completed")
     if browser_cancelled:
         raise KeyboardInterrupt()

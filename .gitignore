@@ -16,6 +16,7 @@ linux-venv
 # IDEs and editors
 .vscode/
 .codex
+.archify
 
 # LLaDAR local model cache
 .lladar/
@@ -48,3 +49,8 @@ akasha-repo
 # for testing
 .pytest-*
 .tmp
+
+
+# Recoverable stage workspaces (source snapshots and captured answers)
+*.work/
+*.work-*/

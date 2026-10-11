@@ -57,6 +57,7 @@
       <p><code>--confirm-browser-run</code> 與 <code>--allow-response-model-transfer</code> 分別核准本次兩個範圍，不能跳過獨立核對或 CLI 的終端要求。合法輸出格式或一次核對通過，不保證後續抽取忠實，也不代表答案正確，評分仍另行執行。</p>
       <p>瀏覽器啟動、首次導頁及重新導頁各自最多等 5 分鐘（300 秒），獨立於 <code>--timeout</code>。網站回答仍預設等 60 分鐘（<code>--timeout 3600</code>）；自動重播另受整輪剩餘期限約束。</p>
       <p>N 次排程試跑（包含重複題）最多使用 N+2 次模型呼叫：校正、驗證及各次試跑。每次最多 8,192 輸出 tokens，所有呼叫與中間驗證共用同意後的 60 分鐘。不自動重試、跟隨重新導向、快取答案或暗中重送網站問題。供應商有提供才記錄用量，缺值為未知；可能產生費用。</p>
+      <p>原生 WebSocket 支援文字／JSON 問句 frame，伺服器須在每題回答後正常關閉連線（code 1000）。Cookie 與 subprotocol 保留在受控瀏覽器。長連線或二進位協定可在校正時退回同次互動的 DOM 路徑，須有本題答案及 busy→idle 完成證據。支援原生 Streamlit chat（已驗證 1.65.0）及具唯一輸入、具名按鈕／log、user／assistant 訊息角色的表單式聊天頁，包含具名同源 iframe。驗證與正式測試固定路徑，失敗停止後續派送；其他頁面結構須另行適配。</p>
       <p>文字、JSON／+json、NDJSON、GraphQL-over-HTTP JSON 與 SSE 都交給模型。擷取上限為解壓後 1 MiB；模型輸入另限含封裝的 120 KiB UTF-8 JSON，在本機 128 KiB 位元組預算內保留固定 prompt 空間，並非 tokenizer 保證。不截斷、不摘要、不自動分段。宿主不選答案欄位或終止事件；自動串流若一直不關閉，會逾時停止，不接受半截答案。</p>
       <p>模型不接收憑證、request headers／body、profile 或標準答案。回應若含已知憑證或疑似憑證欄位會阻擋傳輸，但偵測無法保證找出所有私密內容。一般產物不保存原始串流、完整 prompt、模型診斷或思考內容；最終文字仍以 <code>actual_response</code> 存入 responses／trials，安全 sidecar 記錄模型及 prompt 版本、次數、用量和狀態。</p>
       <p>沿用專用的 <code>.lladar/browser-profiles</code>，或以 <code>--fresh-browser-profile</code> 使用暫時未登入 profile；不複製日常 Chrome／Edge。401/403 或抽取失敗會停止後續送題，保留已完成答案；需重新登入並取得新同意，不自動重試。舊解析器旗標拒絕使用，既有私密快取不讀取也不刪除。</p>

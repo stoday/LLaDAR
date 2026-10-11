@@ -1,38 +1,42 @@
 # LLaDAR
 
-[English](README.md) | [繁體中文](README.zh-TW.md)
+[English](README.md) | [繁體中文](README.zh-TW.md) · [完整文件](https://stoday.github.io/LLaDAR/zh-TW/)
 
-LLaDAR 是一套精簡的 Agent 評估流程，只保留四個工作項目：
+**自動出題、實際測試 Agent，再評估它真正說了什麼。**
 
-1. 從知識文件產生問題與預期答案。
-2. 執行目標 Agent，收集真實回應。
-3. 由評估 Agent 自動選擇或遵循指定方法，再由 Python 確定性地計算統計結果。
-4. 產生有證據邊界的 Markdown 報告。
+LLaDAR 是測試 Agent 與聊天網站的命令列工具。從知識文件產生問題與預期答案，
+收集受測 Agent 的真實回答，再產出包含評估判讀、統計與證據的報告。
 
-## 安裝
+可以從一組問答開始，也可以建立多輪情境，觀察 Agent 隨著對話發展如何回應。
+用自然語言描述想評估的行為；需要更細緻的方法時，再用本地 Skill 自訂。
+
+## 可以測什麼？
+
+| 你想知道的事 | LLaDAR 如何協助 |
+| --- | --- |
+| Agent 是否依照文件回答？ | 從知識文件生成問題與預期答案，再實際測試受測 Agent。 |
+| 已部署的聊天網站會如何回應？ | 透過引導式瀏覽器流程測試支援的問答頁面，不必提供專案原始碼。 |
+| 面對追問，Agent 是否保持一致？ | 建立多輪情境，指定觀察目標與停止條件。 |
+| 回答是否符合自己的評估需求？ | 用自然語言描述準則，或提供 Skill 自訂評估方法。 |
+
+例如，你可以檢查客服 Agent 是否編造退款規則、是否詢問缺少的資訊，
+或在使用者追問後仍保持前後一致。
+
+回答由評估 Agent 判讀，統計由 Python 計算。保存的回答與逐筆證據讓你能檢查
+判斷依據，也能用不同準則重新評估同一批回答。
+
+## 快速開始
+
+安裝 LLaDAR（支援 Python 3.11 與 3.12）：
 
 ```bash
 python -m pip install lladar
 ```
 
-支援 Python 3.11 與 3.12。預設模型 provider 會從 `.env` 或程序環境讀取憑證。
+在 `.env` 或程序環境設定模型供應者的憑證；受測 Agent 也須備妥自己的執行環境設定。
+使用 `lladar --version` 查看已安裝版本。
 
-使用 `lladar --version` 查看已安裝的版本。
-
-## Record 格式
-
-JSONL 的每一行固定只有三個欄位：
-
-```json
-{"question":"台灣的首都是哪座城市？","expected_answer":"台北","actual_response":null}
-```
-
-`question` 與 `expected_answer` 必須是非空字串；`actual_response` 可以是字串或
-`null`。不再使用 schema 版本，未知欄位會直接被拒絕。
-
-## 快速開始
-
-準備知識文件與目標 Agent 專案後，依序執行：
+假設知識文件放在 `./knowledge`，受測 Agent 專案位於 `../my-agent`，依序執行：
 
 ```bash
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
@@ -41,9 +45,48 @@ lladar eval responses.jsonl --output evaluation.json
 lladar report evaluation.json --output report.md
 ```
 
-開啟 `report.md` 檢視結果。瀏覽器測試、自訂評估需求與多輪情境的用法見下方說明。
+這四步串起 **文件 → 測試問題 → 真實回答 → 評估 → 報告**。
+開啟 `report.md` 檢視結果與逐筆測試證據。也可以使用既有題庫，或重新評估已保存的回答。
+
+### 如果受測目標是聊天網站
+
+將上面的 `run-agent` 步驟換成：
+
+```bash
+python -m playwright install chromium
+lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl
+```
+
+請換成自己的問答頁面 URL。LLaDAR 會開啟瀏覽器，引導你完成登入、校準、授權與
+回答核對，再執行測試。支援的頁面與設定方式見[目標選擇指南](site/zh-TW/guides/run-agent.html#choose-target)。
+
+### 自己決定什麼算是好的回答
+
+例如，評估 Agent 是否知道資訊不足時應該追問：
+
+```bash
+lladar eval responses.jsonl --criteria "檢查回答是否詢問缺少的資訊，而非自行編造事實；引用回答中的內容作為判斷依據。" --output evaluation-missing-info.json
+lladar report evaluation-missing-info.json --output report-missing-info.md
+```
+
+需要更細緻的控制時，可用 `--skill` 指定含有 `SKILL.md` 的本地目錄，
+自訂出題、測試排程、評估或報告方法。各階段的適用方式見下方使用選項。
+
+想測試會隨對話發展調整的情境，可從[多輪情境範例](example_project/situation_demo/README.md)開始。
+包含自訂方法的完整操作流程見[使用指南](site/zh-TW/index.html)。
 
 ## 使用選項
+
+所有主要階段都可省略 `--output`，也可指定資料夾或完整檔案路徑。
+省略時輸出到目前工作目錄：資料集使用 `test-dataset-YYYYMMDD-HHMMSS.jsonl`，
+其他階段依序使用 `situation.json`、`responses.jsonl`、`evaluation.json`、`report.md`。
+指定 `--output ./artifacts` 時，預設檔名與附屬檔都放進 `./artifacts/`。
+既有資料夾、結尾分隔符號或沒有副檔名的新路徑視為資料夾；
+既有檔案或有副檔名的新路徑視為檔案。含點號的新資料夾可寫成 `./results.v1/`。
+既有輸出仍需 `--force`。
+
+每個階段成功後都會顯示工作摘要，列出輸出的絕對目錄、各檔案位置與內容簡述，
+以及下一步命令或閱讀提示。`--no-verbose` 仍會顯示摘要，`--log` 也會同步保存。
 
 產生資料集：
 
@@ -55,6 +98,19 @@ lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 Agent 依選定 skill 選擇直接問答，或使用圖譜產生概念映射及受控變體 probe；圖譜不是必經流程。
 也可使用 Python 產生或修正候選結果，正式輸出前會驗證最終資料。
 每份資料集附有 `dataset.jsonl.generation.json`；只有使用有效圖譜時才產生 `dataset.jsonl.graph.json`。
+
+也可以讓 Agent 自行探索公開 GitHub repo 的實際資料集：
+
+```bash
+lladar create test-dataset --from-github https://github.com/hsinmosyi/TWBias --count 20 --output dataset.jsonl
+```
+
+`--knowledge` 與 `--from-github` 擇一使用。GitHub 模式讀取文件，檢查 CSV／JSON／JSONL
+或文字資料，也可沿文件中的公開直接下載連結取得資料。除生成 sidecar 外，會自動產生
+`dataset.generation-report.md` 與 `dataset.sources.json`。報告逐題列出原始樣本、固定版本連結、
+轉換方式、答案依據、模型檢查與限制。Agent 生成的判準會與原始答案或標註分開，使用前請檢閱。
+repo 程式僅供閱讀理解；私有 repo、登入下載、壓縮包與二進位格式暫不支援。
+資源限制與自訂 Skill 階段見 [GitHub 生成說明](docs/github-dataset-generation.zh-TW.md)。
 
 圖譜 probe 用來觀察目標模型如何把「正餐」等推論概念映射至來源實例，沒有唯一正解，
 會與答對率分開報告。合成控制是測試輸入，不是來源或人物主張，預設不產生。
@@ -81,6 +137,8 @@ lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 - `--project PATH`：從專案程式碼與文件理解對外入口。只有專案也可能足夠：啟動資訊與必要執行環境設定完整時，LLaDAR 可以在隔離的專案副本中啟動服務、測試，最後只關閉自己啟動的服務。
 - `--project PATH --service-url URL`：仍檢查專案，但改用已啟動的測試服務。URL 提供的是**服務基底位址**，不是啟動指令或 API 契約；HTTP 方法、路徑、Payload、驗證需求與回應格式仍從專案理解，不會啟動或關閉該既有服務。
 - `--page-url URL`：不必提供專案原始碼，改用正常問答網頁。在 LLaDAR 瀏覽器登入並送出校正題後，錄製請求供重播，再由模型從擷取的回應中抽取答案。
+
+原生 WebSocket 支援文字／JSON 問句 frame，但伺服器須在每題回答後正常關閉連線（code 1000）。校正時，持續開啟或二進位協定可退回同次互動的 DOM 路徑，但必須確認本題答案及完成狀態。選定路徑後，驗證與資料集測試固定使用；失敗停止後續派送。DOM 支援原生 Streamlit chat（已驗證 1.65.0），以及具有唯一輸入 placeholder、具名送出按鈕、具名對話 log、user／assistant 訊息角色及 busy→idle 完成狀態的表單式聊天頁，包含具名同源 iframe。其他頁面結構須另行適配；文字不再變動不代表完成。
 
 已啟動測試服務的範例：
 
@@ -243,6 +301,17 @@ log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控�
 解碼失敗）。`received_bytes` 是瀏覽器 reader 已收到的 HTTP 解壓後位元組數，
 包含無法解碼的資料；`elapsed_seconds` 從啟動 fetch 算到失敗，不含模型抽取時間。
 
+## Record 格式
+
+JSONL 的每一行固定只有三個欄位：
+
+```json
+{"question":"台灣的首都是哪座城市？","expected_answer":"台北","actual_response":null}
+```
+
+`question` 與 `expected_answer` 必須是非空字串；`actual_response` 可以是字串或
+`null`。不再使用 schema 版本，未知欄位會直接被拒絕。
+
 ## 輸出
 
 - `create test-dataset`：`actual_response` 為 `null` 的三欄 JSONL 及 `<output>.generation.json`；使用有效圖譜時另有 `<output>.graph.json`
@@ -327,3 +396,56 @@ skill 載入實作在 `skill_agent.py`，方法指令則在 `skill_assets/*/SKIL
 `graph_discovery.py` 與 `interfaces.py` 的工作目錄檢視及探索流程；
 `target_environment.py` 與 `service_runtime.py` 的執行環境及服務管理；以及
 `playwright_driver.py`、`response_capture.py` 與 `answer_extraction.py` 的瀏覽器操作與回答擷取。
+
+## 大資料與模型限制
+
+LLaDAR 的下載與抽樣上限是程式設定的保護額度，並非大語言模型的上下文硬性限制。
+目前 GitHub 資料集生成採用以下額度：
+
+| 額度 | 目前上限 | 用途 |
+| --- | ---: | --- |
+| 一般文字下載 | 每次回應 2 MiB | 控制來源下載量 |
+| CSV／JSONL 串流抽樣下載 | 單檔 16 MiB | 控制來源檔案大小 |
+| 累計下載 | 20 MiB | 控制總傳輸量 |
+| 抽樣掃描 | 20 萬個邏輯資料列 | 控制掃描工作量 |
+| 抽樣保留 | 100 列 | 控制後續生成工作量 |
+
+抽樣仍須符合選取文字與模型額度；100 列不代表一定放得進模型。
+上述限制適用於 GitHub 生成，不是四階段所有輸入或瀏覽器回答的共用上限。
+
+模型的輸入／輸出 token 額度另外控制。內建生成由程式分配每批最多 24000 字元的
+來源範圍，模型輸入額度較小時會縮小批次。字元、UTF-8 位元組與 token 是不同單位；
+下載大檔案不等於把整份檔案一次交給模型。
+
+提高 `--max-input-tokens` 或 `--max-output-tokens` 不會提高下載／抽樣上限，
+也不會擴大服務商模型本身的容量。下載上限目前是內建額度，沒有專用 CLI 調整選項。
+提高程式額度時，仍須驗證掃描、儲存、跨批整合、跨批關係及執行成本。
+
+已通過的離線案例包括超過 2 MiB 的 10 萬列 CSV、CSV 欄位換行、JSONL 有界掃描、
+84000 字元本地文字分批，以及透過 callable 目標完整保存約 1.7 MB 的單筆回答。
+callable 案例不代表提高瀏覽器擷取上限。GB／TB 級資料尚未驗證；超限、模型或磁碟
+問題仍可能讓階段中止，已有 session 時可依中斷提示接續。保存證據會區分抽樣與
+完整資料處理。
+
+已測試範圍及待驗收事項見[驗收紀錄](docs/validation/recoverable-stages-2026-10-11.zh-TW.md)。
+
+## 接續中斷的工作
+
+生成、`run-agent`、`eval` 與 `report` 會在輸出旁保存 session，通常為 `<output>.work`。
+中斷時 CLI 會顯示原工作目錄、輸入與輸出位置、實際 session 路徑，以及可直接執行的接續指令。
+保留原輸入、模型、方法和選項，使用提示中的實際路徑：
+
+```bash
+lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl --resume dataset.jsonl.work
+lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl --resume responses.jsonl.work
+lladar eval responses.jsonl --output evaluation.json --resume evaluation.json.work
+lladar report evaluation.json --output report.md --resume report.md.work
+```
+
+Python API 接受 `resume=Path(...)`。一般執行仍可使用 `--force`；只有接續時不能與 `--resume` 同用。
+原本以 `--force` 啟動的覆寫授權會保存於 session，接續指令會移除 `--force`。
+輸入、Skill、準則、模型設定或保存證據改變時，接續會被拒絕。已完成試次不重跑；完成狀態未知的目標請求不自動重送。
+私密網站或服務網址由本機輸入，不回顯於提示或 log。工作目錄包含來源證據、草稿與實際回答，請依原始輸入權限保護並保留至恢復結束。
+
+內建生成支援分批；GitHub CSV／JSONL 支援串流抽樣，但有下載、掃描與模型額度限制。
+抽樣不等於完整 benchmark 重現。實際範圍见[實作與驗收紀錄](docs/validation/recoverable-stages-2026-10-11.zh-TW.md)。

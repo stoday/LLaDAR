@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.9.5"
+version = "0.10.0"
 description = "Create questions, run an Agent, evaluate responses, and render reports"
 readme = "README.md"
 license = "MIT"
@@ -15,6 +15,7 @@ dependencies = [
   "pypdf>=4,<7",
   "playwright>=1.52,<2",
   "llama-index-core>=0.14.25",
+  "tqdm>=4.66,<5",
 ]
 
 classifiers = [
@@ -27,17 +28,19 @@ classifiers = [
 lladar = "lladar.cli:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "websockets>=15,<16"]
+streamlit-test = ["streamlit>=1.57,<2"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py", "template_assets/*.md"]
+lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/AUTHORING.md", "skill_assets/*/strategy.py", "template_assets/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q -m 'not browser'"
 testpaths = ["tests"]
 markers = [
   "browser: tests that launch the explicitly provisioned Playwright Chromium browser",
+  "live_gemini: opt-in tests that send synthetic answers to the real Gemini API and may incur charges",
 ]
