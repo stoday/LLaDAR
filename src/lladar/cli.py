@@ -78,7 +78,9 @@ def _resolve_output(destination: str | Path, filename: str | None) -> Path:
     A dataset directory uses a collision-safe timestamp instead of a fixed filename.
     """
     raw = str(destination)
-    path = Path(destination)
+    # Accept the documented trailing backslash hint on POSIX as well as Windows.
+    # Keep native root paths intact while removing the non-native separator.
+    path = Path(raw.rstrip("\\") if os.name != "nt" else raw)
     directory = path.is_dir() or raw.endswith(("/", "\\"))
     if not directory and (path.is_file() or path.suffix):
         return path
