@@ -1,6 +1,6 @@
 # LLaDAR
 
-[English](README.md) | [繁體中文](README.zh-TW.md) · [完整文件](https://stoday.github.io/LLaDAR/zh-TW/)
+[English](https://github.com/stoday/LLaDAR/blob/main/README.md) | [繁體中文](https://github.com/stoday/LLaDAR/blob/main/README.zh-TW.md) · [完整文件](https://stoday.github.io/LLaDAR/zh-TW/)
 
 **自動出題、實際測試 Agent，再評估它真正說了什麼。**
 

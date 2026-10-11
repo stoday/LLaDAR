@@ -1,6 +1,6 @@
 # LLaDAR
 
-[English](README.md) | [繁體中文](README.zh-TW.md) · [Documentation](https://stoday.github.io/LLaDAR/)
+[English](https://github.com/stoday/LLaDAR/blob/main/README.md) | [繁體中文](https://github.com/stoday/LLaDAR/blob/main/README.zh-TW.md) · [Documentation](https://stoday.github.io/LLaDAR/)
 
 **Generate test cases, run your Agent, and evaluate what it actually says.**
 
