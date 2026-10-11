@@ -13,7 +13,7 @@ from typing import Any
 
 import akasha
 
-from .exceptions import DatasetValidationError, LladarError, ProviderError
+from .exceptions import DatasetValidationError, EvaluationError, LladarError, ProviderError
 
 
 MAX_TOOL_CALLS = 40
@@ -45,7 +45,8 @@ def _sha256(content: bytes) -> str:
 class AkashaSkillAgent:
     """Pass one selected local skill directly to ``akasha.agents(skills=...)``."""
 
-    def __init__(self, *, skills: list[str], tools: dict, system_prompt: str = SYSTEM_PROMPT, **options):
+    def __init__(self, *, skills: list[str], tools: dict, system_prompt: str = SYSTEM_PROMPT,
+                 tool_call_limit: int = MAX_TOOL_CALLS, round_limit: int = MAX_ROUNDS, **options):
         if len(skills) != 1:
             raise ValueError("LLaDAR requires exactly one selected skill")
         self.skill_root = Path(skills[0]).resolve()
@@ -55,6 +56,8 @@ class AkashaSkillAgent:
         self.skill_sha256 = _sha256(self.skill_document.read_bytes())
         self.events: list[dict[str, Any]] = []
         self.calls = 0
+        self.tool_call_limit = tool_call_limit
+        self.round_limit = round_limit
         self.call_lock = Lock()
 
         def controlled(name, function):
@@ -62,11 +65,11 @@ class AkashaSkillAgent:
             def invoke(*args, **kwargs):
                 with self.call_lock:
                     self.calls += 1
-                    if self.calls > MAX_TOOL_CALLS:
+                    if self.calls > self.tool_call_limit:
                         raise RuntimeError("skill tool call budget exceeded")
                 try:
                     result = function(*args, **kwargs)
-                except (ValueError, KeyError, TypeError, DatasetValidationError) as error:
+                except (ValueError, KeyError, TypeError, DatasetValidationError, EvaluationError) as error:
                     result = {"error": str(error)}
                 except Exception as error:
                     raise SkillRuntimeError(f"required generation tool failed: {name}") from error
@@ -75,6 +78,13 @@ class AkashaSkillAgent:
             return invoke
 
         descriptions = {
+            "list_repository_files": "List the fixed-commit GitHub repository file paths and sizes.",
+            "read_repository_file": "Read repository text by path and optional start_char; follow next_start. Tables include parsed row previews.",
+            "read_external_dataset": "Read a public direct text dataset URL linked in a repository document read: url, documentation_read_id, optional start_char.",
+            "read_dataset_rows": "Preview parsed rows of a previously read dataset: path, start_row (1-based), limit (1 to 20). Retains original row identifiers.",
+            "select_dataset": "Select actual dataset paths after reading them: data_paths list, purpose, task, rationale explaining fields and methods, evidence [{read_id, quote}] with exact quotes; optional row_selections maps dataset paths to distinct 1-based data row numbers.",
+            "record_answer_basis": "Record every generated QA's origin: question, expected_answer, answer_basis (source_answer|source_annotation|derived_criterion), rationale and evidence_point_ids (accepted knowledge point IDs).",
+            "submit_generation_review": "Submit every assigned QA review as [{record_fingerprint, approved: boolean, reason: evidence-bounded string}]. Reject unsupported answers, misunderstood labels or misrepresented derived criteria.",
             "list_sources": "List the declared knowledge sources and their text lengths.",
             "read_source": "Read original text by source_id and zero-based character range; follow next_start to continue.",
             "submit_knowledge_points": "Submit points: each has statement, topic, evidence [{read_id, quote}]. Fix rejected items.",
@@ -99,7 +109,7 @@ class AkashaSkillAgent:
         # replace, or inspect its loading decisions while the model is working.
         self.agent = akasha.agents(
             skills=[str(self.skill_root)], tools=bound, system_prompt=system_prompt,
-            stream=False, thinking=False, keep_logs=False, max_round=MAX_ROUNDS, **options,
+            stream=False, thinking=False, keep_logs=False, max_round=self.round_limit, **options,
         )
 
     def _check_unchanged(self) -> None:
@@ -133,7 +143,7 @@ class AkashaSkillAgent:
             "skill_files": {"SKILL.md": self.skill_sha256} if skill_name in loaded else {},
             "tool_events": list(self.events),
             "tool_names": self.host_tool_names,
-            "tool_call_limit": MAX_TOOL_CALLS,
+            "tool_call_limit": self.tool_call_limit,
             "tool_calls": self.calls,
-            "max_round": MAX_ROUNDS,
+            "max_round": self.round_limit,
         }

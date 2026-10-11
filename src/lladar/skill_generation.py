@@ -10,7 +10,7 @@ import tempfile
 from uuid import uuid4
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
 from pathlib import Path
 from threading import RLock
@@ -55,8 +55,8 @@ def _format_value(fact: dict[str, str]) -> str:
     return " ".join((fact["value"], fact["unit"])).strip()
 
 
-def preflight_output(output: Path, *, force: bool) -> None:
-    for path in (output, Path(str(output) + ".generation.json"), Path(str(output) + ".graph.json")):
+def preflight_output(output: Path, *, force: bool, extra_paths=()) -> None:
+    for path in (output, Path(str(output) + ".generation.json"), Path(str(output) + ".graph.json"), *extra_paths):
         if path.is_symlink():
             raise ValueError(f"output cannot be a symlink: {path}")
         if path.exists():
@@ -74,6 +74,7 @@ class GenerationResult:
     records: list[dict]
     provenance: dict
     graph: dict | None = None
+    artifacts: dict[Path, str] = field(default_factory=dict)
 
     def publish(self, output: Path, *, force: bool) -> None:
         for record in self.records:
@@ -81,12 +82,16 @@ class GenerationResult:
         content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.records)
         self.provenance["dataset"]["sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
         sidecar = json.dumps(self.provenance, ensure_ascii=False, indent=2) + "\n"
-        preflight_output(output, force=force)
-        targets = [output, Path(str(output) + ".generation.json")]
-        payloads = [content, sidecar]
+        preflight_output(output, force=force, extra_paths=self.artifacts)
+        targets = [output]
+        payloads = [content]
         if self.graph is not None:
             targets.append(Path(str(output) + ".graph.json"))
             payloads.append(json.dumps(self.graph, ensure_ascii=False, indent=2) + "\n")
+        targets.extend(self.artifacts)
+        payloads.extend(self.artifacts.values())
+        targets.append(Path(str(output) + ".generation.json"))
+        payloads.append(sidecar)
         retired = [Path(str(output) + ".graph.json")] if force and self.graph is None else []
         transaction_targets = targets + retired
         staged, backups, published, reservations = {}, {}, [], []
@@ -94,7 +99,7 @@ class GenerationResult:
         with lock.open("x"):
             pass
         try:
-            preflight_output(output, force=force)
+            preflight_output(output, force=force, extra_paths=self.artifacts)
             for target, text in zip(targets, payloads):
                 temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
                 staged[target] = temporary
@@ -109,7 +114,7 @@ class GenerationResult:
                     reservations.append(target)
             # Remove the old completion marker first. A crash cannot leave a
             # new dataset paired with an old successful provenance marker.
-            for target in reversed(transaction_targets):
+            for target in [targets[-1]] + [path for path in transaction_targets if path != targets[-1]]:
                 if force and target.exists():
                     backup = target.with_name(f".{target.name}.{uuid4().hex}.bak")
                     os.replace(target, backup)
@@ -768,7 +773,10 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         count: int, question_type: str, controlled_variant_topics: tuple[str, ...],
                         controlled_variant_selector: Callable[[tuple[dict[str, Any], ...]], Any] | None,
                         seed: int, model: str, env_file: str | Path,
-                        temperature: float, profile, verbose: bool) -> GenerationResult:
+                        temperature: float, profile, verbose: bool,
+                        extra_tools_factory: Callable | None = None, request_context: dict | None = None,
+                        candidate_validator: Callable | None = None,
+                        runtime_options: dict | None = None) -> GenerationResult:
     skill = skill.resolve()
     if not (skill / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill is missing SKILL.md: {skill}")
@@ -807,13 +815,17 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                           f"item={request.get('source_id', request.get('knowledge_point_id'))} attempt={attempt}/3")
             # Initialization errors are fatal, unlike one model work item failing.
             workspace.current_stage = request["stage"]
-            agent = agent_factory(skills=[str(skill)], tools=workspace.tools(request["stage"]),
+            stage_tools = workspace.tools(request["stage"])
+            if extra_tools_factory is not None:
+                stage_tools.update(extra_tools_factory(workspace))
+            agent = agent_factory(skills=[str(skill)], tools=stage_tools,
                                   model=model, env_file=str(env_file), temperature=temperature,
                                   max_input_tokens=profile.max_input_tokens,
-                                  max_output_tokens=profile.max_output_tokens, verbose=verbose)
+                                  max_output_tokens=profile.max_output_tokens, verbose=verbose, **(runtime_options or {}))
             work = {**request, "attempt": attempt}
             work["existing_results"] = {
                 "graph_present": workspace.semantic_graph is not None, "qa_count": len(workspace.qa),
+                "questions": list(workspace.qa.values()),
                 "plan_count": len(workspace.test_plans),
                 "source_coverage": {key: workspace.coverage(key) for key in workspace.sources},
             }
@@ -833,6 +845,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 if skill.name in evidence.get("loaded_skills", []):
                     try:
                         workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]))
+                        if candidate_validator is not None:
+                            candidate_validator(workspace)
                     except (ValueError, KeyError, TypeError, OSError) as validation_error:
                         request["validation_errors"] = [str(validation_error)]
                     else:
@@ -849,6 +863,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                                "host_tool_events": workspace.events[event_start:]})
             try:
                 workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]))
+                if candidate_validator is not None:
+                    candidate_validator(workspace)
             except (ValueError, KeyError, TypeError, OSError) as error:
                 errors.append({"attempt": attempt, "error_type": "InvalidCandidates"})
                 request["validation_errors"] = [str(error)]
@@ -860,7 +876,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
 
     with tempfile.TemporaryDirectory(prefix="lladar-generation-") as candidate_dir:
         generation_work = execute(
-            {"stage": "generation", "question_type": question_type, "count": count,
+            {**(request_context or {}), "stage": "generation", "question_type": question_type, "count": count,
              "sources": workspace.list_sources(), "candidate_path": str(Path(candidate_dir) / "candidates.json"),
              "candidate_contract": _CANDIDATE_CONTRACT,
              "controlled_variant_topics": list(controlled_variant_topics),
@@ -902,9 +918,11 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     ]
     if graph is not None:
         graph["control_dimensions"] = list(dimensions)
-    for qa_id, row in workspace.qa.items():
+    count_excluded = 0
+    for qa_index, (qa_id, row) in enumerate(workspace.qa.items()):
         point_id = workspace.qa_points[qa_id]
         if count and len(records) >= count:
+            count_excluded += len(workspace.qa) - qa_index
             break
         identity = (normalize(row["question"]), normalize(row["expected_answer"]))
         if identity in seen_qa:
@@ -925,6 +943,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 continue
             if count and len(records) + len(pair) > count:
                 skipped.append({"pair_id": pair_id, "reason": "count_limit"})
+                count_excluded += len(pair)
                 continue
             identities = [(normalize(item["question"]), normalize(item["expected_answer"])) for item in pair]
             if len(set(identities)) != len(identities) or any(identity in seen_qa for identity in identities):
@@ -933,6 +952,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             selected_plans = pair
         else:
             if count and len(records) >= count:
+                count_excluded += 1
                 continue
             selected_plans = [plan]
         for selected in selected_plans:
@@ -985,7 +1005,9 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                   "valid_qa_points": len(workspace.qa), "accepted_points": len(workspace.points),
                   "attempted_points": sum(p.get("attempts", 0) > 0 for p in workspace.points.values()),
                   "output_records": len(records), "output_points": sum(len(line["knowledge_point_ids"]) for line in lines),
-                  "deduplicated_qa": max(0, len(workspace.qa) + len(probe_plans) - len(records)),
+                  "valid_candidates_before_selection": len(workspace.qa) + len(probe_plans),
+                  "count_limit_excluded": count_excluded,
+                  "deduplicated_qa": max(0, len(workspace.qa) + len(probe_plans) - len(records) - count_excluded),
                   "not_attempted_count_limit": sum(p.get("status") == "not_attempted_count_limit"
                                                    for p in workspace.points.values())},
     }, graph)

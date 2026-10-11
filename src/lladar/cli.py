@@ -222,10 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=_HelpFormatter,
         parents=[log_options],
     )
-    dataset.add_argument("--knowledge", action="append", required=True, metavar="PATH",
-                         help="Source knowledge file or directory; repeat for multiple inputs (required; no default).")
+    dataset_sources = dataset.add_mutually_exclusive_group(required=True)
+    dataset_sources.add_argument("--knowledge", action="append", metavar="PATH",
+                         help="Source knowledge file or directory; repeat for multiple inputs (required unless --from-github is supplied; no default).")
+    dataset_sources.add_argument("--from-github", metavar="URL",
+                         help="Public GitHub repository: discover actual datasets and generate QA with an evidence report (required unless --knowledge is supplied; no default).")
     dataset.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
-                         help="Local method directory containing SKILL.md; selects direct QA or optional graph generation. Only one is supported (default: bundled knowledge-point-qa).")
+                         help="Local method directory containing SKILL.md; selects direct QA or optional graph generation. Only one is supported (default: bundled knowledge-point-qa for --knowledge, github-dataset for --from-github).")
     dataset.add_argument("--output", default=".", metavar="PATH",
                          help=f"Output directory or file path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file; new paths without a suffix are directories (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
@@ -588,7 +591,8 @@ def _execute(
                 controlled_variant_topics = normalize_controlled_variant_topics(args.controlled_variant_topics)
             output = _resolve_dataset_output(args.output)
             records = create_test_dataset(
-                [Path(path) for path in args.knowledge],
+                [Path(path) for path in args.knowledge] if args.knowledge else None,
+                from_github=args.from_github,
                 output=output,
                 count=args.count,
                 question_type=args.question_type,
@@ -623,6 +627,10 @@ def _execute(
                 f"provenance={output}.generation.json)"
             )
             print(f"Generated {len(records)} record(s) at {output}{status}")
+            if args.from_github:
+                from .github_dataset import artifact_paths
+                report_path, _ = artifact_paths(output)
+                print(f"Generation evidence report: {report_path.resolve()}")
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":

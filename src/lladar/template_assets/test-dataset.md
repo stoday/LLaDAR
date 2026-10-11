@@ -11,6 +11,16 @@ The host does not require separate knowledge_points, semantic_graph, or test_pla
 stages. Choose direct QA, a graph, or a mixture according to the active Skill.
 A requested controlled-variant workflow still requires a valid graph and pairs.
 
+With `--from-github`, the same selected Skill must additionally handle
+`github_discovery` and `github_review`. Discovery selects actual dataset files
+and optionally their 1-based rows using repository browsing tools. Generation
+must call `record_answer_basis` for every final QA, identifying source_answer,
+source_annotation or derived_criterion and accepted evidence point IDs.
+Review must submit each assigned frozen QA's approval and evidence-bounded
+reason using `submit_generation_review`. The host creates the mandatory
+per-question generation report. See [GitHub generation](https://github.com/stoday/LLaDAR/blob/main/docs/github-dataset-generation.md)
+for the full contracts. These requirements apply only to GitHub mode.
+
 ## Tools and completion
 
 | Capability | Tools |

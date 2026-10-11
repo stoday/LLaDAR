@@ -33,6 +33,7 @@
       <h2>想讓題目更符合團隊需求？</h2>
       <p>在出題階段放入自己的 <code>SKILL.md</code>，就能告訴 LLaDAR 要特別測哪些情境、不要問哪些內容，或採用團隊既有的題目格式。這適合把通用流程改成特定領域的測試流程。</p>
     </section>
+<section id="github"><h2>探索 GitHub 資料集</h2><pre><code>lladar create test-dataset --from-github https://github.com/hsinmosyi/TWBias --count 20 --output dataset.jsonl</code></pre><p><code>--knowledge</code> 與 <code>--from-github</code> 擇一使用。Agent 自行找到公開文字資料集，並記錄答案依據。<code>dataset.generation-report.md</code> 涵蓋每道正式題目的來源摘錄、固定版本連結、轉換方式、模型檢查與限制；<code>dataset.sources.json</code> 保存原文。執行受測 Agent 前，請先檢閱生成判準。</p></section>
     <section class="note"><h2>範例</h2><p><a href="../examples/support-demo-agent.html">客服 Agent 範例</a>使用 <code>knowledge.md</code> 中的退貨、出貨和退款規則來出題。接著會把這些題目交給既有 Agent 回答。</p></section>
     <section><h2>想測多輪對話？</h2><p>若要觀察受測目標在多輪中的行為，請改看<a href="situations.html">建立情境設定與多輪測試</a>；這條流程不強制提供知識文件。</p></section>
     <nav class="page-nav"><a href="../getting-started.html">← 開始使用</a><a href="run-agent.html">下一步：執行 Agent →</a></nav>

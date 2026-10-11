@@ -34,7 +34,7 @@ streamlit-test = ["streamlit>=1.57,<2"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/strategy.py", "template_assets/*.md"]
+lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/AUTHORING.md", "skill_assets/*/strategy.py", "template_assets/*.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q -m 'not browser'"

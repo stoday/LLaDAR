@@ -67,6 +67,19 @@ Agent 依選定 skill 選擇直接問答，或使用圖譜產生概念映射及�
 也可使用 Python 產生或修正候選結果，正式輸出前會驗證最終資料。
 每份資料集附有 `dataset.jsonl.generation.json`；只有使用有效圖譜時才產生 `dataset.jsonl.graph.json`。
 
+也可以讓 Agent 自行探索公開 GitHub repo 的實際資料集：
+
+```bash
+lladar create test-dataset --from-github https://github.com/hsinmosyi/TWBias --count 20 --output dataset.jsonl
+```
+
+`--knowledge` 與 `--from-github` 擇一使用。GitHub 模式讀取文件，檢查 CSV／JSON／JSONL
+或文字資料，也可沿文件中的公開直接下載連結取得資料。除生成 sidecar 外，會自動產生
+`dataset.generation-report.md` 與 `dataset.sources.json`。報告逐題列出原始樣本、固定版本連結、
+轉換方式、答案依據、模型檢查與限制。Agent 生成的判準會與原始答案或標註分開，使用前請檢閱。
+repo 程式僅供閱讀理解；私有 repo、登入下載、壓縮包與二進位格式暫不支援。
+資源限制與自訂 Skill 階段見 [GitHub 生成說明](docs/github-dataset-generation.zh-TW.md)。
+
 圖譜 probe 用來觀察目標模型如何把「正餐」等推論概念映射至來源實例，沒有唯一正解，
 會與答對率分開報告。合成控制是測試輸入，不是來源或人物主張，預設不產生。
 在終端可用 `--controlled-variant-probes`，於生成工作列出已驗證維度後選擇；

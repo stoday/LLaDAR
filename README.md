@@ -75,6 +75,23 @@ are optional. Python can also produce or repair candidates. Final results are
 validated before publishing. Every dataset includes `dataset.jsonl.generation.json`;
 `dataset.jsonl.graph.json` is written only when a valid graph is used.
 
+To let the Agent discover actual datasets in a public GitHub repository:
+
+```bash
+lladar create test-dataset --from-github https://github.com/hsinmosyi/TWBias --count 20 --output dataset.jsonl
+```
+
+Choose `--knowledge` or `--from-github`. GitHub mode reads repository documents,
+inspects CSV/JSON/JSONL or text data, and can follow documented public direct
+data links. It saves `dataset.generation-report.md` and `dataset.sources.json`
+alongside the usual generation sidecar. The report covers every output question:
+original samples, fixed-version links, transformations, answer origin, model
+review and limits. Generated criteria are identified separately from original
+answers or annotations; review them before using the dataset. Repository code
+is read for context, not executed. Private repositories, sign-in downloads,
+archives and binary formats are not supported. See [GitHub generation](docs/github-dataset-generation.md)
+for resource limits and custom Skill stages.
+
 Graph probes observe how a target maps an inferred concept such as “meal” to
 source-backed peers; they do not have a single correct answer and are reported
 separately from correctness. Synthetic controls are test inputs, not claims
