@@ -53,6 +53,7 @@ def test_akasha_native_skill_is_loaded_only_after_the_model_requests_it(tmp_path
 
     evidence = agent({"stage": "qa", "knowledge_point_id": "point-1"})
 
+    assert "reference='native-example'" in str(model.prompts[0])
     assert "NEBULA-METHOD" not in str(model.prompts[0])
     assert "NEBULA-METHOD" in str(model.prompts[1])
     assert "AUTHOR-GUIDE-ALTERNATIVE" not in str(model.prompts)

@@ -8,6 +8,7 @@ import io
 import ipaddress
 import json
 import re
+import random
 import socket
 import tempfile
 from collections import Counter
@@ -29,6 +30,7 @@ GITHUB_SKILL = Path(__file__).parent / "skill_assets" / "github-dataset"
 FORMATS = {".md", ".txt", ".csv", ".json", ".jsonl"}
 LIMITS = {"file_bytes": 2 * 1024 * 1024, "total_bytes": 20 * 1024 * 1024,
           "requests": 100, "timeout_seconds": 20, "redirects": 5, "repository_files": 2000,
+          "stream_file_bytes": 16 * 1024 * 1024, "sample_rows": 200000, "sample_size": 100,
           "selected_source_chars": 24000, "host_tool_calls": 160, "model_rounds": 80}
 
 
@@ -64,7 +66,7 @@ class GithubClient:
         self.request_count = 0
         self.total_bytes = 0
 
-    def fetch_url(self, url: str) -> dict:
+    def fetch_url(self, url: str, *, destination: Path | None = None) -> dict:
         initial_url = url
         for _ in range(LIMITS["redirects"] + 1):
             parsed = urlparse(url)
@@ -99,12 +101,21 @@ class GithubClient:
                     if response.status_code != 200:
                         raise KnowledgeLoadError(f"public data download failed (HTTP {response.status_code})")
                     chunks, size = [], 0
-                    for chunk in response.iter_content(65536):
-                        size += len(chunk)
-                        self.total_bytes += len(chunk)
-                        if size > LIMITS["file_bytes"] or self.total_bytes > LIMITS["total_bytes"]:
-                            raise KnowledgeLoadError("dataset download size limit exceeded")
-                        chunks.append(chunk)
+                    sink = destination.open("wb") if destination is not None else None
+                    limit = LIMITS["stream_file_bytes"] if sink else LIMITS["file_bytes"]
+                    try:
+                        for chunk in response.iter_content(65536):
+                            size += len(chunk)
+                            self.total_bytes += len(chunk)
+                            if size > limit or self.total_bytes > LIMITS["total_bytes"]:
+                                raise KnowledgeLoadError("dataset download size limit exceeded")
+                            if sink:
+                                sink.write(chunk)
+                            else:
+                                chunks.append(chunk)
+                    finally:
+                        if sink:
+                            sink.close()
                     content = b"".join(chunks)
                     return {"content": content, "original_url": initial_url, "url": url,
                             "retrieved_at": datetime.now(timezone.utc).isoformat()}
@@ -192,6 +203,9 @@ def normalize_file(path: str, text: str) -> tuple[str, list[dict]]:
     return "".join(chunks), locations
 
 
+from .work_session import current_session
+
+
 class Discovery:
     """Repository browsing capabilities; the Agent selects the data paths."""
 
@@ -199,6 +213,14 @@ class Discovery:
         self.owner, self.repo = repository_identity(url)
         self.url = f"https://github.com/{self.owner}/{self.repo}"
         self.client = client
+        session = current_session()
+        saved = (session.data["state"].get("github_discovery") or session.data["state"].get("github_discovery_progress")) if session else None
+        if saved:
+            for key in ("commit", "files", "fetched", "reads", "selection", "failures"):
+                setattr(self, key, saved[key])
+            self.reporter = reporter
+            self.max_selected_chars = max_selected_chars
+            return
         resolved = client.resolve_repository(self.owner, self.repo)
         self.commit = resolved["sha"]
         if not re.fullmatch(r"[a-fA-F0-9]{40}", self.commit):
@@ -210,6 +232,13 @@ class Discovery:
         self.failures = []
         self.reporter = reporter
         self.max_selected_chars = max_selected_chars
+        self.checkpoint()
+
+    def checkpoint(self):
+        session = current_session()
+        if session:
+            session.put("github_discovery_progress", {key: getattr(self, key) for key in
+                ("commit", "files", "fetched", "reads", "selection", "failures")})
 
     def list_repository_files(self) -> list[dict]:
         """List repository file paths and sizes at the fixed commit."""
@@ -256,6 +285,91 @@ class Discovery:
                                  "discovered_from": {"path": read["path"], "quote": url}}
         return self._page(url, start_char)
 
+    def sample_dataset_rows(self, path: str, sample_size: int = 20, seed: int = 0,
+                            max_rows: int = 200000) -> dict:
+        """Reservoir sample complete CSV/JSONL rows within explicit download and scan budgets."""
+        if path not in {item["path"] for item in self.files} or Path(path).suffix.lower() not in {".csv", ".jsonl"}:
+            raise ValueError("sampling requires a declared CSV or JSONL file")
+        if type(sample_size) is not int or not 1 <= sample_size <= LIMITS["sample_size"]:
+            raise ValueError("sample_size must be between 1 and 100")
+        if type(seed) is not int or type(max_rows) is not int or not 1 <= max_rows <= LIMITS["sample_rows"]:
+            raise ValueError("invalid seed or max_rows scan budget")
+        session = current_session()
+        with tempfile.TemporaryDirectory(prefix="lladar-sample-") as directory:
+            downloaded = Path(directory) / "source"
+            if isinstance(self.client, GithubClient):
+                url = f"https://raw.githubusercontent.com/{self.owner}/{self.repo}/{self.commit}/{quote(path, safe='/')}"
+                self.client.fetch_url(url, destination=downloaded)
+            else:
+                raw = self.client.read_file(self.owner, self.repo, self.commit, path)
+                if len(raw) > LIMITS["stream_file_bytes"]:
+                    raise KnowledgeLoadError("stream source download size limit exceeded")
+                downloaded.write_bytes(raw)
+            full_hash = hashlib.sha256()
+            with downloaded.open("rb") as binary:
+                for chunk in iter(lambda: binary.read(65536), b""):
+                    full_hash.update(chunk)
+            rng, sample, total, exhausted = random.Random(seed), [], 0, True
+            with downloaded.open("r", encoding="utf-8-sig", newline="") as handle:
+                if Path(path).suffix.lower() == ".csv":
+                    reader = csv.DictReader(handle)
+                    if not reader.fieldnames or len(set(reader.fieldnames)) != len(reader.fieldnames):
+                        raise KnowledgeLoadError("CSV requires distinct column names")
+                else:
+                    reader = (json.loads(line) for line in handle if line.strip())
+                for index, row in enumerate(reader, 1):
+                    if index > max_rows:
+                        exhausted = False
+                        break
+                    if not isinstance(row, dict) or None in row:
+                        raise KnowledgeLoadError("dataset row must be a complete object")
+                    total = index
+                    location = {"data_row": index, "values": row}
+                    if len(sample) < sample_size:
+                        sample.append(location)
+                    else:
+                        choice = rng.randrange(index)
+                        if choice < sample_size:
+                            sample[choice] = location
+                    if self.reporter and (index % 10000 == 0):
+                        self.reporter.emit("SOURCE", f"scanned_rows={index} scan_budget={max_rows}")
+            if not total:
+                raise KnowledgeLoadError("dataset has no rows")
+            sample.sort(key=lambda item: item["data_row"])
+            text = "".join(json.dumps(item, ensure_ascii=False) + "\n" for item in sample)
+            if len(text) > self.max_selected_chars:
+                raise ValueError("sample exceeds selected text budget; use a smaller sample_size")
+            snapshot = None
+            if session:
+                raw_path = session.directory / "sources" / (full_hash.hexdigest() + Path(path).suffix.lower())
+                raw_path.parent.mkdir(parents=True, exist_ok=True)
+                if not raw_path.exists():
+                    import shutil
+                    shutil.copyfile(downloaded, raw_path)
+                snapshot = str(raw_path.relative_to(session.directory))
+        scope = "full_population_sample" if exhausted else "scanned_prefix_sample"
+        self.fetched[path] = {"path": path, "text": text, "sha256": full_hash.hexdigest(),
+            "sample_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "url": f"{self.url}/blob/{self.commit}/{quote(path, safe='/')}",
+            "sample_rows": sample, "scanned_rows": total, "total_rows": total if exhausted else None,
+            "sampling": {"seed": seed, "sample_size": len(sample), "scope": scope,
+                         "stop_reason": "end_of_source" if exhausted else "scan_budget"},
+            "raw_snapshot": snapshot}
+        return {"path": path, "rows": sample, "total_rows": total if exhausted else None,
+                "scanned_rows": total, "scope": scope, "sha256": full_hash.hexdigest()}
+
+    def normalized(self, path):
+        saved = self.fetched[path]
+        if "sample_rows" not in saved:
+            return normalize_file(path, saved["text"])
+        rows, chunks, cursor = [], [], 0
+        for item in saved["sample_rows"]:
+            text = json.dumps(item, ensure_ascii=False) + "\n"
+            rows.append({**item, "start_char": cursor, "end_char": cursor + len(text)})
+            chunks.append(text)
+            cursor += len(text)
+        return "".join(chunks), rows
+
     def _page(self, path, start_char):
         text = self.fetched[path]["text"]
         if type(start_char) is not int or not 0 <= start_char <= len(text):
@@ -267,7 +381,7 @@ class Discovery:
         self.reads[read["read_id"]] = read
         result = dict(read)
         if Path(urlparse(path).path).suffix.lower() in {".csv", ".json", ".jsonl"}:
-            _, rows = normalize_file(path, text)
+            _, rows = self.normalized(path)
             result["preview"] = rows[:5]
             result["total_rows"] = len(rows)
         return result
@@ -284,10 +398,10 @@ class Discovery:
         for path in data_paths:
             if path not in self.fetched:
                 raise ValueError("read each selected dataset before selecting it")
-            normalized, rows = normalize_file(path, self.fetched[path]["text"])
+            normalized, rows = self.normalized(path)
             if path in row_selections:
                 chosen = row_selections[path]
-                if (not isinstance(chosen, list) or not chosen or any(type(row) is not int or not 1 <= row <= len(rows) for row in chosen)
+                if (not isinstance(chosen, list) or not chosen or any(type(row) is not int or row not in {item["data_row"] for item in rows} for row in chosen)
                         or len(set(chosen)) != len(chosen)):
                     raise ValueError("row selections require distinct valid 1-based data row numbers")
                 selected_chars += sum(row["end_char"] - row["start_char"] for row in rows if row["data_row"] in chosen)
@@ -315,7 +429,7 @@ class Discovery:
         """Inspect parsed dataset rows by 1-based data row, retaining original identifiers."""
         if path not in self.fetched:
             raise ValueError("read the dataset file before inspecting rows")
-        _, rows = normalize_file(path, self.fetched[path]["text"])
+        _, rows = self.normalized(path)
         if not rows or type(start_row) is not int or not 1 <= start_row <= len(rows) or type(limit) is not int or not 1 <= limit <= 20:
             raise ValueError("row preview requires a valid start_row and limit between 1 and 20")
         return {"path": path, "total_rows": len(rows), "rows": rows[start_row - 1:start_row - 1 + limit]}
@@ -329,15 +443,17 @@ class Discovery:
                 except (KnowledgeLoadError, ValueError, json.JSONDecodeError) as error:
                     self.failures.append({"tool": function.__name__, "source": args[0] if args else kwargs.get("path", kwargs.get("url")),
                                           "reason": str(error)})
+                    self.checkpoint()
                     if self.reporter:
                         self.reporter.emit("GITHUB", f"{function.__name__}: {error}")
                     raise ValueError(str(error)) from error
+                self.checkpoint()
                 if self.reporter:
                     self.reporter.emit("GITHUB", f"{function.__name__} completed")
                 return result
             return invoke
         return {name: observed(getattr(self, name)) for name in
-                ("list_repository_files", "read_repository_file", "read_external_dataset", "read_dataset_rows", "select_dataset")}
+                ("list_repository_files", "read_repository_file", "read_external_dataset", "read_dataset_rows", "sample_dataset_rows", "select_dataset")}
 
 
 def _literal(value: str) -> str:
@@ -372,6 +488,8 @@ def render_report(result, github, snapshots, sources_path):
         report += [f"### 題目 {line['line']}", "", f"題目引用：`{line['record_fingerprint']}`；JSONL 列號：{line['line']}",
                    "", "題目：", _literal(row["question"]), "預期答案／判準：", _literal(row["expected_answer"]),
                    f"答案依據：`{line['answer_basis']}`", "", "轉換理由：", _literal(line["basis_rationale"])]
+        if line.get("source_answer_mapping"):
+            report += ["?????????", _literal(json.dumps(line["source_answer_mapping"], ensure_ascii=False, indent=2))]
         for point_id in line["basis_point_ids"]:
             for evidence in points[point_id]["evidence"]:
                 item = files[evidence["source_id"]]
@@ -384,6 +502,12 @@ def render_report(result, github, snapshots, sources_path):
                    "人工檢閱：未執行。", ""]
     report += ["## 跳過與未處理範圍", "", _literal(json.dumps(result.provenance["skipped"], ensure_ascii=False, indent=2)),
                "下載範圍：僅本次讀取並保存的檔案；未讀取的資料不宣稱已覆蓋。", ""]
+    for item in snapshots["files"]:
+        if "sampling" in item:
+            report += ["????????", _literal(json.dumps({"path": item["path"],
+                "sampling": item["sampling"], "scanned_rows": item["scanned_rows"],
+                "total_rows": item["total_rows"], "source_sha256": item["sha256"],
+                "sample_sha256": item["sample_sha256"], "raw_snapshot": item["raw_snapshot"]}, ensure_ascii=False, indent=2))]
     return "\n".join(report) + "\n"
 
 
@@ -396,7 +520,14 @@ def review_questions(result, snapshots, discovery, agent_factory, skill, agent_o
         items.append({"record_fingerprint": line["record_fingerprint"], **row,
                       "answer_basis": line["answer_basis"], "transformation": line["basis_rationale"],
                       "evidence": evidence})
-    reviews, executions = {}, []
+    session = current_session()
+    saved = session.data["state"].get("github_reviews", {}) if session else {}
+    reviews = dict(saved.get("judgments", {}))
+    executions = list(saved.get("executions", []))
+
+    def checkpoint_reviews():
+        if session:
+            session.put("github_reviews", {"judgments": reviews, "executions": executions})
     # Conservative character budget; each batch includes documentation and the Skill.
     budget = max(1000, profile.max_input_tokens // 2)
     context = {"stage": "github_review", "selection": discovery.selection,
@@ -417,6 +548,8 @@ def review_questions(result, snapshots, discovery, agent_factory, skill, agent_o
         batches.append(batch)
     for batch in batches:
         assigned = {item["record_fingerprint"] for item in batch}
+        if assigned <= reviews.keys():
+            continue
 
         def submit_generation_review(judgments: list[dict]) -> dict:
             """Review every assigned QA: record_fingerprint, approved boolean and evidence-bounded reason."""
@@ -433,6 +566,7 @@ def review_questions(result, snapshots, discovery, agent_factory, skill, agent_o
             if set(proposed) != assigned:
                 raise ValueError("review must cover every assigned question")
             reviews.update(proposed)
+            checkpoint_reviews()
             return {"reviewed": len(proposed)}
 
         errors = []
@@ -448,6 +582,7 @@ def review_questions(result, snapshots, discovery, agent_factory, skill, agent_o
             except (RuntimeError, ProviderError) as error:
                 execution = {**getattr(error, "skill_evidence", {}), "error_type": type(error).__name__}
             executions.append({"attempt": attempt, **execution})
+            checkpoint_reviews()
             if skill.name in execution.get("loaded_skills", []) and assigned <= reviews.keys():
                 break
             errors = ["model review must load the selected skill with load_skill and cover every assigned question"]
@@ -525,22 +660,30 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
     )
     agent_options.update(**runtime_options, max_input_tokens=options["profile"].max_input_tokens,
                          max_output_tokens=options["profile"].max_output_tokens)
-    discovery_agent = agent_factory(skills=[str(selected_skill)], tools=discovery.tools(), **agent_options)
-    try:
-        evidence = discovery_agent({"stage": "github_discovery", "repository": discovery.url,
-                                    "commit": discovery.commit, "question_type": options["question_type"],
-                                    "count": options["count"], "resource_limits": {**LIMITS, "selected_source_chars": selected_limit}})
-    except (ProviderError, RuntimeError) as error:
-        evidence = getattr(error, "skill_evidence", {})
-        diagnostics.update(commit=discovery.commit, selection=discovery.selection,
-                           snapshots={"files": list(discovery.fetched.values())})
-        if discovery.selection is None or selected_skill.name not in evidence.get("loaded_skills", []):
-            raise
-        evidence = {**evidence, "completion": "recovered_valid_selection", "error_type": type(error).__name__}
-    if selected_skill.name not in evidence.get("loaded_skills", []) or discovery.selection is None:
-        raise DatasetValidationError("GitHub discovery must load the skill and select an actual dataset")
+    session = current_session()
+    saved_discovery = session.data["state"].get("github_discovery") if session else None
+    if saved_discovery:
+        evidence = saved_discovery["evidence"]
+    else:
+        discovery_agent = agent_factory(skills=[str(selected_skill)], tools=discovery.tools(), **agent_options)
+        try:
+            evidence = discovery_agent({"stage": "github_discovery", "repository": discovery.url,
+                                        "commit": discovery.commit, "question_type": options["question_type"],
+                                        "count": options["count"], "resource_limits": {**LIMITS, "selected_source_chars": selected_limit}})
+        except (ProviderError, RuntimeError) as error:
+            evidence = getattr(error, "skill_evidence", {})
+            diagnostics.update(commit=discovery.commit, selection=discovery.selection,
+                               snapshots={"files": list(discovery.fetched.values())})
+            if discovery.selection is None or selected_skill.name not in evidence.get("loaded_skills", []):
+                raise
+            evidence = {**evidence, "completion": "recovered_valid_selection", "error_type": type(error).__name__}
+        if selected_skill.name not in evidence.get("loaded_skills", []) or discovery.selection is None:
+            raise DatasetValidationError("GitHub discovery must load the skill and select an actual dataset")
+        if session:
+            session.put("github_discovery", {key: getattr(discovery, key) for key in
+                ("commit", "files", "fetched", "reads", "selection", "failures")} | {"evidence": evidence})
     diagnostics.update(commit=discovery.commit, selection=discovery.selection, discovery_execution=evidence)
-    bases = {}
+    bases = dict(session.data["state"].get("github_bases", {})) if session else {}
 
     def basis_tools(workspace):
         def record_answer_basis(question: str, expected_answer: str, answer_basis: str,
@@ -551,13 +694,22 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
             if (not isinstance(evidence_point_ids, list) or not evidence_point_ids
                     or any(point not in workspace.points for point in evidence_point_ids)):
                 raise ValueError("answer basis requires accepted knowledge point evidence")
+            original_mapping = workspace.original_answer_mapping(expected_answer,
+                [item for point_id in evidence_point_ids for item in workspace.points[point_id]["evidence"]]) if answer_basis == "source_answer" else []
+            if answer_basis == "source_answer" and not original_mapping:
+                raise ValueError("source_answer must preserve an original saved answer field; use source_annotation or derived_criterion for transformed criteria")
             key = record_fingerprint({"question": question, "expected_answer": expected_answer})
             bases[key] = {"answer_basis": answer_basis, "basis_rationale": _text(rationale, "rationale"),
-                          "basis_point_ids": list(evidence_point_ids)}
+                          "basis_point_ids": list(evidence_point_ids), "source_answer_mapping": original_mapping}
+            if session:
+                session.put("github_bases", dict(bases))
             return {"record_fingerprint": key, "recorded": True}
         return {"record_answer_basis": record_answer_basis}
 
     def validate_bases(workspace):
+        for qa_id, basis in workspace.answer_bases.items():
+            if all(point in workspace.points for point in basis["basis_point_ids"]):
+                bases[record_fingerprint(workspace.qa[qa_id])] = dict(basis)
         missing = []
         for row in list(workspace.qa.values()) + workspace.test_plans:
             fingerprint = record_fingerprint(row)
@@ -572,8 +724,8 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
         snapshots = {"files": [dict(item) for item in discovery.fetched.values()]}
         diagnostics.update(stage="generation", snapshots=snapshots, answer_bases=bases)
         for index, path in enumerate(sorted(discovery.selection["data_paths"]), 1):
-            normalized, rows = normalize_file(path, discovery.fetched[path]["text"])
-            total_rows = len(rows)
+            normalized, rows = discovery.normalized(path)
+            total_rows = discovery.fetched[path].get("total_rows", len(rows))
             chosen = discovery.selection["row_selections"].get(path)
             if chosen:
                 selected_rows, chunks, cursor = [], [], 0
@@ -593,10 +745,11 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
                          total_data_rows=total_rows, selected_data_rows=len(rows))
         result = generate_with_skill(paths, skill=selected_skill, agent_factory=agent_factory,
                                      extra_tools_factory=basis_tools, runtime_options=runtime_options,
+                                     allow_candidate_files=skill is not None,
                                      candidate_validator=validate_bases,
                                      request_context={"github_selection": discovery.selection,
                                                       "answer_basis_required": True,
-                                                      "answer_basis_contract": "For every final QA call record_answer_basis(question, expected_answer, answer_basis, rationale, evidence_point_ids). Use accepted point IDs and source_answer|source_annotation|derived_criterion."}, **options)
+                                                      "answer_basis_contract": "Prefer atomic submit_question for free QA. For legacy submit_qa or graph QA call record_answer_basis(question, expected_answer, answer_basis, rationale, evidence_point_ids). Use accepted point IDs and source_answer|source_annotation|derived_criterion."}, **options)
         point_ids = {point["id"] for point in result.provenance["knowledge_points"]}
         for line in result.provenance["dataset"]["lines"]:
             basis = bases.get(line["record_fingerprint"])
@@ -608,7 +761,8 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
                   "discovery_execution": evidence, "resource_limits": {**LIMITS, "selected_source_chars": selected_limit}}
         result.provenance["github"] = github
         result.provenance["skipped"].extend(discovery.failures)
-        if discovery.failures:
+        if discovery.failures or any(item.get("sampling", {}).get("scope") == "scanned_prefix_sample"
+                                     for item in snapshots["files"]):
             result.provenance["status"] = "partial"
         diagnostics.update(stage="github_review", generation=result.provenance)
         review_questions(result, snapshots, discovery, agent_factory, selected_skill, agent_options, options["profile"])
@@ -616,7 +770,8 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
             "downloaded_files": len(discovery.fetched),
             "selected_files": len(discovery.selection["data_paths"]),
             "selected_data_rows": sum(item.get("selected_data_rows", 0) for item in snapshots["files"]),
-            "total_rows_in_selected_tables": sum(item.get("total_data_rows", 0) for item in snapshots["files"]),
+            "total_rows_in_selected_tables": None if any(item.get("total_data_rows", 0) is None for item in snapshots["files"])
+                else sum(item.get("total_data_rows", 0) for item in snapshots["files"]),
             "qa_submissions": result.provenance["stats"]["qa_candidates"],
             "structurally_valid_candidates": result.provenance["stats"]["valid_candidates_before_selection"],
             "deduplicated_questions": result.provenance["stats"]["deduplicated_qa"],
@@ -633,6 +788,17 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
         }
         result.provenance["stats"]["output_points"] = sum(len(line["knowledge_point_ids"]) for line in result.provenance["dataset"]["lines"])
         report_path, sources_path = artifact_paths(output)
+        session = current_session()
+        if session:
+            for item in snapshots["files"]:
+                raw_snapshot = item.get("raw_snapshot")
+                if raw_snapshot:
+                    saved = session.directory / raw_snapshot
+                    if hashlib.sha256(saved.read_bytes()).hexdigest() != item["sha256"]:
+                        raise DatasetValidationError("raw source snapshot integrity check failed")
+                    target = output.with_name(output.stem + ".source-" + item["sha256"][:16] + Path(item["path"]).suffix)
+                    result.artifacts[target] = saved.read_bytes().decode("utf-8")
+                    item["raw_snapshot"] = target.name
         result.artifacts[sources_path] = json.dumps(snapshots, ensure_ascii=False, indent=2) + "\n"
         result.artifacts[report_path] = render_report(result, github, snapshots, sources_path)
         # Published source references point to saved evidence, not deleted temporary files.

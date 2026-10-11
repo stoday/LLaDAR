@@ -132,3 +132,89 @@ def test_situation_summary_is_logged(tmp_path, capsys):
 def test_failed_stage_does_not_display_a_success_summary(tmp_path, capsys):
     assert cli.main(["eval", str(tmp_path / "missing.jsonl"), "--no-verbose"]) == 2
     assert "Work summary" not in capsys.readouterr().out
+
+
+def test_interrupted_generation_prints_executable_resume_command_and_locations(tmp_path, monkeypatch, capsys):
+    import shlex
+    from test_agent_selected_generation import DirectAgent
+    monkeypatch.chdir(tmp_path)
+    knowledge=tmp_path/'source notes.md'
+    knowledge.write_text('Retention is 30 days.',encoding='utf-8')
+    class Interrupted(DirectAgent):
+        def __call__(self, request):
+            raise KeyboardInterrupt()
+    argv=['create','test-dataset','--knowledge',str(knowledge),'--output','results folder',
+          '--count','1','--seed','7','--no-verbose']
+    assert cli.main(argv,skill_agent_factory=Interrupted)==130
+    captured=capsys.readouterr()
+    command=next((line.strip() for line in captured.err.splitlines() if line.strip().startswith('lladar ')),None)
+    assert command is not None
+    tokens=shlex.split(command)
+    assert tokens[tokens.index('--resume')+1].endswith('.work')
+    assert Path(tokens[tokens.index('--resume')+1]).is_dir()
+    assert Path(tokens[tokens.index('--output')+1]).is_absolute()
+    assert str(tmp_path) in captured.err and str(knowledge) in captured.err
+    assert '--seed' in tokens and tokens[tokens.index('--seed')+1]=='7'
+    assert cli.main(tokens[1:],skill_agent_factory=DirectAgent)==0
+
+
+def test_provider_interruption_prints_resume_without_force_and_reuses_original_overwrite_authorization(tmp_path, monkeypatch, capsys):
+    import shlex
+    from lladar.exceptions import ProviderError
+    from test_simple_pipeline import EvaluationSkillAgent
+    from test_recoverable_evaluation import responses
+    monkeypatch.chdir(tmp_path)
+    source=responses(tmp_path)
+    output=tmp_path/'evaluation.json'
+    output.write_text('previous result',encoding='utf-8')
+    Path(str(output)+'.work').mkdir()
+    class Unavailable(EvaluationSkillAgent):
+        def __call__(self, request):
+            if request['stage']=='judgment':
+                raise ProviderError('fixture unavailable')
+            return super().__call__(request)
+    assert cli.main(['eval',str(source),'--output',str(output),'--force','--no-verbose'],skill_agent_factory=Unavailable)==2
+    message=capsys.readouterr().err
+    tokens=shlex.split(next(line.strip() for line in message.splitlines() if line.strip().startswith('lladar ')))
+    assert '--force' not in tokens
+    session=Path(tokens[tokens.index('--resume')+1])
+    assert session.name.startswith('evaluation.json.work-')
+    assert output.read_text(encoding='utf-8')=='previous result'
+    assert cli.main(tokens[1:],skill_agent_factory=EvaluationSkillAgent)==0
+    assert json.loads(output.read_text(encoding='utf-8'))['summary']['evaluated']==2
+
+
+def test_browser_interruption_resume_hint_keeps_private_url_out_of_output(tmp_path,capsys):
+    from test_simple_pipeline import make_dataset, browser_cli_terminal
+    source=tmp_path/'dataset.jsonl'
+    make_dataset(source,count=1)
+    def interrupted(**options):
+        raise KeyboardInterrupt()
+    with browser_cli_terminal():
+        assert cli.main(['run-agent',str(source),'--page-url','https://example.test/private-path?token=private-token',
+                         '--output',str(tmp_path/'responses.jsonl'),'--no-verbose'],browser_target_factory=interrupted)==130
+    message=capsys.readouterr().err
+    assert 'private-path' not in message and 'private-token' not in message
+    assert 'Enter the same --page-url' in message
+    assert '--resume' in message
+
+
+def test_interrupted_report_resume_command_keeps_input_and_model_budgets(tmp_path,monkeypatch,capsys):
+    import shlex
+    from lladar.evaluation import evaluate
+    from test_simple_pipeline import EvaluationSkillAgent, ReportSkillAgent
+    from test_recoverable_evaluation import responses
+    monkeypatch.chdir(tmp_path)
+    evaluation=tmp_path/'evaluation file.json'
+    evaluate(responses(tmp_path),output=evaluation,skill_agent_factory=EvaluationSkillAgent,verbose=False)
+    class Interrupted(ReportSkillAgent):
+        def __call__(self, request):
+            raise KeyboardInterrupt()
+    assert cli.main(['report',str(evaluation),'--output','report file.md','--max-output-tokens','2000',
+                     '--no-verbose'],skill_agent_factory=Interrupted)==130
+    message=capsys.readouterr().err
+    assert str(evaluation) in message
+    tokens=shlex.split(next(line.strip() for line in message.splitlines() if line.strip().startswith('lladar ')))
+    assert tokens[tokens.index('--max-output-tokens')+1]=='2000'
+    assert cli.main(tokens[1:],skill_agent_factory=ReportSkillAgent)==0
+    assert (tmp_path/'report file.md').exists()

@@ -113,6 +113,7 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
             (".generation.json", "Generation methods, source provenance and validation results."),
             (".graph.json", "Knowledge graph and declared control dimensions used for generation."),
         ],
+        "report": [(".report.json", "Report section citations and work-session metadata.")],
         "run-agent": ([
             (".turns.jsonl", "Individual conversation turns and their identifiers."),
             (".scenarios.jsonl", "Generated scenarios, starting messages and selected variations."),
@@ -132,6 +133,17 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
         artifact = Path(str(path) + suffix)
         if artifact.is_file():
             print(f"    {artifact}\n      {description}")
+    metadata_path = {"test-dataset": Path(str(path) + ".generation.json"),
+                     "run-agent": Path(str(path) + ".run.json"), "eval": path,
+                     "report": Path(str(path) + ".report.json")}.get(stage)
+    if metadata_path and metadata_path.is_file():
+        try:
+            session = json.loads(metadata_path.read_text(encoding="utf-8")).get("session")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            session = None
+        if session:
+            print(f"  Work session: {session['path']}")
+            print("    Continue with --resume SESSION_PATH and the same inputs/settings.")
     if stage == "test-dataset":
         next_step = ["lladar", "run-agent", str(path), "--project", "PROJECT"]
     elif stage == "situation":
@@ -482,8 +494,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Model used to write report prose when a report skill is invoked (default: {DEFAULT_REPORT_MODEL}).")
     report.add_argument("--env-file", default=".env", metavar="PATH",
                         help="Environment file for the report model provider when invoked (default: .env).")
+    report.add_argument("--max-input-tokens", type=int, metavar="N", help="Override the report model input budget (default: model profile).")
+    report.add_argument("--max-output-tokens", type=int, metavar="N", help="Override the report model output budget (default: model profile).")
     report.add_argument("--force", action="store_true",
                         help="Replace an existing Markdown report (default: off).")
+    for command in (dataset, runner, evaluation, report):
+        command.add_argument("--resume", metavar="SESSION_PATH",
+            help="Continue a saved work session with identical inputs and settings; cannot combine with --force (default: start a new session).")
+    report.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True,
+                        help="Show report section and publication progress (default: enabled).")
     return parser
 
 
@@ -500,7 +519,10 @@ def main(
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = build_parser()
-    args = parser.parse_args(list(argv) if argv is not None else None)
+    invocation = list(argv) if argv is not None else sys.argv[1:]
+    args = parser.parse_args(invocation)
+    args._invocation = invocation
+    args._working_directory = str(Path.cwd().resolve())
     if args.command == "run-agent" and args.page_url and not args.situation_config:
         if args.interactive is not None:
             parser.error("--interactive and --no-interactive are project mode only; omit both with --page-url.")
@@ -524,6 +546,65 @@ def main(
         return 2
 
 
+def _show_resume_instructions(args, error):
+    """Offer a runnable command only for a session created by this invocation."""
+    hint = getattr(error, "work_session_hint", None)
+    if not hint:
+        return
+    import os
+    import shlex
+    quote = (lambda value: "'" + str(value).replace("'", "''") + "'") if os.name == "nt" else shlex.quote
+    tokens = []
+    url_variables = {}
+    original = args._invocation
+    index = 0
+    while index < len(original):
+        token = original[index]
+        url_option = token.split("=", 1)[0]
+        if url_option in {"--page-url", "--service-url"}:
+            variable = "lladarResumePageUrl" if url_option == "--page-url" else "lladarResumeServiceUrl"
+            url_variables[url_option] = variable
+            tokens.extend([url_option, ("$" + variable, True)])
+            index += 1 if "=" in token else 2
+            continue
+        if token in {"--output", "--resume"}:
+            index += 2
+            continue
+        if token == "--force" or token.startswith(("--output=", "--resume=")):
+            index += 1
+            continue
+        tokens.append(token)
+        index += 1
+    tokens.extend(["--output", hint["output"], "--resume", hint["path"]])
+    print("\nResume interrupted work", file=sys.stderr)
+    print("  Working directory: " + args._working_directory, file=sys.stderr)
+    for key, label in (("knowledge", "Knowledge input"), ("dataset", "Dataset"),
+                       ("responses", "Responses"), ("eval_output", "Evaluation"),
+                       ("project", "Target project"), ("adapt", "Adapter file"), ("skill", "Skill directory"),
+                       ("config", "Configuration file"), ("env_file", "Environment file")):
+        value = getattr(args, key, None)
+        if value:
+            for location in value if isinstance(value, list) else [value]:
+                print(f"  {label}: {Path(location).resolve()}", file=sys.stderr)
+    print("  Output: " + hint["output"], file=sys.stderr)
+    print("  Session directory: " + hint["path"], file=sys.stderr)
+    print("  Keep the session directory and inputs unchanged; use the same Python environment.", file=sys.stderr)
+    if hint["persistence_failed"]:
+        print("  The last checkpoint write failed; resume uses the last successfully saved state.", file=sys.stderr)
+    print("  Run these commands to continue (" + ("PowerShell" if os.name == "nt" else "shell") + "):", file=sys.stderr)
+    print("  " + ("Set-Location -LiteralPath " if os.name == "nt" else "cd -- ") + quote(args._working_directory), file=sys.stderr)
+    for option, variable in url_variables.items():
+        prompt = "Enter the same " + option
+        if os.name == "nt":
+            print("  $" + variable + " = [System.Net.NetworkCredential]::new('', (Read-Host " + quote(prompt) + " -AsSecureString)).Password", file=sys.stderr)
+        else:
+            print("  printf '%s' " + quote(prompt + ": "), file=sys.stderr)
+            print("  read -r " + variable, file=sys.stderr)
+    rendered = [token[0] if isinstance(token, tuple) and os.name == "nt" else
+                '"' + token[0] + '"' if isinstance(token, tuple) else quote(token) for token in tokens]
+    print("  lladar " + " ".join(rendered), file=sys.stderr)
+
+
 def _execute(
     args: argparse.Namespace,
     parser: argparse.ArgumentParser,
@@ -535,6 +616,20 @@ def _execute(
     situation_provider_factory,
 ) -> int:
     try:
+        resume = getattr(args, "resume", None)
+        if resume is not None:
+            if args.force:
+                raise ValueError("--resume and --force cannot be combined")
+            if getattr(args, "situation_config", None):
+                raise ValueError("--resume is not supported for situation mode")
+            saved = json.loads((Path(resume) / "session.json").read_text(encoding="utf-8"))
+            from .work_session import digest
+            if digest(saved["data"]) != saved["sha256"]:
+                raise ValueError("checkpoint integrity check failed")
+            default_output = {"create": ".", "run-agent": "responses.jsonl",
+                              "eval": "evaluation.json", "report": "report.md"}[args.command]
+            if args.output == default_output:
+                args.output = saved["data"]["configuration"]["output"]
         filenames = {"run-agent": "responses.jsonl", "eval": "evaluation.json", "report": "report.md"}
         if args.command in filenames:
             args.output = str(_resolve_output(args.output, filenames[args.command]))
@@ -593,6 +688,7 @@ def _execute(
             records = create_test_dataset(
                 [Path(path) for path in args.knowledge] if args.knowledge else None,
                 from_github=args.from_github,
+                resume=resume,
                 output=output,
                 count=args.count,
                 question_type=args.question_type,
@@ -678,6 +774,7 @@ def _execute(
                 calibration_question=args.calibration_question,
                 env_file=args.env_file,
                 force=args.force,
+                resume=resume,
                 verbose=args.verbose,
                 runs_root=runs_root,
                 model=args.model,
@@ -734,6 +831,7 @@ def _execute(
                 env_file=args.env_file,
                 strict=args.strict,
                 force=args.force,
+                resume=resume,
                 skill_agent_factory=skill_agent_factory,
             )
             print(f"Evaluated {result['summary']['evaluated']} record(s) at {args.output}")
@@ -746,6 +844,8 @@ def _execute(
             env_file=args.env_file,
             skill=args.skill,
             force=args.force,
+            resume=resume, verbose=args.verbose, skill_agent_factory=skill_agent_factory,
+            max_input_tokens=args.max_input_tokens,max_output_tokens=args.max_output_tokens,
         )
         print(f"Created evaluation report at {destination}")
         _show_work_summary("report", destination)
@@ -753,11 +853,13 @@ def _execute(
     except NeedsConfirmation as error:
         print(f"lladar: {error}", file=sys.stderr)
         return 3
-    except ProviderError:
+    except ProviderError as error:
         print("lladar: provider generation failed", file=sys.stderr)
+        _show_resume_instructions(args, error)
         return 2
-    except KeyboardInterrupt:
-        print("lladar: Cancelled. Completed browser answers, if any, were preserved.", file=sys.stderr)
+    except KeyboardInterrupt as error:
+        print("lladar: Cancelled.", file=sys.stderr)
+        _show_resume_instructions(args, error)
         return 130
     except Exception as error:
         if args.command == "run-agent" and args.page_url:
@@ -773,6 +875,7 @@ def _execute(
         else:
             raise
         print(f"lladar: {message}", file=sys.stderr)
+        _show_resume_instructions(args, error)
         return 2
 
 

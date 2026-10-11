@@ -26,7 +26,13 @@ Completion: sources have been read and retained passages have valid evidence.
 
 Record a short method reason with `record_method`.
 
-- Generate natural direct questions with `submit_qa`. A free QA has
+- For free questions prefer `submit_question(request_id, question, expected_answer,
+  source_refs, answer_basis, rationale)` using reference IDs from `read_source`.
+  This saves question and evidence together. Use stable request IDs and query
+  `get_question` before retrying an uncertain submission. Repair only that item
+  with `revise_question`, a new request ID and its current revision. Retain
+  accepted items from `existing_results` on resume.
+- The compatible `submit_qa` route remains for typed questions and existing methods. A free QA has
   `knowledge_point_id`, `question`, and `expected_answer`. More than one
   question can refer to a passage; avoid duplicate questions.
 - Preserve the default graph-probe purpose where the source supports comparable
@@ -61,7 +67,8 @@ limits, and revalidates the final snapshot before writing the dataset.
 ## Python delivery and recovery
 
 Python may explore, calculate, and repair candidates, including the active
-workspace. Submission tools provide feedback but are not the only delivery path.
+workspace. Built-in free-question delivery uses atomic submission tools; the host owns serialization.
+Existing custom methods may continue using the following compatibility paths.
 Alternatively write `candidate_path` JSON following the request's
 `candidate_contract`. A present candidate file is the authoritative complete
 snapshot; write it when it contains the intended final result.
@@ -69,3 +76,5 @@ snapshot; write it when it contains the intended final result.
 On retries inspect `validation_errors` and `existing_results`. Repair the existing
 result instead of resubmitting completed graph or plans. Final validation applies
 equally to tool-submitted and Python-produced data. Text alone is not delivery.
+
+After an uncertain submission result, query get_question_request using the original request_id. Reuse that request_id only for identical content. For assigned source batches, read exactly assigned_start through assigned_end and follow next_start; completed batches are retained by the host.

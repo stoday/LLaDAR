@@ -464,7 +464,7 @@ def test_browser_progress_redacts_private_page_path_and_query(tmp_path: Path, ca
     assert received == [page_url]
     captured = capsys.readouterr()
     evidence = captured.out + captured.err + "".join(
-        path.read_text(encoding="utf-8") for path in tmp_path.glob("responses.jsonl*")
+        path.read_text(encoding="utf-8") for path in tmp_path.rglob("*") if path.is_file()
     )
     assert "fixture-url-secret" not in evidence
     assert "private-page-secret" not in evidence
@@ -490,7 +490,7 @@ def test_browser_execution_failure_persists_no_raw_transport_diagnostic(tmp_path
     assert run["failed"] == 3
     captured = capsys.readouterr()
     evidence = captured.out + captured.err + "".join(
-        path.read_text(encoding="utf-8") for path in tmp_path.glob("responses.jsonl*")
+        path.read_text(encoding="utf-8") for path in tmp_path.rglob("*") if path.is_file()
     )
     assert "fixture-error-secret" not in evidence
     assert "fixture-private-body" not in evidence

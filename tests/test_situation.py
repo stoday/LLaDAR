@@ -245,7 +245,17 @@ def test_situation_report_skill_changes_prose_only(tmp_path):
     }), encoding="utf-8")
     report = tmp_path / "report.md"
     skill = Path(__file__).parents[1] / "src" / "lladar" / "skill_assets" / "report-evidence-summary"
-    create_report(source, report, skill=skill, skill_agent_factory=ReportAgent)
+    budgets = {}
+
+    class BudgetReportAgent(ReportAgent):
+        def __init__(self, **options):
+            budgets.update({key: options[key] for key in (
+                "max_input_tokens", "max_output_tokens")})
+            super().__init__(**options)
+
+    create_report(source, report, skill=skill, skill_agent_factory=BudgetReportAgent,
+                  max_input_tokens=128000, max_output_tokens=4096)
+    assert budgets == {"max_input_tokens": 128000, "max_output_tokens": 4096}
     text = report.read_text()
     assert "The target requested the missing identifier." in text
     assert "| observed | 1 |" in text

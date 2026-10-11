@@ -1458,7 +1458,7 @@ wheels = [
 
 [[package]]
 name = "lladar"
-version = "0.9.5"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "akasha-terminal" },
@@ -1466,6 +1466,7 @@ dependencies = [
     { name = "playwright" },
     { name = "pypdf" },
     { name = "requests" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -1486,6 +1487,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "requests", specifier = ">=2.31,<3" },
     { name = "streamlit", marker = "extra == 'streamlit-test'", specifier = ">=1.57,<2" },
+    { name = "tqdm", specifier = ">=4.66,<5" },
     { name = "websockets", marker = "extra == 'test'", specifier = ">=15,<16" },
 ]
 provides-extras = ["test", "streamlit-test"]

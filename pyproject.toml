@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.9.5"
+version = "0.10.0"
 description = "Create questions, run an Agent, evaluate responses, and render reports"
 readme = "README.md"
 license = "MIT"
@@ -15,6 +15,7 @@ dependencies = [
   "pypdf>=4,<7",
   "playwright>=1.52,<2",
   "llama-index-core>=0.14.25",
+  "tqdm>=4.66,<5",
 ]
 
 classifiers = [

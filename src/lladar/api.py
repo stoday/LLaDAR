@@ -15,6 +15,10 @@ BUILTIN_SKILL_DIR = Path(__file__).resolve().parent / "skill_assets" / "knowledg
 QUESTION_TYPES = ("free", "auto", "single-choice", "multiple-choice", "ranking")
 
 
+from .work_session import stage_session
+
+
+@stage_session("generation")
 def create_test_dataset(
     knowledge: KnowledgeInput | None = None,
     *,
@@ -32,6 +36,7 @@ def create_test_dataset(
     max_input_tokens: int | None = None,
     max_output_tokens: int | None = None,
     auto_window_ratio: float | None = None,
+    resume: str | Path | None = None,
     force: bool = False,
     verbose: bool = True,
     skill: str | Path | None = None,
@@ -83,6 +88,7 @@ def create_test_dataset(
         temperature=temperature,
         profile=profile,
         verbose=verbose,
+        allow_candidate_files=skill is not None,
     )
     if output is not None:
         result.publish(Path(output), force=force)

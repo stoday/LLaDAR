@@ -81,6 +81,7 @@ class GenerationResult:
             validate_record(record)
         content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.records)
         self.provenance["dataset"]["sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        self.provenance["session"] = publication_metadata()
         sidecar = json.dumps(self.provenance, ensure_ascii=False, indent=2) + "\n"
         preflight_output(output, force=force, extra_paths=self.artifacts)
         targets = [output]
@@ -93,59 +94,17 @@ class GenerationResult:
         targets.append(Path(str(output) + ".generation.json"))
         payloads.append(sidecar)
         retired = [Path(str(output) + ".graph.json")] if force and self.graph is None else []
-        transaction_targets = targets + retired
-        staged, backups, published, reservations = {}, {}, [], []
-        lock = output.with_name(f".{output.name}.generation.lock")
-        with lock.open("x"):
-            pass
-        try:
-            preflight_output(output, force=force, extra_paths=self.artifacts)
-            for target, text in zip(targets, payloads):
-                temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
-                staged[target] = temporary
-                with temporary.open("x", encoding="utf-8", newline="\n") as handle:
-                    handle.write(text)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-            if not force:
-                for target in targets:
-                    with target.open("x", encoding="utf-8"):
-                        pass
-                    reservations.append(target)
-            # Remove the old completion marker first. A crash cannot leave a
-            # new dataset paired with an old successful provenance marker.
-            for target in [targets[-1]] + [path for path in transaction_targets if path != targets[-1]]:
-                if force and target.exists():
-                    backup = target.with_name(f".{target.name}.{uuid4().hex}.bak")
-                    os.replace(target, backup)
-                    backups[target] = backup
-            for target in targets:
-                os.replace(staged[target], target)
-                published.append(target)
-        except BaseException:
-            for target in reversed(published):
-                target.unlink(missing_ok=True)
-            for target in reservations:
-                target.unlink(missing_ok=True)
-            # Keep backups on disk if recovery itself fails.
-            for target in transaction_targets:
-                if target in backups:
-                    os.replace(backups[target], target)
-            raise
-        else:
-            for backup in backups.values():
-                backup.unlink(missing_ok=True)
-        finally:
-            for temporary in staged.values():
-                temporary.unlink(missing_ok=True)
-            lock.unlink(missing_ok=True)
+        publish_bundle(dict(zip(targets, payloads)), force=force, result=self.records, retired=retired)
+
+
+from .work_session import current_session, publish_bundle, publication_metadata
 
 
 class GenerationWorkspace:
     """Own source positions and candidates for tool or Python delivery."""
 
     def __init__(self, sources: list[tuple[Path, str]], page_chars: int = 12000,
-                 question_type: str = "free", reporter: ProgressReporter | None = None):
+                 question_type: str = "free", reporter: ProgressReporter | None = None, restore: bool = True):
         self.reporter = reporter
         self.sources = {
             f"source_{index:03d}": {"path": str(path.resolve()), "text": text}
@@ -166,8 +125,15 @@ class GenerationWorkspace:
         self.points: dict[str, dict[str, Any]] = {}
         self.point_identities: dict[tuple, str] = {}
         self.qa: dict[str, dict[str, Any]] = {}
+        self.qa_sequence = 0
         self.qa_contracts: dict[str, dict[str, Any]] = {}
         self.qa_points: dict[str, str] = {}
+        self.source_refs: dict[str, dict] = {}
+        self.question_submissions: dict[str, dict] = {}
+        self.answer_bases: dict[str, dict] = {}
+        self.question_drafts: dict[str, dict] = {}
+        self.question_requests: dict[str, dict] = {}
+        self.assigned_ranges = {}
         self.question_type = question_type
         self.current_source: str | None = None
         self.current_point: str | None = None
@@ -182,10 +148,24 @@ class GenerationWorkspace:
         self.semantic_graph: dict[str, Any] | None = None
         self.test_plans: list[dict[str, Any]] = []
         self.method_reason = ""
+        session = current_session()
+        if restore and session and "generation_workspace" in session.data["state"]:
+            for key, value in session.data["state"]["generation_workspace"].items():
+                setattr(self, key, deepcopy(value))
+
+    def checkpoint(self):
+        session = current_session()
+        if session:
+            keys = ("reads", "points", "qa", "qa_sequence", "qa_contracts", "qa_points", "source_refs",
+                    "question_submissions", "answer_bases", "question_drafts", "question_requests",
+                    "pending_rejections", "events", "stats", "semantic_graph", "test_plans", "method_reason", "assigned_ranges")
+            session.put("generation_workspace", {key: deepcopy(getattr(self, key)) for key in keys})
 
     def list_sources(self) -> list[dict[str, Any]]:
-        return [{"source_id": key, "name": value["path"], "length": len(value["text"])}
-                for key, value in self.sources.items()]
+        return [{"source_id": key, "name": value["path"], "length": len(value["text"]),
+                 "assigned_start": self.assigned_ranges.get(key, [0, len(value["text"])])[0],
+                 "assigned_end": self.assigned_ranges.get(key, [0, len(value["text"])])[1]}
+                for key, value in self.sources.items() if not self.assigned_ranges or key in self.assigned_ranges]
 
     def record_method(self, reason: str) -> dict:
         if not isinstance(reason, str) or not reason.strip():
@@ -217,19 +197,200 @@ class GenerationWorkspace:
         if source_id not in self.sources or (self.current_stage != "generation" and source_id != self.current_source):
             raise ValueError("source is not assigned to this extraction")
         text = self.documents[source_id].get_content(metadata_mode=MetadataMode.NONE)
+        assigned_start, assigned_end = self.assigned_ranges.get(source_id, [0, len(text)])
+        if self.assigned_ranges and source_id not in self.assigned_ranges:
+            raise ValueError("source is not assigned to this generation batch")
+        if start_char == 0 and assigned_start:
+            start_char = assigned_start
+        if not assigned_start <= start_char <= assigned_end:
+            raise ValueError("source read is outside this batch; use the assigned absolute range")
         if type(start_char) is not int or not 0 <= start_char <= len(text):
             raise ValueError("invalid source start_char")
         if end_char is None:
-            end_char = len(text)
+            end_char = assigned_end
+        end_char = min(end_char, assigned_end)
         if type(end_char) is not int or not start_char <= end_char <= len(text):
             raise ValueError("invalid source end_char")
         end_char = min(end_char, start_char + self.page_chars)
         read_id = f"read_{len(self.reads) + 1:06d}"
         result = {"read_id": read_id, "source_id": source_id, "start_char": start_char,
                   "end_char": end_char, "text": text[start_char:end_char],
-                  "next_start": end_char if end_char < len(text) else None}
+                  "next_start": end_char if end_char < assigned_end else None}
         self.reads[read_id] = result
-        return result.copy()
+        if self.reporter is not None:
+            completed = sum(end - start for key in self.sources
+                            for start, end in self.coverage(key)["read_ranges"])
+            total = sum(len(document.get_content(metadata_mode=MetadataMode.NONE))
+                        for document in self.documents.values())
+            self.reporter.group(completed, total, "Read sources")
+        identity = f"{source_id}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}:{start_char}:{end_char}"
+        ref_id = "ref_" + hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]
+        self.source_refs[ref_id] = {"read_id": read_id, "source_id": source_id,
+                                   "start_char": start_char, "end_char": end_char,
+                                   "quote": text[start_char:end_char]}
+        return {**result, "source_refs": [{"ref_id": ref_id, "source_id": source_id,
+                                          "start_char": start_char, "end_char": end_char}]}
+
+    def submit_question(self, request_id: str, question: str, expected_answer: str,
+                        source_refs: list[str], answer_basis: str, rationale: str) -> dict:
+        """Submit a question and its answer evidence together, without file delivery."""
+        payload = dict(question=question, expected_answer=expected_answer, source_refs=source_refs,
+                       answer_basis=answer_basis, rationale=rationale)
+        if not isinstance(request_id, str) or not request_id.strip():
+            return {"status": "needs_revision", "issues": [{"field": "request_id", "code": "required",
+                     "message": "Provide a non-empty request ID."}]}
+        previous = self.question_requests.get(request_id)
+        if previous is not None:
+            return deepcopy(previous["result"]) if previous["payload"] == payload else {
+                "status": "conflict", "item_id": previous["result"]["item_id"],
+                "issues": [{"field": "request_id", "code": "content_conflict",
+                            "message": "This request ID already has different content."}]}
+        item_id = "question_" + uuid4().hex
+        self.question_drafts[item_id] = {"item_id": item_id, "revision": 0}
+        return self._apply_question(item_id, request_id, payload)
+
+    def get_question(self, item_id: str) -> dict:
+        """Query a draft's current revision without resubmitting its content."""
+        if item_id not in self.question_drafts:
+            return {"status": "conflict", "item_id": item_id,
+                    "issues": [{"field": "item_id", "code": "unknown_item", "message": "Unknown question ID."}]}
+        return deepcopy(self.question_drafts[item_id])
+
+    def get_question_request(self, request_id: str) -> dict:
+        if not isinstance(request_id, str) or request_id not in self.question_requests:
+            return {"status": "conflict", "issues": [{"field": "request_id", "code": "unknown_request",
+                    "message": "No saved submission for this request", "repair_action": "submit_request"}]}
+        return deepcopy(self.question_requests[request_id]["result"])
+
+    def revise_question(self, item_id: str, request_id: str, revision: int,
+                        question: str, expected_answer: str, source_refs: list[str],
+                        answer_basis: str, rationale: str) -> dict:
+        """Revise one draft using its current ID and revision."""
+        if not isinstance(request_id, str) or not request_id.strip():
+            return {"status": "needs_revision", "issues": [{"field": "request_id", "code": "required",
+                     "message": "Provide a non-empty request ID."}]}
+        payload = dict(question=question, expected_answer=expected_answer, source_refs=source_refs,
+                       answer_basis=answer_basis, rationale=rationale)
+        identity = {"item_id": item_id, "revision": revision, **payload}
+        previous = self.question_requests.get(request_id)
+        if previous is not None:
+            return deepcopy(previous["result"]) if previous["payload"] == identity else {
+                "status": "conflict", "item_id": item_id,
+                "issues": [{"field": "request_id", "code": "content_conflict", "message": "Request content differs."}]}
+        draft = self.question_drafts.get(item_id)
+        if draft is None or type(revision) is not int or revision != draft["revision"]:
+            return {"status": "conflict", "item_id": item_id,
+                    "issues": [{"field": "revision", "code": "revision_conflict", "message": "Query the current draft revision."}]}
+        if draft["revision"] >= 4 and draft["status"] == "accepted":
+            return {"status": "conflict", "item_id": item_id, "revision": draft["revision"],
+                    "issues": [{"field": "revision", "code": "repair_limit", "message": "Three revisions are already saved",
+                                "repair_action": "keep_accepted_version"}]}
+        if draft["status"] == "rejected":
+            return {"status": "rejected", "item_id": item_id, "revision": draft["revision"],
+                    "issues": deepcopy(draft["issues"])}
+        result = self._apply_question(item_id, request_id, payload)
+        self.question_requests[request_id]["payload"] = identity
+        return result
+
+    def _apply_question(self, item_id: str, request_id: str, payload: dict) -> dict:
+        draft = self.question_drafts[item_id]
+        previous_qa = draft.get("qa_id")
+        result = self._submit_question_payload(request_id, **payload)
+        draft.update(payload=deepcopy(payload), revision=draft["revision"] + 1,
+                     status=result["status"], issues=deepcopy(result.get("issues", [])))
+        if draft["status"] == "needs_revision" and draft["revision"] >= 4:
+            draft["status"] = "rejected"
+            result["status"] = "rejected"
+        if result["status"] == "accepted":
+            qa_id = result["item_id"]
+            if previous_qa and previous_qa != qa_id:
+                self.qa.pop(previous_qa, None)
+                self.qa_points.pop(previous_qa, None)
+                self.qa_contracts.pop(previous_qa, None)
+                self.answer_bases.pop(previous_qa, None)
+            draft["qa_id"] = qa_id
+            self.answer_bases[qa_id]["question_id"] = item_id
+        result = {**result, "item_id": item_id, "revision": draft["revision"]}
+        self.question_requests[request_id] = {"payload": deepcopy(payload), "result": deepcopy(result)}
+        return result
+
+    def original_answer_mapping(self, expected_answer, source_refs):
+        matches = []
+        by_source = {}
+        for ref in source_refs:
+            reference = self.source_refs[ref] if isinstance(ref, str) else ref
+            by_source.setdefault(reference["source_id"], []).append(reference)
+        for source_id, references in by_source.items():
+            cursor = 0
+            for line in self.sources[source_id]["text"].splitlines(keepends=True):
+                start, end = cursor, cursor + len(line)
+                cursor = end
+                if not any(ref["start_char"] < end and ref["end_char"] > start for ref in references):
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(row, dict) or not isinstance(row.get("values"), dict):
+                    continue
+                for field, value in row["values"].items():
+                    if isinstance(value, str) and value == expected_answer:
+                        matches.append({"source_id": source_id, "data_row": row["data_row"], "field": field,
+                                        "row_start_char": start, "row_end_char": end})
+        return matches
+
+    def _submit_question_payload(self, request_id: str, question: str, expected_answer: str,
+                                 source_refs: list[str], answer_basis: str, rationale: str) -> dict:
+        payload = dict(question=question, expected_answer=expected_answer, source_refs=source_refs,
+                       answer_basis=answer_basis, rationale=rationale)
+        if not isinstance(request_id, str) or not request_id.strip():
+            return {"status": "needs_revision", "issues": [{"field": "request_id", "code": "required",
+                     "message": "Provide a non-empty request ID."}]}
+        previous = self.question_submissions.get(request_id)
+        if previous is not None:
+            return deepcopy(previous["result"]) if previous["payload"] == payload else {
+                "status": "conflict", "item_id": previous["result"]["item_id"],
+                "issues": [{"field": "request_id", "code": "content_conflict",
+                            "message": "This request ID already has different content."}]}
+        for field, value in (("question", question), ("expected_answer", expected_answer), ("rationale", rationale)):
+            if not isinstance(value, str) or not value.strip():
+                return {"status": "needs_revision", "issues": [{"field": field, "code": "required",
+                         "message": f"Provide non-empty {field}."}]}
+        if answer_basis not in {"source_answer", "source_annotation", "derived_criterion"}:
+            return {"status": "needs_revision", "issues": [{"field": "answer_basis", "code": "unknown_basis",
+                     "message": "Use source_answer, source_annotation or derived_criterion."}]}
+        if not isinstance(source_refs, list) or not source_refs or any(
+            not isinstance(ref, str) or ref not in self.source_refs for ref in source_refs
+        ):
+            return {"status": "needs_revision", "issues": [{"field": "source_refs", "code": "unknown_source",
+                     "message": "Use reference IDs returned by read_source."}]}
+        original_mapping = self.original_answer_mapping(expected_answer, source_refs) if answer_basis == "source_answer" else []
+        if answer_basis == "source_answer" and not original_mapping:
+            return {"status": "needs_revision", "issues": [{"field": "expected_answer", "code": "original_answer_mismatch",
+                "message": "source_answer must exactly preserve a saved original answer field; provide its answer text or use an explicitly transformed/derived basis.",
+                "repair_action": "replace_answer_or_basis"}]}
+        point = self.validate_point({"statement": rationale, "topic": "Question evidence", "evidence": [
+            {"read_id": self.source_refs[ref]["read_id"], "quote": self.source_refs[ref]["quote"]}
+            for ref in dict.fromkeys(source_refs)]})
+        point_id = f"kp_{len(self.points) + 1:06d}"
+        record = {"knowledge_point_id": point_id, "question": question, "expected_answer": expected_answer}
+        self.points[point_id] = {"id": point_id, **point}
+        try:
+            self.validate_qa(record)
+        except (ValueError, DatasetValidationError) as error:
+            self.points.pop(point_id)
+            return {"status": "needs_revision", "issues": [{"field": "question", "code": "invalid_question",
+                     "message": str(error)}]}
+        self.submit_qa(record)
+        qa_id = next(key for key, row in self.qa.items() if row["question"] == question
+                     and row["expected_answer"] == expected_answer and self.qa_points[key] == point_id)
+        self.answer_bases[qa_id] = {"answer_basis": answer_basis, "basis_rationale": rationale,
+                                    "basis_point_ids": [point_id], "source_refs": list(source_refs),
+                                    "source_answer_mapping": original_mapping}
+        self.stats["qa_candidates"] += 1
+        result = {"status": "accepted", "item_id": qa_id, "revision": 1, "issues": []}
+        self.question_submissions[request_id] = {"payload": deepcopy(payload), "result": result}
+        return deepcopy(result)
 
     def submit_knowledge_points(self, points: list[dict]) -> dict:
         if self.current_source is None and self.current_stage != "generation":
@@ -523,7 +684,8 @@ class GenerationWorkspace:
                 if previous == row and self.qa_contracts[qa_id] == contract and self.qa_points.get(qa_id) == point_id:
                     self.stats["repeated_qa_submissions"] += 1
                     return {"accepted": True, "duplicate": True}
-            qa_id = f"qa_{len(self.qa) + 1:06d}"
+            self.qa_sequence += 1
+            qa_id = f"qa_{self.qa_sequence:06d}"
             self.qa[qa_id], self.qa_contracts[qa_id], self.qa_points[qa_id] = row, contract, point_id
             if self.reporter is not None:
                 self.reporter.record(row, context=f"candidate qa={qa_id}")
@@ -657,11 +819,13 @@ class GenerationWorkspace:
                         self.events.append({"tool": name, "error_type": type(error).__name__})
                         raise
                     self.events.append({"tool": name, "result": deepcopy(result)})
+                    self.checkpoint()
                     return result
             return invoke
         names_by_stage = {
             "generation": ("list_sources", "read_source", "submit_knowledge_points", "read_knowledge_point",
-                           "list_knowledge_points", "submit_qa", "submit_semantic_graph", "read_semantic_graph",
+                           "list_knowledge_points", "submit_qa", "submit_question", "revise_question", "get_question", "get_question_request",
+                           "submit_semantic_graph", "read_semantic_graph",
                            "submit_test_plans", "record_method"),
             "knowledge_points": ("list_sources", "read_source", "submit_knowledge_points"),
             "qa": ("read_knowledge_point", "list_knowledge_points", "submit_qa"),
@@ -715,7 +879,7 @@ def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path:
                 "qa": qa, "graph": workspace.semantic_graph,
                 "plans": workspace.test_plans, "method_reason": workspace.method_reason,
             })
-    checked = GenerationWorkspace(sources, page_chars=workspace.page_chars, question_type=workspace.question_type)
+    checked = GenerationWorkspace(sources, page_chars=workspace.page_chars, question_type=workspace.question_type, restore=False)
     checked.current_stage = "generation"
     for read in candidate.get("reads", []):
         source_id, read_id = read["source_id"], read["read_id"]
@@ -760,12 +924,35 @@ def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path:
     checked.method_reason = reason
     if not checked.qa and not checked.test_plans:
         raise ValueError("no valid question records were generated")
-    if any(checked.coverage(key)["unread_ranges"] for key in checked.sources):
-        raise ValueError("sources have unread ranges; finish reading before completion")
+    required = workspace.assigned_ranges or {key: [0, len(source["text"])] for key, source in checked.sources.items()}
+    for key, (start, end) in required.items():
+        if any(unread_start < end and unread_end > start for unread_start, unread_end in checked.coverage(key)["unread_ranges"]):
+            raise ValueError("sources have unread ranges; finish reading this assigned batch before completion")
+    checked.assigned_ranges = deepcopy(workspace.assigned_ranges)
     # Historical tool rejections remain in the audit log, but a corrected final
     # snapshot may be delivered by Python rather than clearing tool counters.
     checked.events = deepcopy(workspace.events)
     checked.stats = deepcopy(workspace.stats)
+    checked.source_refs = deepcopy(workspace.source_refs)
+    checked.question_submissions = deepcopy(workspace.question_submissions)
+    checked.question_drafts = deepcopy(workspace.question_drafts)
+    checked.question_requests = deepcopy(workspace.question_requests)
+    identities = {}
+    sequence = workspace.qa_sequence
+    for qa_id, row in checked.qa.items():
+        match = next((key for key, original in workspace.qa.items() if row == original
+                      and checked.qa_points[qa_id] == workspace.qa_points[key]), None)
+        if match is None:
+            sequence += 1
+            match = f"qa_{sequence:06d}"
+        identities[qa_id] = match
+    for attribute in ("qa", "qa_points", "qa_contracts"):
+        values = getattr(checked, attribute)
+        setattr(checked, attribute, {identities[key]: value for key, value in values.items()})
+    checked.qa_sequence = sequence
+    for qa_id in checked.qa:
+        if qa_id in workspace.answer_bases:
+            checked.answer_bases[qa_id] = deepcopy(workspace.answer_bases[qa_id])
     return checked
 
 
@@ -776,7 +963,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         temperature: float, profile, verbose: bool,
                         extra_tools_factory: Callable | None = None, request_context: dict | None = None,
                         candidate_validator: Callable | None = None,
-                        runtime_options: dict | None = None) -> GenerationResult:
+                        runtime_options: dict | None = None, allow_candidate_files: bool = True) -> GenerationResult:
     skill = skill.resolve()
     if not (skill / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill is missing SKILL.md: {skill}")
@@ -829,6 +1016,10 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 "plan_count": len(workspace.test_plans),
                 "source_coverage": {key: workspace.coverage(key) for key in workspace.sources},
             }
+            if not allow_candidate_files:
+                work.pop("candidate_path", None)
+                work.pop("candidate_contract", None)
+                work["delivery"] = "Use host submission tools; no file delivery is required."
             try:
                 result = agent(work)
             except (RuntimeError, ProviderError, ValueError) as error:
@@ -844,7 +1035,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                                    "host_tool_events": workspace.events[event_start:]})
                 if skill.name in evidence.get("loaded_skills", []):
                     try:
-                        workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]))
+                        workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot")
                         if candidate_validator is not None:
                             candidate_validator(workspace)
                     except (ValueError, KeyError, TypeError, OSError) as validation_error:
@@ -862,7 +1053,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             executions.append({**request, "attempt": attempt, **result,
                                "host_tool_events": workspace.events[event_start:]})
             try:
-                workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]))
+                workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot")
                 if candidate_validator is not None:
                     candidate_validator(workspace)
             except (ValueError, KeyError, TypeError, OSError) as error:
@@ -875,13 +1066,47 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 "validation_errors": request.get("validation_errors", [])}
 
     with tempfile.TemporaryDirectory(prefix="lladar-generation-") as candidate_dir:
-        generation_work = execute(
-            {**(request_context or {}), "stage": "generation", "question_type": question_type, "count": count,
-             "sources": workspace.list_sources(), "candidate_path": str(Path(candidate_dir) / "candidates.json"),
-             "candidate_contract": _CANDIDATE_CONTRACT,
-             "controlled_variant_topics": list(controlled_variant_topics),
-             "controlled_variants_requested": bool(controlled_variant_topics) or controlled_variant_selector is not None},
-        )
+        session = current_session()
+        generation_work = session.data["state"].get("generation_work") if session else None
+        if generation_work is None:
+            batch_chars = min(24000, max(1, profile.max_input_tokens // 4))
+            total_chars = sum(len(source["text"]) for source in workspace.sources.values())
+            assignments = []
+            if allow_candidate_files or total_chars <= batch_chars:
+                assignments = [{key: [0, len(source["text"])] for key, source in workspace.sources.items()}]
+            else:
+                for key, source in workspace.sources.items():
+                    assignments.extend({key: [start, min(len(source["text"]), start + batch_chars)]}
+                        for start in range(0, len(source["text"]), batch_chars))
+            completed_batches = dict(session.data["state"].get("generation_batches", {})) if session else {}
+            errors = []
+            for batch_index, assigned in enumerate(assignments, 1):
+                batch_id = str(batch_index)
+                if batch_id in completed_batches:
+                    continue
+                workspace.assigned_ranges = assigned
+                generation_work = execute({**(request_context or {}), "stage": "generation",
+                    "question_type": question_type, "count": count, "batch": batch_index,
+                    "batch_count": len(assignments), "sources": workspace.list_sources(),
+                    "candidate_path": str(Path(candidate_dir) / "candidates.json"),
+                    "candidate_contract": _CANDIDATE_CONTRACT,
+                    "controlled_variant_topics": list(controlled_variant_topics),
+                    "controlled_variants_requested": bool(controlled_variant_topics) or controlled_variant_selector is not None})
+                errors.extend(generation_work["errors"])
+                workspace.checkpoint()
+                if generation_work["status"] != "complete":
+                    break
+                completed_batches[batch_id] = generation_work
+                if session:
+                    session.put("generation_batches", completed_batches)
+                reporter.group(batch_index, len(assignments), "Generated batches")
+            else:
+                generation_work = {"status": "complete", "attempts": sum(item["attempts"] for item in completed_batches.values()),
+                                   "errors": errors, "batches": len(assignments)}
+                workspace.assigned_ranges = {}
+    workspace.checkpoint()
+    if session and generation_work["status"] == "complete":
+        session.put("generation_work", generation_work)
     if generation_work["status"] != "complete":
         details = "; ".join(generation_work.get("validation_errors", []))
         raise DatasetValidationError("dataset generation did not produce complete valid questions" +
@@ -891,7 +1116,10 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     records = []
     lines = []
     seen_qa = {}
-    skipped = []
+    skipped = [{"item_id": draft["item_id"], "reason": "question_repair_exhausted"
+                if draft["status"] == "rejected" else "question_unresolved",
+                "issues": deepcopy(draft["issues"])} for draft in workspace.question_drafts.values()
+               if draft["status"] != "accepted"]
     graph = workspace.semantic_graph
     if graph is not None:
         graph["corpus_sha256"] = hashlib.sha256(
@@ -919,10 +1147,12 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     if graph is not None:
         graph["control_dimensions"] = list(dimensions)
     count_excluded = 0
-    for qa_index, (qa_id, row) in enumerate(workspace.qa.items()):
+    unresolved_qa = {draft.get("qa_id") for draft in workspace.question_drafts.values() if draft["status"] != "accepted"}
+    active_qa = [(key, row) for key, row in workspace.qa.items() if key not in unresolved_qa]
+    for qa_index, (qa_id, row) in enumerate(active_qa):
         point_id = workspace.qa_points[qa_id]
         if count and len(records) >= count:
-            count_excluded += len(workspace.qa) - qa_index
+            count_excluded += len(active_qa) - qa_index
             break
         identity = (normalize(row["question"]), normalize(row["expected_answer"]))
         if identity in seen_qa:
@@ -976,7 +1206,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
         raise DatasetValidationError("no valid question records were generated")
     reporter.done(len(records))
     return GenerationResult(records, {
-        "schema_version": GENERATION_SIDECAR_VERSION, "question_type": question_type, "status": "partial" if any(
+        "schema_version": GENERATION_SIDECAR_VERSION, "question_type": question_type, "status": "partial" if skipped or any(
             point.get("status") == "failed" for point in workspace.points.values()) or any(
             source["work"]["status"] == "failed" for source in workspace.sources.values()) else "complete",
         "skill": {"name": skill.name, "path": str(skill), "files": skill_files},
@@ -1005,7 +1235,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                   "valid_qa_points": len(workspace.qa), "accepted_points": len(workspace.points),
                   "attempted_points": sum(p.get("attempts", 0) > 0 for p in workspace.points.values()),
                   "output_records": len(records), "output_points": sum(len(line["knowledge_point_ids"]) for line in lines),
-                  "valid_candidates_before_selection": len(workspace.qa) + len(probe_plans),
+                  "valid_candidates_before_selection": len(active_qa) + len(probe_plans),
                   "count_limit_excluded": count_excluded,
                   "deduplicated_qa": max(0, len(workspace.qa) + len(probe_plans) - len(records) - count_excluded),
                   "not_attempted_count_limit": sum(p.get("status") == "not_attempted_count_limit"
