@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from .exceptions import LladarError, ProviderError
 from .model_profiles import resolve_model_profile
+from .language import language_prompt
 
 
 SkillAgentFactory = Callable[..., Any]
@@ -45,7 +46,7 @@ def _invoke_skill(
                                     max_output_tokens=max_output_tokens)
     agent = agent_factory(
         skills=[str(skill)], tools=tools, model=model, env_file=str(env_file),
-        system_prompt=system_prompt, max_input_tokens=profile.max_input_tokens,
+        system_prompt=language_prompt(system_prompt), max_input_tokens=profile.max_input_tokens,
         max_output_tokens=profile.max_output_tokens,
     )
     evidence = agent(request)

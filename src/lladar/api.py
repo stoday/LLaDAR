@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .language import language_stage, current_language
+
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
@@ -18,6 +20,7 @@ QUESTION_TYPES = ("free", "auto", "single-choice", "multiple-choice", "ranking")
 from .work_session import stage_session
 
 
+@language_stage
 @stage_session("generation")
 def create_test_dataset(
     knowledge: KnowledgeInput | None = None,
@@ -41,6 +44,7 @@ def create_test_dataset(
     verbose: bool = True,
     skill: str | Path | None = None,
     skill_agent_factory: Callable[..., Any] | None = None,
+    lang: str | None = None,
 ) -> list[dict[str, Any]]:
     """Generate source-grounded QA with the bundled or selected local skill."""
     if (knowledge is None) == (from_github is None):

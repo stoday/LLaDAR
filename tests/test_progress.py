@@ -112,4 +112,5 @@ def test_all_progress_events_keep_timestamp_and_monotonic_elapsed_in_log(tmp_pat
         match = re.match(prefix, line)
         assert match is not None, line
         elapsed.append(float(match.group(1)))
-    assert elapsed == [0.0, 0.0, 12.345, 12.345, 12.345, 14.845, 14.845]
+    # Effective settings also disclose the requested and actual interface languages.
+    assert elapsed == [0.0, 0.0, 0.0, 0.0, 12.345, 12.345, 12.345, 14.845, 14.845]

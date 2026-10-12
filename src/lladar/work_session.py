@@ -286,9 +286,10 @@ def atomic_text(path, text, *, force=False):
 
 
 def publication_metadata():
+    from .language import current_language
     session = current_session()
     return {"session_id": session.data["session_id"], "path": str(session.directory.resolve()),
-            "contract_version": CONTRACT_VERSION} if session else None
+            "contract_version": CONTRACT_VERSION, **current_language().metadata()} if session else None
 
 
 def prepare_publication(payloads, result):

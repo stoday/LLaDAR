@@ -334,6 +334,55 @@ dimensions and judge each completed record. Counts, rates, distributions,
 means, medians, minima, and maxima are calculated by Python. `report` renders
 those saved facts and includes a record-level appendix.
 
+## Language
+
+Use `--lang CODE` on any workflow or Skill-template command, including `--help`.
+The default for new work is English (`en`), including newly generated questions
+and explanations. This replaces implicit source-language following.
+
+| Code | Language |
+| --- | --- |
+| `en` | English |
+| `zh-TW` | Traditional Chinese |
+| `ja` | Japanese (`jp` / `Jp` are aliases) |
+| `ko` | Korean |
+| `zh-CN` | Simplified Chinese |
+
+These five languages have interface, fixed report-heading, and offline Skill-template
+resources. Other language codes, such as `fr`, are accepted for model-generated
+content; the interface, fixed headings, and templates use English with a short
+notice. Codes must contain letters and optional hyphen-separated alphanumeric
+subtags, such as `en-US`; acceptance does not guarantee that your model supports
+the language. Generated prose can still contain source quotes and proper names.
+
+```powershell
+lladar --lang ja --help
+lladar create test-dataset --knowledge knowledge.md --lang zh-TW --output dataset.jsonl
+lladar run-agent dataset.jsonl --project ../my-agent --lang zh-TW --output responses.jsonl
+lladar eval responses.jsonl --lang zh-TW --output evaluation.json
+lladar report evaluation.json --lang ko --output report.md
+lladar create report-skill --lang zh-CN
+```
+
+Language selection applies to progress, prompts, summaries, and newly generated
+LLaDAR content. Saved test questions, target Agent answers, source quotes, IDs,
+schema keys, code, and measurements stay unchanged. It does not ask the target
+Agent to switch language or add a language-scoring criterion. Situation-mode
+free conversation generation uses the selected language; exact probes and tokens
+are preserved. Website answer extraction always preserves the original answer.
+Technical diagnostic details and third-party traces may retain their original language.
+
+Next-step commands include `--lang`. A new stage without the option uses `en`;
+resume without it restores the session's saved language. A different explicit
+language is rejected before further work. Sessions created without language
+metadata require their original version or a new work session.
+
+Python stage APIs accept `lang="ja"` (the default `None` resolves to English for
+new work and the saved language on resume). Work metadata distinguishes the
+requested `lang` from the actual `ui_lang`; generated templates also include
+`language.json` with `template_lang`. Localized templates use the same tools and
+contracts, retain executable examples, and require no model calls or API key.
+
 ## Operation logs
 
 Verbose generation shows candidate previews as they are submitted and each final

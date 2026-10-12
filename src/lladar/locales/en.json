@@ -1,0 +1,14 @@
+{
+  "\n需要確認要測試的完整對外功能：": "\nChoose the complete public feature to test:",
+  "    入口：": "    Entry point: ",
+  "    流程：": "    Flow: ",
+  "    依據：": "    Evidence: ",
+  "    輸出：": "    Output: ",
+  "待確認：": "Unresolved: ",
+  "輸入編號或 ID；c 補充需求並重新探索；q 保存離開：": "Enter a number or ID; c to clarify and rediscover; q to save and exit: ",
+  "請描述要測的功能或正常使用方式：": "Describe the feature or normal usage to test: ",
+  "服務設定仍缺漏，請按 c 補充需求或 q 保存。": "Service settings are incomplete; use c to clarify or q to save.",
+  "選項無效，尚未執行待測程式。": "Invalid selection; the target has not been executed.",
+  "啟動": "Start",
+  "就緒": "Ready"
+}

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .language import tr, language_stage, current_language
+
 import json
 import re
 from pathlib import Path
@@ -17,7 +19,6 @@ BUILTIN_REPORT_SKILL_DIR = Path(__file__).resolve().parent / "skill_assets" / "r
 REPORT_SYSTEM_PROMPT = """Load the selected report skill before using tools.
 Use only the supplied evaluation facts. Submit overview, findings, and
 limitations; the host renders all measurements and record evidence."""
-
 
 from .work_session import current_session, stage_session, publish_bundle, publication_metadata
 from .submissions import Submissions
@@ -59,7 +60,7 @@ class ReportWorkspace:
         if self.reporter:
             completed = sum(self.submissions.get(key).get("status") == "accepted"
                 for key in ("overview", "findings", "limitations"))
-            self.reporter.group(completed, 3, "Report sections")
+            self.reporter.group(completed, 3, tr('Report sections'))
         return result
 
     def revise_section(self, item_id: str, request_id: str, revision: int, text: str, source_refs: list[str]) -> dict:
@@ -90,6 +91,7 @@ class ReportWorkspace:
             "sections": results, "error": "report has unresolved sections"}
 
 
+@language_stage
 @stage_session("report")
 
 def create_report(eval_output: str | Path, output: str | Path, *, skill: str | Path | None = None,
@@ -97,7 +99,7 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
                   skill_agent_factory: SkillAgentFactory | None = None, force: bool = False,
                   review_agent_factory: SkillAgentFactory | None = None,
                   verbose: bool = True, resume: str | Path | None = None,
-                  max_input_tokens: int | None = None, max_output_tokens: int | None = None) -> Path:
+                  max_input_tokens: int | None = None, max_output_tokens: int | None = None, lang: str | None = None) -> Path:
     profile = resolve_model_profile(model,max_input_tokens=max_input_tokens,max_output_tokens=max_output_tokens)
     source, target = Path(eval_output), Path(output)
     if target.exists() and not force:
@@ -108,7 +110,7 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         raise EvaluationError(f"could not read evaluation JSON: {source}") from error
     if isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation":
         return _situation_report(evaluation, target, skill=skill, model=model,
-                                 env_file=env_file, skill_agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
+                                 env_file=env_file, skill_agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens, force=force)
     required = {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"}
     optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
     if not isinstance(evaluation, dict) or not required <= set(evaluation) <= required | optional:
@@ -117,7 +119,7 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     reporter = ProgressReporter(verbose)
     workspace = ReportWorkspace(evaluation, reporter)
     if workspace.narrative is None:
-        with reporter.waiting("Writing report", label="REPORT"):
+        with reporter.waiting(tr('Writing report'), label="REPORT"):
             evidence = invoke_skill(skill=selected_skill, tools={"submit_report": workspace.submit_report, "submit_section": workspace.submit_section,
                     "revise_section": workspace.revise_section, "get_section": workspace.get_section,
                     "read_report_fact": workspace.read_report_fact},
@@ -151,7 +153,7 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
             if prior and prior["revisions"] == revisions and all(item["approved"] for item in prior["judgments"]):
                 reviews = prior["judgments"]
             else:
-                with reporter.waiting("Checking report support", label="REPORT"):
+                with reporter.waiting(tr('Checking report support'), label="REPORT"):
                     invoke_skill(skill=selected_skill, tools={"submit_section_review": submit_section_review,
                         "read_report_fact": workspace.read_report_fact},
                         request={"stage": "report_review", "sections": workspace.narrative,
@@ -185,36 +187,36 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
                 agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
             if workspace.narrative is None:
                 raise EvaluationError("report sections remain incomplete after review")
-    lines = ["# LLaDAR evaluation report", "", workspace.narrative["overview"], "", "## Summary", "", "| Metric | Value |", "| --- | ---: |"]
-    lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in evaluation["summary"].items()]
+    lines = [tr('# LLaDAR evaluation report'), "", workspace.narrative["overview"], "", tr('## Summary'), "", tr('| Metric | Value |'), "| --- | ---: |"]
+    lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in evaluation["summary"].items()]
     lines += _evaluation_settings_lines(evaluation)
-    lines += ["", "## Results", "", workspace.narrative["findings"], ""]
+    lines += ["", tr('## Results'), "", workspace.narrative["findings"], ""]
     for name, aggregate in evaluation["aggregates"].items():
-        lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", "| Metric | Value |", "| --- | ---: |"]
-        lines += [f"| {_escape(key)} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
+        lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", tr('| Metric | Value |'), "| --- | ---: |"]
+        lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
     has_correctness = any(d["name"] == "correct" and d["kind"] == "boolean"
                           for d in evaluation["plan"]["dimensions"]) or any(
         type(item.get("values", {}).get("correct")) is bool for item in evaluation["items"])
     type_rows = _question_type_rows(evaluation["items"]) if has_correctness else []
     if type_rows:
-        lines += ["", "## By question type", "", "| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        lines += ["", tr('## By question type'), "", tr('| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |'), "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
         for row in type_rows:
             lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
     probe_rows = _semantic_probe_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
     if probe_rows:
-        lines += ["", "## Semantic probes", "", "| Concept | Scheduled | Mapped | Synthesized | Unmapped |", "| --- | ---: | ---: | ---: | ---: |"]
+        lines += ["", tr('## Semantic probes'), "", tr('| Concept | Scheduled | Mapped | Synthesized | Unmapped |'), "| --- | ---: | ---: | ---: | ---: |"]
         for row in probe_rows:
             lines.append("| {concept_id} | {scheduled} | {mapped} | {synthesized} | {unmapped} |".format(**{key: _value(value) for key, value in row.items()}))
     controlled_rows = _controlled_variant_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
     if controlled_rows:
-        lines += ["", "## Controlled variants", "", "| Dimension | Pair | Scheduled | Mapped | Same | Different | Indeterminate |", "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+        lines += ["", tr('## Controlled variants'), "", tr('| Dimension | Pair | Scheduled | Mapped | Same | Different | Indeterminate |'), "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
         for row in controlled_rows:
             lines.append("| {varied_dimension} | {pair_id} | {scheduled} | {mapped} | {same} | {different} | {indeterminate} |".format(**{key: _value(value) for key, value in row.items()}))
     if evaluation["stability"]["records"]:
-        lines += ["", "## Stability", "", "| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |", "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
+        lines += ["", tr('## Stability'), "", tr('| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |'), "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
     for row in evaluation["stability"]["records"]:
         lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
-    lines += ["", "## Limitations", "", workspace.narrative["limitations"], "", "## Trial appendix", "", "| Record | Trial | Question | Expected answer | Actual response | Status | Judgment | Reason |", "| ---: | ---: | --- | --- | --- | --- | --- | --- |"]
+    lines += ["", tr('## Limitations'), "", workspace.narrative["limitations"], "", tr('## Trial appendix'), "", tr('| Record | Trial | Question | Expected answer | Actual response | Status | Judgment | Reason |'), "| ---: | ---: | --- | --- | --- | --- | --- | --- |"]
     for item in evaluation["items"]:
         lines.append("| {record_index} | {trial} | {question} | {expected_answer} | {actual_response} | {status} | {values} | {reason} |".format(**{key: _cell(json.dumps(value, ensure_ascii=False, sort_keys=True) if key == "values" else value) for key, value in item.items()}))
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -224,7 +226,7 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
         "semantic_review": semantic_review,
         "sections": {key: workspace.submissions.get(key) for key in ("overview", "findings", "limitations")},
         "source": str(source.resolve())}, ensure_ascii=False, indent=2) + "\n"}, force=force, result=target)
-    reporter.emit("WRITE", f"Report: {target.resolve()}")
+    reporter.emit("WRITE", tr('Report: {p0}', p0=target.resolve()))
     reporter.done(3, metric="sections")
     return target
 
@@ -233,26 +235,29 @@ def _evaluation_settings_lines(evaluation: dict[str, Any]) -> list[str]:
     settings = evaluation.get("evaluation_settings")
     if settings is None:
         return []
-    lines = ["", "## Evaluation settings", "", f"Mode: {_escape(settings['mode'])}"]
+    lines = ["", tr('## Evaluation settings'), "", tr('Mode') + f": {_escape(settings['mode'])}"]
     if "criteria" in settings:
-        lines += ["", "Criteria: " + _escape(settings["criteria"]),
-                  "Criteria SHA-256: " + _escape(settings["criteria_sha256"])]
+        lines += ["", tr('Criteria') + ": " + _escape(settings["criteria"]),
+                  tr('Criteria SHA-256') + ": " + _escape(settings["criteria_sha256"])]
     if "skill" in settings:
-        lines += ["", "Skill: " + _escape(settings["skill"]["path"]),
-                  "Skill SHA-256: " + _escape(settings["skill"]["sha256"])]
+        lines += ["", tr('Skill') + ": " + _escape(settings["skill"]["path"]),
+                  tr('Skill SHA-256') + ": " + _escape(settings["skill"]["sha256"])]
     return lines
 
 
 def _situation_report(evaluation: dict[str, Any], target: Path, *,
                       skill: str | Path | None, model: str, env_file: str | Path,
                       skill_agent_factory: SkillAgentFactory | None,
-                      max_input_tokens: int, max_output_tokens: int) -> Path:
+                      max_input_tokens: int, max_output_tokens: int, force: bool = False) -> Path:
     required = {"kind", "source", "situation_config", "situation_sha256",
                 "evaluator_model", "method", "observe", "summary", "items"}
     optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
     if not required <= set(evaluation) <= required | optional or not isinstance(evaluation["items"], list):
         raise EvaluationError("situation evaluation JSON does not match the current contract")
     narrative = None
+    report_sidecar = Path(str(target) + ".report.json")
+    if report_sidecar.exists() and not force:
+        raise FileExistsError(f"output already exists: {report_sidecar}")
     if skill is not None:
         selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
         workspace = ReportWorkspace()
@@ -274,16 +279,16 @@ def _situation_report(evaluation: dict[str, Any], target: Path, *,
         if workspace.narrative is None:
             raise EvaluationError("report skill did not submit a report")
         narrative = workspace.narrative
-    lines = ["# LLaDAR situation evaluation", ""]
+    lines = [tr('# LLaDAR situation evaluation'), ""]
     if narrative:
         lines += [narrative["overview"], ""]
-    lines += ["## Observation", "", _escape(evaluation["observe"]["text"]), "",
-             "## Summary", "", "| Metric | Value |", "| --- | ---: |"]
-    lines += [f"| {_escape(key)} | {_value(value)} |"
+    lines += [tr('## Observation'), "", _escape(evaluation["observe"]["text"]), "",
+             tr('## Summary'), "", tr('| Metric | Value |'), "| --- | ---: |"]
+    lines += [f"| {_escape(tr(key))} | {_value(value)} |"
               for key, value in evaluation["summary"].items()]
     lines += _evaluation_settings_lines(evaluation)
-    lines += ["", "## Trial evidence", "",
-              "| Scenario | Status | Turns | Validity | Behavior | Evidence turns | Reason |",
+    lines += ["", tr('## Trial evidence'), "",
+              tr('| Scenario | Status | Turns | Validity | Behavior | Evidence turns | Reason |'),
               "| --- | --- | ---: | --- | --- | --- | --- |"]
     for item in evaluation["items"]:
         lines.append("| {scenario} | {status} | {turns} | {validity} | {behavior} | {evidence} | {reason} |".format(
@@ -293,16 +298,19 @@ def _situation_report(evaluation: dict[str, Any], target: Path, *,
             evidence=_cell(", ".join(item["evidence_turn_ids"])),
             reason=_cell(item["reason"])))
     if narrative:
-        lines += ["", "## Findings", "", narrative["findings"]]
-    lines += ["", "## Limits", "",
-              "The rate uses only completed, valid, determinate trials. "
-              "The saved transcripts and cited turn IDs support review of each judgment."]
+        lines += ["", tr('## Findings'), "", narrative["findings"]]
+    lines += ["", tr('## Limits'), "",
+              tr("The rate uses only completed, valid, determinate trials. The saved transcripts and cited turn IDs support review of each judgment.")]
     if narrative:
         lines += ["", narrative["limitations"]]
-    lines += ["", f"Transcript: {_escape(evaluation['source'])}",
-              f"Situation config: {_escape(evaluation['situation_config'])}"]
+    lines += ["", tr('Transcript') + f": {_escape(evaluation['source'])}",
+              tr('Situation config') + f": {_escape(evaluation['situation_config'])}"]
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
+    publish_bundle({target: "\n".join(lines).rstrip() + "\n",
+        report_sidecar: json.dumps({"schema_version": 1, "session": publication_metadata(),
+            "language": current_language().metadata(), "status": "complete",
+            "source": evaluation["source"], "sections": narrative}, ensure_ascii=False, indent=2) + "\n"},
+        force=force, result=target)
     return target
 
 

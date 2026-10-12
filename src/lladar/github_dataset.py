@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .language import tr, language_prompt
+
 import csv
 import hashlib
 import io
@@ -202,7 +204,6 @@ def normalize_file(path: str, text: str) -> tuple[str, list[dict]]:
         raise KnowledgeLoadError(f"dataset has no rows: {path}")
     return "".join(chunks), locations
 
-
 from .work_session import current_session
 
 
@@ -332,7 +333,7 @@ class Discovery:
                         if choice < sample_size:
                             sample[choice] = location
                     if self.reporter and (index % 10000 == 0):
-                        self.reporter.emit("SOURCE", f"scanned_rows={index} scan_budget={max_rows}")
+                        self.reporter.emit("SOURCE", tr('scanned_rows={p0} scan_budget={p1}', p0=index, p1=max_rows))
             if not total:
                 raise KnowledgeLoadError("dataset has no rows")
             sample.sort(key=lambda item: item["data_row"])
@@ -449,7 +450,7 @@ class Discovery:
                     raise ValueError(str(error)) from error
                 self.checkpoint()
                 if self.reporter:
-                    self.reporter.emit("GITHUB", f"{function.__name__} completed")
+                    self.reporter.emit("GITHUB", tr('{p0} completed', p0=function.__name__))
                 return result
             return invoke
         return {name: observed(getattr(self, name)) for name in
@@ -464,47 +465,56 @@ def _literal(value: str) -> str:
 def render_report(result, github, snapshots, sources_path):
     points = {point["id"]: point for point in result.provenance["knowledge_points"]}
     files = {item["source_id"]: item for item in snapshots["files"] if "source_id" in item}
-    report = ["# 生成查驗報告", "", f"來源：{github['url']}", f"固定 commit：`{github['commit']}`",
-              f"生成時間：{github['generated_at']}", "", "## 生成摘要", "",
+    report = ["# " + tr("Generation evidence report"), "",
+              tr("Repository") + ": " + github["url"],
+              "commit: `" + github["commit"] + "`",
+              tr("Generated at") + ": " + github["generated_at"], "",
+              "## " + tr("Generation settings"), "",
               _literal(json.dumps(result.provenance["settings"], ensure_ascii=False, indent=2)),
-              f"Skill：{result.provenance['skill']['name']}", "",
+              "Skill: " + result.provenance["skill"]["name"], "",
               _literal(json.dumps(github["selection"], ensure_ascii=False, indent=2)),
-              f"正式輸出：{len(result.records)} 題；答案依據分布：" +
-              str(dict(Counter(line["answer_basis"] for line in result.provenance["dataset"]["lines"]))),
-              "", "統計範圍：本次實際探索與生成，不代表完整資料集覆蓋。", "",
-              "各項計數單位與範圍：", _literal(json.dumps(github["counts"], ensure_ascii=False, indent=2)),
-              "題數上限與不足原因：", _literal(json.dumps(github["count_result"], ensure_ascii=False, indent=2)),
-              "## 驗證與限制", "", "程式檢查：來源引文、位置、問答格式與答案依據引用通過。",
-              "模型檢查：逐題檢查答案依據、轉換與任務一致性；不等同人工 gold answer。",
-              "人工檢閱：未執行。自然語言判準仍需檢閱；衍生 QA 不代表重現原 benchmark。",
-              "生成判準不是來源原始答案；引文證明樣本來源，不自動證明衍生判準。", "",
-              f"[保存的來源與原文]({quote(sources_path.name)})", "", "## 資料選取證據", ""]
+              tr("Output questions: {count}", count=len(result.records)),
+              _literal(json.dumps(dict(Counter(line["answer_basis"] for line in result.provenance["dataset"]["lines"])), ensure_ascii=False)),
+              tr("Generation scope is the selected data, not the complete corpus."), "",
+              tr("Stage counts"), _literal(json.dumps(github["counts"], ensure_ascii=False, indent=2)),
+              tr("Requested count and exclusions"), _literal(json.dumps(github["count_result"], ensure_ascii=False, indent=2)),
+              "## " + tr("Validation and limitations"), "",
+              tr("Program checks cover source positions, schema, answer format and answer-basis references."),
+              tr("Model review checks answer support and standalone questions; it is not an independent human gold answer."),
+              tr("Human review has not been performed; generated QA is not a benchmark certification."),
+              tr("Source evidence is not the generated answer; agreement alone is not an independent truth check."), "",
+              "[" + tr("Saved frozen source data") + "](" + quote(sources_path.name) + ")", "",
+              "## " + tr("Dataset selection evidence"), ""]
     by_path = {item["path"]: item for item in snapshots["files"]}
     for evidence in github["selection"]["evidence"]:
         item = by_path[evidence["path"]]
-        report += [f"[來源文件]({item['url']})", _literal(evidence["quote"])]
-    report += ["## 逐題查驗", ""]
+        report += ["[" + tr("Source documentation") + "](" + item["url"] + ")", _literal(evidence["quote"])]
+    report += ["## " + tr("Generated questions"), ""]
     for row, line in zip(result.records, result.provenance["dataset"]["lines"]):
-        report += [f"### 題目 {line['line']}", "", f"題目引用：`{line['record_fingerprint']}`；JSONL 列號：{line['line']}",
-                   "", "題目：", _literal(row["question"]), "預期答案／判準：", _literal(row["expected_answer"]),
-                   f"答案依據：`{line['answer_basis']}`", "", "轉換理由：", _literal(line["basis_rationale"])]
+        report += ["### " + tr("Question {number}", number=line["line"]), "",
+                   "record_fingerprint: `" + line["record_fingerprint"] + "`; JSONL: " + str(line["line"]), "",
+                   tr("Question"), _literal(row["question"]), tr("Expected answer"), _literal(row["expected_answer"]),
+                   "answer_basis: `" + line["answer_basis"] + "`", "",
+                   tr("Basis rationale"), _literal(line["basis_rationale"])]
         if line.get("source_answer_mapping"):
-            report += ["?????????", _literal(json.dumps(line["source_answer_mapping"], ensure_ascii=False, indent=2))]
+            report += [tr("Source answer mapping"), _literal(json.dumps(line["source_answer_mapping"], ensure_ascii=False, indent=2))]
         for point_id in line["basis_point_ids"]:
             for evidence in points[point_id]["evidence"]:
                 item = files[evidence["source_id"]]
-                report += [f"[固定版本來源]({item['url']})", _literal(item["path"]),
-                           f"內容 SHA256：`{item['sha256']}`", "證據摘錄：", _literal(evidence["quote"])]
+                report += ["[" + tr("Frozen source version") + "](" + item["url"] + ")", _literal(item["path"]),
+                           "SHA256: `" + item["sha256"] + "`", tr("Evidence quote"), _literal(evidence["quote"])]
                 for location in item["rows"]:
                     if location["start_char"] < evidence["end_char"] and location["end_char"] > evidence["start_char"]:
-                        report += [f"資料列：{location['data_row']}（不含表頭）", _literal(json.dumps(location["values"], ensure_ascii=False))]
-        report += ["程式驗證：通過。模型檢查：通過。", _literal(line["model_review"]["reason"]),
-                   "人工檢閱：未執行。", ""]
-    report += ["## 跳過與未處理範圍", "", _literal(json.dumps(result.provenance["skipped"], ensure_ascii=False, indent=2)),
-               "下載範圍：僅本次讀取並保存的檔案；未讀取的資料不宣稱已覆蓋。", ""]
+                        report += [tr("Data row: {number} (original position)", number=location["data_row"]),
+                                   _literal(json.dumps(location["values"], ensure_ascii=False))]
+        report += [tr("Model validation reason"), _literal(line["model_review"]["reason"]),
+                   tr("Human review: not performed"), ""]
+    report += ["## " + tr("Skipped items and unresolved limits"), "",
+               _literal(json.dumps(result.provenance["skipped"], ensure_ascii=False, indent=2)),
+               tr("Read the saved source files for review; unselected data has not been inspected."), ""]
     for item in snapshots["files"]:
         if "sampling" in item:
-            report += ["????????", _literal(json.dumps({"path": item["path"],
+            report += [tr("Sampling evidence"), _literal(json.dumps({"path": item["path"],
                 "sampling": item["sampling"], "scanned_rows": item["scanned_rows"],
                 "total_rows": item["total_rows"], "source_sha256": item["sha256"],
                 "sample_sha256": item["sample_sha256"], "raw_snapshot": item["raw_snapshot"]}, ensure_ascii=False, indent=2))]
@@ -658,6 +668,7 @@ def _generate_from_github(url, *, output, client, skill, agent_factory, options,
         "tools instead of opening paths with Python. The selection tool enforces the text budget. "
         "After successful select_dataset, finish discovery; no further tools are needed.\n"
     )
+    runtime_options["system_prompt"] = language_prompt(runtime_options["system_prompt"])
     agent_options.update(**runtime_options, max_input_tokens=options["profile"].max_input_tokens,
                          max_output_tokens=options["profile"].max_output_tokens)
     session = current_session()

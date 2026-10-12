@@ -1,6 +1,8 @@
 """Authenticated browser target for framework-neutral question replay."""
 from __future__ import annotations
 
+from .language import tr
+
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -417,7 +419,7 @@ class BrowserTarget:
                 self.profile_mode = (
                     "reused" if profile_dir.is_dir() and any(profile_dir.iterdir()) else "new"
                 )
-            with self._progress.waiting("Opening browser and loading page"):
+            with self._progress.waiting(tr('Opening browser and loading page')):
                 driver = driver_factory(
                     page_url=page_url,
                     profile_dir=profile_dir,
@@ -432,10 +434,10 @@ class BrowserTarget:
         }
 
     def _manual_calibration(self, marker: str) -> bool:
-        self.output_fn("A browser window is ready. Sign in if needed, then submit this exact calibration question:")
+        self.output_fn(tr('A browser window is ready. Sign in if needed, then submit this exact calibration question:'))
         self.output_fn(marker)
         if self._interactive is not False:
-            self.input_fn("Press Enter after the website has shown its final answer: ")
+            self.input_fn(tr('Press Enter after the website has shown its final answer: '))
             return True
         return False
 
@@ -451,32 +453,20 @@ class BrowserTarget:
         parsed = urlsplit(interaction.url)
         path_shape = _redacted_path_shape(interaction.url)
         media_type = interaction.response.content_type.partition(";")[0].strip().lower()
-        record_label = "record" if record_count == 1 else "records"
+        record_label = tr("record" if record_count == 1 else "records")
         self.output_fn(
-            f"Captured {interaction.method.upper()} to {parsed.scheme}://{parsed.netloc}{path_shape} "
-            f"with {media_type or 'unknown response type'}; "
-            f"using a {self.profile_mode} browser profile; "
-            f"{record_count} selected {record_label}, "
-            f"1 verification and {request_count} scheduled dataset requests require approval."
+            tr('Captured {p0} to {p1}://{p2}{p3} with {p4}; using a {p5} browser profile; {p6} selected {p7}, 1 verification and {p8} scheduled dataset requests require approval.', p0=interaction.method.upper(), p1=parsed.scheme, p2=parsed.netloc, p3=path_shape, p4=media_type or 'unknown response type', p5=self.profile_mode, p6=record_count, p7=record_label, p8=request_count)
         )
         self.output_fn(
-            f"Real response content (including internal answers) will be sent to {options.provider_origin}; "
-            f"model: {options.model_destination}. Request headers, cookies and expected answers are excluded. "
-            f"At most {request_count + 2} model calls: calibration + verification + {request_count} dataset trials; "
-            "one call per response, 8192 output tokens per call, one shared 60-minute deadline. "
-            "Model input is limited to 120 KiB including JSON framing, with no truncation or chunking. "
-            "Charges may apply. Check that these responses are permitted to leave your organization; "
-            "credential detection is conservative, not a guarantee that all sensitive content is detected."
+            tr('Real response content (including internal answers) will be sent to {p0}; model: {p1}. Request headers, cookies and expected answers are excluded. At most {p2} model calls: calibration + verification + {p3} dataset trials; one call per response, 8192 output tokens per call, one shared 60-minute deadline. Model input is limited to 120 KiB including JSON framing, with no truncation or chunking. Charges may apply. Check that these responses are permitted to leave your organization; credential detection is conservative, not a guarantee that all sensitive content is detected.', p0=options.provider_origin, p1=options.model_destination, p2=request_count + 2, p3=request_count)
         )
         self.output_fn(
-            "Local verification displays the full verification response and extracted answer in the terminal. "
-            "Terminal scrollback or recording may retain this content; normal logs and sidecars do not. "
-            "MATCH is a separate fidelity check, not another authorization."
+            tr('Local verification displays the full verification response and extracted answer in the terminal. Terminal scrollback or recording may retain this content; normal logs and sidecars do not. MATCH is a separate fidelity check, not another authorization.')
         )
         approved_by_flags = self.confirmed and options.transfer_approved is True
         if not approved_by_flags:
             accepted = interactive and self.input_fn(
-                "Type YES to approve BOTH the disclosed website requests AND real-response model transfer for this run: "
+                tr('Type YES to approve BOTH the disclosed website requests AND real-response model transfer for this run: ')
             ).strip() == "YES"
             if not accepted:
                 if not self.confirmed:
@@ -504,11 +494,11 @@ class BrowserTarget:
         self.evidence["stage"] = "calibration_capture"
         marker = self.calibration_question if self.calibration_question is not None else "LLaDAR calibration " + secrets.token_hex(12)
         try:
-            with self._progress.waiting("Capturing calibration request and website response"):
+            with self._progress.waiting(tr('Capturing calibration request and website response')):
                 calibrate = getattr(self.driver, "capture_route_calibration", self.driver.capture_calibration)
                 interaction = calibrate(marker, self._manual_calibration)
             self._response_progress(interaction.response)
-            with self._progress.waiting("Parsing captured request"):
+            with self._progress.waiting(tr('Parsing captured request')):
                 template = RequestTemplate.from_interaction(interaction, marker)
         except BaseException as error:
             self._block(error)
@@ -527,9 +517,9 @@ class BrowserTarget:
         if interaction.method == "DOM":
             self.evidence["dom_binding_version"] = 1
             self.evidence["completion_observation"] = "busy_to_idle"
-            self.output_fn("Using webpage components; completion is observed from this question's busy-to-idle state.")
+            self.output_fn(tr("Using webpage components; completion is observed from this question's busy-to-idle state."))
         else:
-            self.output_fn("Using captured website traffic for replay.")
+            self.output_fn(tr('Using captured website traffic for replay.'))
         try:
             options = self.extraction_options
             response_input(interaction.response, _protected_values(interaction))
@@ -547,18 +537,18 @@ class BrowserTarget:
             self.evidence["extraction"] = self._extractor.evidence
             receipt = interaction.response._receipt
             self.evidence["stage"] = "calibration_extraction"
-            with self._progress.waiting("Extracting calibration answer with model"):
+            with self._progress.waiting(tr('Extracting calibration answer with model')):
                 self._extractor.extract(interaction.response, request_id=receipt.request_id if receipt else "")
             self._extractor.check_budget()
             self.evidence["stage"] = "verification_request"
             verification_question = (self.calibration_question if self.calibration_question is not None
                                      else "LLaDAR verification " + secrets.token_hex(12))
-            with self._progress.waiting("Waiting for verification website response"):
+            with self._progress.waiting(tr('Waiting for verification website response')):
                 verification = self.driver.replay(template, verification_question, "browser-verification",
                                                   timeout_seconds=self._extractor.remaining_seconds())
             self._response_progress(verification)
             self.evidence["stage"] = "verification_extraction"
-            with self._progress.waiting("Extracting verification answer with model"):
+            with self._progress.waiting(tr('Extracting verification answer with model')):
                 text = self._extractor.extract(verification, request_id="browser-verification")
             self.evidence["stage"] = "verification_review"
             reference = (options.reference_reader(verification, "browser-verification")
@@ -573,7 +563,7 @@ class BrowserTarget:
             self.evidence["status"] = "verified"
             self.evidence["verification"] = "independent_local_reference"
             self.evidence["stage"] = "ready"
-            self._progress.emit("BROWSER", "Verification passed; ready for dataset requests")
+            self._progress.emit("BROWSER", tr('Verification passed; ready for dataset requests'))
         except BrowserConfirmationRequired:
             self.evidence["status"] = "confirmation_required"
             raise
@@ -600,12 +590,12 @@ class BrowserTarget:
             self._remaining_requests -= 1
             self.evidence["stage"] = "dataset_request"
             progress = getattr(self, "_progress", None) or ProgressReporter(getattr(self, "verbose", False))
-            with progress.waiting("Waiting for dataset website response"):
+            with progress.waiting(tr('Waiting for dataset website response')):
                 observation = self.driver.replay(self._template, question, request_id,
                                                  timeout_seconds=self._extractor.remaining_seconds())
             self._response_progress(observation)
             self.evidence["stage"] = "dataset_extraction"
-            with progress.waiting("Extracting dataset answer with model"):
+            with progress.waiting(tr('Extracting dataset answer with model')):
                 return self._extractor.extract(observation, request_id=request_id)
         except BaseException as error:
             self._block(error)
@@ -615,7 +605,7 @@ class BrowserTarget:
         progress = getattr(self, "_progress", None)
         if progress is not None and isinstance(response, ObservedResponse):
             body = response.body.encode("utf-8") if isinstance(response.body, str) else response.body
-            progress.emit("BROWSER", f"Website response received bytes={len(body)}")
+            progress.emit("BROWSER", tr('Website response received bytes={p0}', p0=len(body)))
 
     def close(self) -> None:
         try:

@@ -5,6 +5,8 @@ an OS sandbox: generated Python executes with the user's permissions.
 """
 from __future__ import annotations
 
+from .language import tr, current_language
+
 from contextlib import redirect_stdout
 from dataclasses import asdict
 import ast
@@ -594,7 +596,7 @@ class AutoAdapter:
             @wraps(function)
             def invoke(*args, **kwargs):
                 if self.verbose:
-                    print(f"[ADAPT] {function.__name__}", file=sys.stderr, flush=True)
+                    print(tr('[ADAPT] {p0}', p0=function.__name__), file=sys.stderr, flush=True)
                 try:
                     return function(*args, **kwargs)
                 except (OSError, ValueError, RuntimeError) as error:
@@ -611,7 +613,7 @@ class AutoAdapter:
                               python=self.graphify_python, timeout=min(self.timeout, 60))
             self.report["graph"] = graph.summary
             if self.verbose:
-                print(f"[GRAPH] {graph.summary['status']} " + graph.summary.get("reason", ""), file=sys.stderr)
+                print(tr('[GRAPH] {p0} ', p0=graph.summary['status']) + graph.summary.get("reason", ""), file=sys.stderr)
             graph_context = "\nGraph status: " + json.dumps(
                 {k: v for k, v in graph.summary.items() if k in {"status", "version", "nodes", "edges", "reason", "note"}},
                 ensure_ascii=False)
@@ -650,6 +652,7 @@ class AutoAdapter:
                         self.explorer.start_agent_turn()
                         with redirect_stdout(sys.stderr):
                             discovery = agent_factory(
+                                system_prompt=current_language().instruction(),
                                 model=self.model, env_file=self.env_file, tools=tools[:5],
                                 max_input_tokens=self.model_profile.max_input_tokens,
                                 max_output_tokens=self.model_profile.max_output_tokens,
@@ -713,6 +716,7 @@ class AutoAdapter:
                 self.explorer.start_agent_turn()
                 with redirect_stdout(sys.stderr):
                     return agent_factory(
+                        system_prompt=current_language().instruction(),
                         model=self.model, env_file=self.env_file, tools=tools,
                         max_input_tokens=self.model_profile.max_input_tokens,
                         max_output_tokens=self.model_profile.max_output_tokens,
@@ -789,7 +793,7 @@ class AutoAdapter:
                             and saved["protocol"] != self.protocol_mode):
                         raise ValueError(f"Existing adapter uses {saved['protocol']} protocol; this run requires {self.protocol_mode}")
             if self.verbose:
-                print(f"[ADAPT] Reusing {original}; verifying selected runtime protocol", file=sys.stderr, flush=True)
+                print(tr('[ADAPT] Reusing {p0}; verifying selected runtime protocol', p0=original), file=sys.stderr, flush=True)
             harness = self.explorer.write_harness("adapter.py", source.decode("utf-8-sig"))
             # Preserve the supplied bytes, including a possible UTF-8 BOM.
             self._path(harness).write_bytes(source)

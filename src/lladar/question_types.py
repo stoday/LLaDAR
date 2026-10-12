@@ -1,6 +1,7 @@
 """Validated question-type contracts carried outside the three-field dataset."""
 
 from __future__ import annotations
+from .language import tr
 
 import hashlib
 import json
@@ -162,5 +163,5 @@ def deterministic_judgment(contract: dict[str, Any], expected_answer: str, actua
         raise ValueError(f"unsupported answer protocol: {protocol}")
     return {
         "values": {"correct": valid and response == expected, "response_format_valid": valid},
-        "reason": f"Deterministic {protocol} comparison.",
+        "reason": tr("Deterministic {protocol} comparison.", protocol=protocol),
     }

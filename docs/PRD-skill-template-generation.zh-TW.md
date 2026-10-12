@@ -23,7 +23,7 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 
 未指定 --output 時，在目前工作目錄建立 ./lladar-skills/<stage>/；stage 依序為 test-dataset、situation、run-agent、eval、report。指定 --output 時，該路徑就是 Skill 目錄，不再加上一層階段目錄。每個範本包含可直接載入的 SKILL.md，以及供人閱讀的 AUTHORING.md。SKILL.md 從對應的現行內建方法出發，提供可修改、可運作的完整指令；AUTHORING.md 說明該階段的請求、可用工具與參數、必要提交、完成條件、主程式持有的驗證，以及最小使用範例。
 
-成功時印出實際建立的目錄及使用該目錄的完整 --skill 命令。目的目錄已存在時預設停止；五種範本命令均接受 `--force`，明確覆寫 `SKILL.md` 與 `AUTHORING.md`，保留其餘檔案。覆寫失敗時嘗試還原原檔。產生命令本身不需要 provider 憑證，也不執行受測 Agent。
+成功時印出實際建立的目錄及使用該目錄的完整 --skill 命令。目的目錄已存在時預設停止；五種範本命令均接受 `--force`，明確覆寫 `SKILL.md`、`AUTHORING.md` 與 `language.json`，保留其餘檔案。覆寫失敗時嘗試還原原檔。產生命令本身不需要 provider 憑證，也不執行受測 Agent。
 
 `lladar create --help` 將建立命令分成兩類：先列出 Main workflows（test-dataset、situation），再列出 Skill templates (advanced)（五個 Skill 範本命令）。兩類清單分開呈現，不改變子命令名稱、引數或實際操作方式。
 
@@ -64,7 +64,7 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 - run-agent 指南明確說明內建預設策略可直接執行隨附程式；複製到自訂路徑後，--skill 會走自訂 Skill 的 agent 排程流程。範本不能暗示複製內建 strategy.py 就能保有內建快速路徑。受測 target Agent 與排程 agent 是不同角色。
 - eval 指南明確說明開放式回答可走 Skill 評估，具答案協定的題型與部分 probe 由主程式確定性判定；彙總與穩定度由主程式計算。report 指南明確說明 Skill 只提交敘述，數字與表格取自保存的評估結果。
 - situation-skill 對應情境設定的 authoring Skill。指南說明情境執行及 --situation-config 評估模式目前不能改由一般 run-agent 或 eval 的 --skill 取代。
-- 目的目錄已存在時預設停止；`--force` 僅覆寫 SKILL.md 與 AUTHORING.md，保留其他檔案，失敗時嘗試還原原檔。輸出路徑不可建立或 metadata 不合法時，回報明確錯誤；避免留下可被誤認為完整 Skill 的部分產物。
+- 目的目錄已存在時預設停止；`--force` 僅覆寫 SKILL.md、AUTHORING.md 與 language.json，保留其他檔案，失敗時嘗試還原原檔。輸出路徑不可建立或 metadata 不合法時，回報明確錯誤；避免留下可被誤認為完整 Skill 的部分產物。
 - 此功能沿用目前單一 --skill DIRECTORY 載入介面、Akasha Skill 格式和現有主程式驗證，不另建 Skill registry、套件安裝流程或新的 agent 工具集。
 
 ## Testing Decisions
@@ -87,3 +87,11 @@ LLaDAR 的公開命令可用 --skill DIRECTORY 選擇方法，但使用者難以
 - 這個功能的價值在於公開「可修改方法的邊界」：範本是可執行的起點，作者指南是對工具與交付契約的說明。只有複製現有短版 SKILL.md，無法解決使用者不知道如何串接工具的原始問題。
 - create situation 目前在工作樹中開發；實作此 PRD 時應以其最終公開 CLI 與 Skill 契約為準，避免把開發中的介面當成已發布承諾。
 - 建立範本屬本機檔案操作。接受測試與文件範例應區分「產生成功且可載入」與「實際 provider／受測 Agent 已執行成功」。
+
+## 語言設定補充（2026-10-12）
+
+五種範本命令共用 `--lang`，依 [語言設定 PRD](PRD-language-selection.zh-TW.md) 選擇英文、繁體中文、日文、韓文或簡體中文資產。
+其他有效代碼使用英文資產並提示。建立範本仍是本機操作，不需要模型或 API key。
+除 `SKILL.md` 與 `AUTHORING.md` 外，另建立 `language.json`，記錄 `lang`、`ui_lang`、`template_lang`。
+上述三個檔案是受管理的範本檔案；`--force` 明確覆寫三者並保留其他檔案，失敗時恢復原內容。
+印出的使用命令帶上正規化 `--lang`。各語言維持相同工具契約與可執行範例。

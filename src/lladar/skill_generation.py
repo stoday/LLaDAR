@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .language import tr, language_prompt, current_language
+
 import re
 import hashlib
 import json
@@ -95,7 +97,6 @@ class GenerationResult:
         payloads.append(sidecar)
         retired = [Path(str(output) + ".graph.json")] if force and self.graph is None else []
         publish_bundle(dict(zip(targets, payloads)), force=force, result=self.records, retired=retired)
-
 
 from .work_session import current_session, publish_bundle, publication_metadata
 
@@ -222,7 +223,7 @@ class GenerationWorkspace:
                             for start, end in self.coverage(key)["read_ranges"])
             total = sum(len(document.get_content(metadata_mode=MetadataMode.NONE))
                         for document in self.documents.values())
-            self.reporter.group(completed, total, "Read sources")
+            self.reporter.group(completed, total, tr('Read sources'))
         identity = f"{source_id}:{hashlib.sha256(text.encode('utf-8')).hexdigest()}:{start_char}:{end_char}"
         ref_id = "ref_" + hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]
         self.source_refs[ref_id] = {"read_id": read_id, "source_id": source_id,
@@ -999,16 +1000,19 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
         for attempt in range(1, 4):
             event_start = len(workspace.events)
             reporter.emit(request["stage"].upper(),
-                          f"item={request.get('source_id', request.get('knowledge_point_id'))} attempt={attempt}/3")
+                          tr('item={p0} attempt={p1}/3', p0=request.get('source_id', request.get('knowledge_point_id')), p1=attempt))
             # Initialization errors are fatal, unlike one model work item failing.
             workspace.current_stage = request["stage"]
             stage_tools = workspace.tools(request["stage"])
             if extra_tools_factory is not None:
                 stage_tools.update(extra_tools_factory(workspace))
+            from .skill_agent import SYSTEM_PROMPT
+            runtime = dict(runtime_options or {})
+            runtime["system_prompt"] = language_prompt(runtime.get("system_prompt", SYSTEM_PROMPT))
             agent = agent_factory(skills=[str(skill)], tools=stage_tools,
                                   model=model, env_file=str(env_file), temperature=temperature,
                                   max_input_tokens=profile.max_input_tokens,
-                                  max_output_tokens=profile.max_output_tokens, verbose=verbose, **(runtime_options or {}))
+                                  max_output_tokens=profile.max_output_tokens, verbose=verbose, **runtime)
             work = {**request, "attempt": attempt}
             work["existing_results"] = {
                 "graph_present": workspace.semantic_graph is not None, "qa_count": len(workspace.qa),
@@ -1030,7 +1034,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         raise DatasetValidationError(f"skill file changed during generation: {name}")
                     skill_files[name] = digest
                 errors.append({"attempt": attempt, "error_type": type(error).__name__})
-                reporter.emit("RETRY", f"stage={request['stage']} attempt={attempt}/3 error={type(error).__name__}")
+                reporter.emit("RETRY", tr('stage={p0} attempt={p1}/3 error={p2}', p0=request['stage'], p1=attempt, p2=type(error).__name__))
                 executions.append({**request, "attempt": attempt, **evidence, "error_type": type(error).__name__,
                                    "host_tool_events": workspace.events[event_start:]})
                 if skill.name in evidence.get("loaded_skills", []):
@@ -1041,7 +1045,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                     except (ValueError, KeyError, TypeError, OSError) as validation_error:
                         request["validation_errors"] = [str(validation_error)]
                     else:
-                        reporter.emit("RECOVERED", "final candidates passed validation after agent error")
+                        reporter.emit("RECOVERED", tr('final candidates passed validation after agent error'))
                         return {"status": "complete", "attempts": attempt, "errors": errors}
                 continue
             if skill.name not in result.get("loaded_skills", []):
@@ -1059,7 +1063,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             except (ValueError, KeyError, TypeError, OSError) as error:
                 errors.append({"attempt": attempt, "error_type": "InvalidCandidates"})
                 request["validation_errors"] = [str(error)]
-                reporter.emit("RETRY", f"stage={request['stage']} attempt={attempt}/3 error=InvalidCandidates")
+                reporter.emit("RETRY", tr('stage={p0} attempt={p1}/3 error=InvalidCandidates', p0=request['stage'], p1=attempt))
             else:
                 return {"status": "complete", "attempts": attempt, "errors": errors}
         return {"status": "failed", "attempts": 3, "errors": errors,
@@ -1099,7 +1103,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 completed_batches[batch_id] = generation_work
                 if session:
                     session.put("generation_batches", completed_batches)
-                reporter.group(batch_index, len(assignments), "Generated batches")
+                reporter.group(batch_index, len(assignments), tr('Generated batches'))
             else:
                 generation_work = {"status": "complete", "attempts": sum(item["attempts"] for item in completed_batches.values()),
                                    "errors": errors, "batches": len(assignments)}
@@ -1212,10 +1216,10 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
         "skill": {"name": skill.name, "path": str(skill), "files": skill_files},
         "validation": {"status": "passed", "scope": "final_candidate_snapshot",
                        "checks": ["source_positions", "question_contracts", "graph_and_probe_contracts"],
-                       "limitations": "Source quotes and structural contracts do not prove natural-language entailment."},
+                       "limitations": tr("Source quotes and structural contracts do not prove natural-language entailment.")},
         "method_reason": workspace.method_reason,
         "skipped": skipped,
-        "settings": {"model": model, "temperature": temperature, "count": count,
+        "settings": {**current_language().metadata(), "model": model, "temperature": temperature, "count": count,
                      "question_type": question_type, "controlled_variant_topics": list(selected_topics), "seed": seed,
                      "max_attempts": 3, "read_page_chars": workspace.page_chars,
                      "max_input_tokens": profile.max_input_tokens, "max_output_tokens": profile.max_output_tokens},

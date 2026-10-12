@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .language import tr
+
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -30,10 +32,10 @@ def select_controlled_variant_topics(
     available = [dimension for dimension in dimensions if isinstance(dimension, dict)]
     if not available:
         return ()
-    output_fn("Available controlled-variant dimensions (enter numbers separated by commas; 0 skips):")
+    output_fn(tr('Available controlled-variant dimensions (enter numbers separated by commas; 0 skips):'))
     for index, dimension in enumerate(available, start=1):
         output_fn(f"  {index}. {dimension['label']} ({dimension['id']})")
-    choice = input_fn("Selection: ").strip()
+    choice = input_fn(tr('Selection: ')).strip()
     if choice in {"", "0"}:
         return ()
     try:

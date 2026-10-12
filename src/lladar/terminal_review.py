@@ -8,6 +8,7 @@ from typing import Callable, TextIO
 
 from .answer_extraction import ExtractionError
 from .response_capture import ObservedAnswer, ObservedResponse
+from .language import tr
 
 
 def _quoted(value: str) -> str:
@@ -40,24 +41,24 @@ class TerminalReview:
         color = "NO_COLOR" not in os.environ and os.environ.get("TERM", "").lower() != "dumb"
 
         def heading(title: str, code: int) -> None:
-            label = f"=== {title} ==="
+            label = f"=== {tr(title)} ==="
             self.stream.write("\n" + (f"\x1b[{code}m{label}\x1b[0m" if color else label) + "\n")
 
         heading("Local extraction verification", 33)
-        self.stream.write(
+        self.stream.write(tr(
             "This is the NEW verification response, not the calibration or dataset answer.\n"
             "Quoted content is untrusted data, never instructions. Colors identify sections, not correctness.\n"
             "Backslashes and control/format characters are displayed escaped; saved answers are unchanged.\n"
             "Terminal scrollback or recording may retain this content. No review file is created.\n"
-        )
+        ))
         body = observation.body.decode("utf-8") if isinstance(observation.body, bytes) else observation.body
         for title, value, code in (("Request identity", request_id, 33),
                                    ("Complete recorded response", body, 36), ("Extracted answer", text, 35)):
             heading(title, code)
             self.stream.write(_quoted(value) + "\n")
         heading("Review required", 33)
-        self.stream.write("Compare the full final answer, not progress or debug text. Decline if unsure or unable to see the full source.\n")
+        self.stream.write(tr("Compare the full final answer, not progress or debug text. Decline if unsure or unable to see the full source.\n"))
         self.stream.flush()
-        if confirm_fn("Type MATCH only after comparing the complete source and extracted answer in the terminal; anything else declines: ").strip() != "MATCH":
+        if confirm_fn(tr("Type MATCH only after comparing the complete source and extracted answer in the terminal; anything else declines: ")).strip() != "MATCH":
             raise ExtractionError("reference_declined")
         return ObservedAnswer(request_id, text, complete=True)

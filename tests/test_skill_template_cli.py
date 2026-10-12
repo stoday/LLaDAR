@@ -152,7 +152,7 @@ def test_printed_use_command_quotes_a_skill_path_with_spaces(
     else:
         assert shlex.split(use_command) == [
             "lladar", "eval", "RESPONSES", "--skill", str(skill.resolve()),
-            "--output", "evaluation.json",
+            "--output", "evaluation.json", "--lang", "en",
         ]
 
 

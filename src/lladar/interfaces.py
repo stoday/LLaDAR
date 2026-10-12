@@ -1,6 +1,8 @@
 """Evidence validation and human selection, independent of model execution."""
 from __future__ import annotations
 
+from .language import tr
+
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -170,31 +172,32 @@ def choose_interface(plan: dict, *, interactive: bool | None,
         return "select", candidate_id
     if len(candidates) == 1 and not plan["unresolved"] and not (candidates[0].get("service") or {}).get("missing"):
         return "automatic", candidates[0]["id"]
-    print("\n需要確認要測試的完整對外功能：", file=sys.stderr)
+    print(tr('\n需要確認要測試的完整對外功能：'), file=sys.stderr)
     for index, candidate in enumerate(candidates, 1):
-        print(f"[{index}] {_display(candidate['label'])} (ID: {candidate['id']})", file=sys.stderr)
-        print("    入口：" + _display(candidate["entrypoint"]), file=sys.stderr)
-        print("    流程：" + " → ".join(_display(step) for step in candidate["flow"]), file=sys.stderr)
-        print("    依據：" + _display(candidate["rationale"]), file=sys.stderr)
-        print("    輸出：" + _display(candidate["output"]), file=sys.stderr)
+        print(tr('[{p0}] {p1} (ID: {p2})', p0=index, p1=_display(candidate['label']), p2=candidate['id']), file=sys.stderr)
+        print(tr('    入口：') + _display(candidate["entrypoint"]), file=sys.stderr)
+        print(tr('    流程：') + " → ".join(_display(step) for step in candidate["flow"]), file=sys.stderr)
+        print(tr('    依據：') + _display(candidate["rationale"]), file=sys.stderr)
+        print(tr('    輸出：') + _display(candidate["output"]), file=sys.stderr)
         if candidate.get("service"):
-            for key, label in (("command", "啟動"), ("readiness_path", "就緒"), ("request", "請求"),
-                               ("response", "回應"), ("coverage", "涵蓋"), ("excluded", "未涵蓋"), ("missing", "缺少設定")):
-                print(f"    {label}：{_display(candidate['service'].get(key))}", file=sys.stderr)
+            for key, label in (("command", tr('啟動')), ("readiness_path", tr('就緒')), ("request", tr("Request")),
+                               ("response", tr("Response")), ("coverage", tr("Coverage")),
+                               ("excluded", tr("Excluded")), ("missing", tr("Missing settings"))):
+                print(f"    {label}: {_display(candidate['service'].get(key))}", file=sys.stderr)
         for source in candidate["evidence"]:
             print(f"    {_display(source['path'])}:{source['line']} {_display(source['quote'])}", file=sys.stderr)
     for question in plan["unresolved"]:
-        print("待確認：" + _display(question), file=sys.stderr)
+        print(tr('待確認：') + _display(question), file=sys.stderr)
     if not ((sys.stdin.isatty() and sys.stderr.isatty()) if interactive is None else interactive):
         return "pause", ""
     while True:
-        print("輸入編號或 ID；c 補充需求並重新探索；q 保存離開：", end=" ", file=sys.stderr, flush=True)
+        print(tr('輸入編號或 ID；c 補充需求並重新探索；q 保存離開：'), end=" ", file=sys.stderr, flush=True)
         try:
             value = input().strip()
             if value.lower() == "q":
                 return "pause", ""
             if value.lower() == "c":
-                print("請描述要測的功能或正常使用方式：", end=" ", file=sys.stderr, flush=True)
+                print(tr('請描述要測的功能或正常使用方式：'), end=" ", file=sys.stderr, flush=True)
                 clarification = input().strip()
                 if clarification:
                     return "clarify", clarification
@@ -206,10 +209,10 @@ def choose_interface(plan: dict, *, interactive: bool | None,
         if value in {c["id"] for c in candidates}:
             selected = next(c for c in candidates if c["id"] == value)
             if (selected.get("service") or {}).get("missing"):
-                print("服務設定仍缺漏，請按 c 補充需求或 q 保存。", file=sys.stderr)
+                print(tr('服務設定仍缺漏，請按 c 補充需求或 q 保存。'), file=sys.stderr)
                 continue
             return "select", value
-        print("選項無效，尚未執行待測程式。", file=sys.stderr)
+        print(tr('選項無效，尚未執行待測程式。'), file=sys.stderr)
 
 
 def write_json(path: Path, value: dict) -> None:
