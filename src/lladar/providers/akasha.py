@@ -8,6 +8,7 @@ from typing import Any
 from ..exceptions import ProviderError
 from ..model_profiles import resolve_model_profile
 from .base import parse_json_object
+from ..language import current_language
 
 
 class AkashaProvider:
@@ -57,6 +58,7 @@ class AkashaProvider:
             max_output_tokens=self.max_output_tokens,
         )
         agent = factory(
+            system_prompt=current_language().instruction(),
             model=model,
             env_file=self.env_file,
             stream=self.stream,

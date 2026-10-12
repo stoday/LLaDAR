@@ -9,6 +9,7 @@ from threading import Event, Thread
 from typing import Any, TextIO
 
 from tqdm import tqdm
+from .language import current_language, tr
 
 
 _COLORS = {
@@ -38,6 +39,7 @@ class ProgressReporter:
 
     def __init__(self, enabled: bool = True, stream: TextIO | None = None) -> None:
         self.enabled = enabled
+        self.language = current_language()
         self.stream = stream if stream is not None else sys.stderr
         self.started_at = time.perf_counter()
         self.terminal = getattr(self.stream, "terminal", self.stream)
@@ -56,8 +58,8 @@ class ProgressReporter:
     def configuration(self, values: dict[str, Any]) -> None:
         if not self.enabled:
             return
-        self.emit("CONFIG", "effective settings")
-        for key, value in values.items():
+        self.emit("CONFIG", tr("effective settings", language=self.language))
+        for key, value in {**values, **self.language.metadata()}.items():
             self.emit("CONFIG", f"{key:<20} {_display(value)}")
 
     def emit(self, label: str, message: str) -> None:
@@ -99,11 +101,11 @@ class ProgressReporter:
             return
         stopped = Event()
         started = time.perf_counter()
-        self.emit(label, f"{message} started")
+        self.emit(label, f"{message} {tr('started', language=self.language)}")
 
         def heartbeat() -> None:
             while not stopped.wait(interval):
-                self.emit(label, f"{message} still working stage_elapsed={_duration(time.perf_counter() - started)}")
+                self.emit(label, f"{message} {tr('still working', language=self.language)} {tr('stage_elapsed', language=self.language)}={_duration(time.perf_counter() - started)}")
 
         thread = Thread(target=heartbeat, name="lladar-progress", daemon=True)
         thread.start()
@@ -116,7 +118,7 @@ class ProgressReporter:
         finally:
             stopped.set()
             thread.join()
-            self.emit(label, f"{message} {status} stage_elapsed={_duration(time.perf_counter() - started)}")
+            self.emit(label, f"{message} {tr(status, language=self.language)} {tr('stage_elapsed', language=self.language)}={_duration(time.perf_counter() - started)}")
 
     def session(self, completed: int, total: int, message: str) -> None:
         self._progress("SESSION", completed, total, message)
@@ -150,10 +152,10 @@ class ProgressReporter:
         elapsed = now - self.started_at
         remaining = max(total - completed, 0)
         eta = elapsed / completed * remaining if completed else None
-        eta_text = "estimating" if eta is None else _duration(eta)
+        eta_text = tr("estimating", language=self.language) if eta is None else _duration(eta)
         self.emit(
             label,
-            f"{completed}/{total} {message} elapsed={_duration(elapsed)} ETA={eta_text}",
+            f"{completed}/{total} {message} {tr('elapsed', language=self.language)}={_duration(elapsed)} ETA={eta_text}",
         )
 
     def close(self):
@@ -166,7 +168,7 @@ class ProgressReporter:
             bar.close()
         self.bars.clear()
         elapsed = time.perf_counter() - self.started_at
-        self.emit("DONE", f"{metric}={item_count} elapsed={_duration(elapsed)}")
+        self.emit("DONE", f"{tr(metric, language=self.language)}={item_count} {tr('elapsed', language=self.language)}={_duration(elapsed)}")
 
 
 def _display(value: Any) -> str:

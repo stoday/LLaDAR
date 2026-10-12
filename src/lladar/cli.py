@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
 from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
 from .command_log import command_log
+from .operation_report import OperationReport, current_operation, exception_exit_code, operation_scope
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
@@ -24,11 +26,103 @@ from .reporting import DEFAULT_REPORT_MODEL, create_report
 from .runner import DEFAULT_ADAPTER_MODEL, run_agent
 from .skill_templates import create_skill_template
 from .situation import create_situation, evaluate_situation, run_situation
+from .language import Language, current_language, language_scope, normalize_lang, resolve_language, localize_error, tr
+
+
+class _LanguageParser(argparse.ArgumentParser):
+    def parse_args(self, args=None, namespace=None):
+        invocation = list(sys.argv[1:] if args is None else args)
+        codes = []
+        for index, token in enumerate(invocation):
+            if token == "--":
+                break
+            option, separator, value = token.partition("=")
+            # Preserve argparse's existing unambiguous long-option abbreviations.
+            if option in {"--la", "--lan", "--lang"} and separator:
+                codes.append(value)
+            elif option in {"--la", "--lan", "--lang"} and index + 1 < len(invocation):
+                codes.append(invocation[index + 1])
+        language_error = None
+        try:
+            normalized = [normalize_lang(code) for code in codes]
+            if len(set(normalized)) > 1:
+                raise ValueError("conflicting --lang values; use one language per command")
+            requested = normalized[0] if normalized else None
+        except ValueError as error:
+            # Parse the route first so an invalid language still gets a stage report.
+            language_error = str(error)
+            requested = None
+        language = Language(requested or "en")
+        if current_operation():
+            current_operation().language = language
+        with language_scope(language):
+            # Help exits during parsing; no session or provider is required.
+            if any(token in {"-h", "--help"} for token in invocation):
+                if language_error:
+                    self.error(language_error)
+                with language_scope(language, announce=False):
+                    if language.ui_lang != language.lang:
+                        print(tr('Language {p0}: interface, fixed headings and offline templates use English.', p0=language.lang), file=sys.stderr)
+                    return super().parse_args(invocation, namespace)
+            namespace = namespace if namespace is not None else argparse.Namespace()
+            if current_operation():
+                current_operation().partial_args = namespace
+            parsed = super().parse_args(invocation, namespace)
+            if current_operation():
+                command = getattr(parsed, "command", None)
+                stage = getattr(parsed, "create_command", None) if command == "create" else command
+                if stage:
+                    current_operation().identify("lladar create " + stage if command == "create" else "lladar " + stage)
+            if language_error:
+                self.error(language_error)
+            try:
+                language = resolve_language(requested, getattr(parsed, "resume", None))
+            except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
+                self.error(str(error))
+            parsed.lang = language.lang
+            return parsed
+
+    def error(self, message):
+        if current_operation():
+            current_operation().identify(self.prog)
+            if self.prog == "lladar":
+                partial = getattr(current_operation(), "partial_args", None)
+                command = getattr(partial, "command", None)
+                stage = getattr(partial, "create_command", None) if command == "create" else command
+                if stage:
+                    current_operation().identify("lladar create " + stage if command == "create" else "lladar " + stage)
+            current_operation().error(category="arguments")
+        self.print_usage(sys.stderr)
+        self.exit(2, tr("{prog}: error: {message}\n", prog=self.prog, message=localize_error(message)))
 
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
+    def start_section(self, heading):
+        return super().start_section(tr(heading))
+
+    def add_usage(self, usage, actions, groups, prefix=None):
+        return super().add_usage(usage, actions, groups, prefix=tr("usage: ") if prefix is None else prefix)
+
+    def add_text(self, text):
+        if text and text != argparse.SUPPRESS:
+            translated = tr(text)
+            if translated == text and "\n" in text:
+                rows = []
+                for row in text.splitlines():
+                    match = re.fullmatch(r"(  [a-z-]+\s+)(.+)", row)
+                    if match:
+                        row = match[1] + tr(match[2])
+                    elif row.endswith(":"):
+                        row = tr(row[:-1]) + ":"
+                    else:
+                        row = tr(row)
+                    rows.append(row)
+                translated = "\n".join(rows)
+            text = translated
+        return super().add_text(text)
+
     def _fill_text(self, text: str, width: int, indent: str) -> str:
-        if text.startswith("Additional guidance:"):
+        if text.startswith(tr("Additional guidance") + ":"):
             return "\n".join(
                 textwrap.fill(line, width, initial_indent=indent, subsequent_indent=indent)
                 if line else ""
@@ -40,8 +134,11 @@ class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescrip
         if action.help is not None and (
             action.default is None or "(default:" in action.help
         ):
-            return action.help
-        return super()._get_help_string(action)
+            return tr(action.help)
+        original = super()._get_help_string(action)
+        if original != action.help and current_language().ui_lang != "en":
+            return tr(action.help or "") + tr(" (default: %(default)s)")
+        return tr(original)
 
 
 class _SingleSkill(argparse.Action):
@@ -96,40 +193,40 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
     """Describe successful workflow artifacts using their actual absolute paths."""
     path = Path(output).resolve()
     descriptions = {
-        "test-dataset": "Generated questions and source-supported expected answers for testing an Agent.",
-        "situation": "Compiled instructions into a reusable multi-turn situation configuration.",
-        "run-agent": "Ran the target Agent and saved its responses and execution evidence.",
-        "eval": "Evaluated saved responses and recorded judgments and aggregate results.",
-        "report": "Rendered the saved evaluation into a readable Markdown report.",
+        "test-dataset": tr('Generated questions and source-supported expected answers for testing an Agent.'),
+        "situation": tr('Compiled instructions into a reusable multi-turn situation configuration.'),
+        "run-agent": tr('Ran the target Agent and saved its responses and execution evidence.'),
+        "eval": tr('Evaluated saved responses and recorded judgments and aggregate results.'),
+        "report": tr('Rendered the saved evaluation into a readable Markdown report.'),
     }
     main_descriptions = {
-        "test-dataset": "Test records: questions, expected answers and empty actual_response fields.",
-        "situation": "Situation instructions, stopping rules, variation axes, methods and evaluation rubric.",
-        "run-agent": ("Multi-turn conversation transcripts for each situation trial." if situation else
-                      "Questions, expected answers and actual Agent responses."),
-        "eval": "Per-trial judgments, reasons, evaluation settings and summary statistics.",
-        "report": "Human-readable findings, result tables and limitations based on saved evaluation evidence.",
+        "test-dataset": tr('Test records: questions, expected answers and empty actual_response fields.'),
+        "situation": tr('Situation instructions, stopping rules, variation axes, methods and evaluation rubric.'),
+        "run-agent": (tr('Multi-turn conversation transcripts for each situation trial.') if situation else
+                      tr('Questions, expected answers and actual Agent responses.')),
+        "eval": tr('Per-trial judgments, reasons, evaluation settings and summary statistics.'),
+        "report": tr('Human-readable findings, result tables and limitations based on saved evaluation evidence.'),
     }
     sidecars = {
         "test-dataset": [
-            (".generation.json", "Generation methods, source provenance and validation results."),
-            (".graph.json", "Knowledge graph and declared control dimensions used for generation."),
+            (".generation.json", tr('Generation methods, source provenance and validation results.')),
+            (".graph.json", tr('Knowledge graph and declared control dimensions used for generation.')),
         ],
-        "report": [(".report.json", "Report section citations and work-session metadata.")],
+        "report": [(".report.json", tr('Report section citations and work-session metadata.'))],
         "run-agent": ([
-            (".turns.jsonl", "Individual conversation turns and their identifiers."),
-            (".scenarios.jsonl", "Generated scenarios, starting messages and selected variations."),
-            (".calibration.json", "Session adapter calibration evidence."),
-            (".run.json", "Run configuration, identity, adapter evidence and execution errors."),
+            (".turns.jsonl", tr('Individual conversation turns and their identifiers.')),
+            (".scenarios.jsonl", tr('Generated scenarios, starting messages and selected variations.')),
+            (".calibration.json", tr('Session adapter calibration evidence.')),
+            (".run.json", tr('Run configuration, identity, adapter evidence and execution errors.')),
         ] if situation else [
-            (".trials.jsonl", "Individual repeated trials, responses and failure diagnostics."),
-            (".run.json", "Run configuration, selected cases, target evidence and execution metadata."),
+            (".trials.jsonl", tr('Individual repeated trials, responses and failure diagnostics.')),
+            (".run.json", tr('Run configuration, selected cases, target evidence and execution metadata.')),
         ]),
     }
-    print("\nWork summary")
-    print(f"  Work: {descriptions[stage]}")
-    print(f"  Output directory: {path.parent}")
-    print("  Files:")
+    print(tr('\nWork summary'))
+    print(tr('  Work: {p0}', p0=descriptions[stage]))
+    print(tr('  Output directory: {p0}', p0=path.parent))
+    print(tr('  Files:'))
     print(f"    {path}\n      {main_descriptions[stage]}")
     for suffix, description in sidecars.get(stage, []):
         artifact = Path(str(path) + suffix)
@@ -144,8 +241,8 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
         except (json.JSONDecodeError, UnicodeDecodeError):
             session = None
         if session:
-            print(f"  Work session: {session['path']}")
-            print("    Continue with --resume SESSION_PATH and the same inputs/settings.")
+            print(tr('  Work session: {p0}', p0=session['path']))
+            print(tr('    Continue with --resume SESSION_PATH and the same inputs/settings.'))
     if stage == "test-dataset":
         next_step = ["lladar", "run-agent", str(path), "--project", "PROJECT"]
     elif stage == "situation":
@@ -158,12 +255,13 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
     elif stage == "eval":
         next_step = ["lladar", "report", str(path)]
     else:
-        print(f"  Next: Open {path} to review the report.")
+        print(tr('  Next: Open {p0} to review the report.', p0=path))
         return
-    print(f"  Next: {_display_command(next_step)}")
+    next_step += ["--lang", current_language().lang]
+    print(tr('  Next: {p0}', p0=_display_command(next_step)))
     if stage in {"test-dataset", "situation"}:
-        print("    Replace PROJECT with your target project directory." +
-              (" Replace N with a positive scenario count." if stage == "situation" else ""))
+        print(tr('    Replace PROJECT with your target project directory.') +
+              (tr(' Replace N with a positive scenario count.') if stage == "situation" else ""))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -172,7 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--log", metavar="PATH", default=argparse.SUPPRESS,
         help="Also save emitted progress, traces, summaries and errors to a new UTF-8 log file (default: off; existing files are kept).",
     )
-    parser = argparse.ArgumentParser(
+    log_options.add_argument("--lang", metavar="CODE", default=argparse.SUPPRESS,
+        help="Language for generated content and presentation: en, zh-TW, ja (jp), ko, zh-CN; other codes use English interface/templates (default: en).")
+    parser = _LanguageParser(
         prog="lladar",
         description="Generate questions, run a target Agent, evaluate responses, and report results.",
         formatter_class=_HelpFormatter,
@@ -197,18 +297,18 @@ def build_parser() -> argparse.ArgumentParser:
     }
     create = commands.add_parser(
         "create", help="Create a test dataset, situation, or editable skill template.",
-        usage="%(prog)s [-h] [--log PATH] ARTIFACT ...",
+        usage="%(prog)s [-h] [--log PATH] [--lang CODE] ARTIFACT ...",
         description="Create a test dataset, situation configuration, or editable skill template.",
         formatter_class=_HelpFormatter,
         parents=[log_options],
-        epilog="Available commands:\n\n" + "\n\n".join(
+        epilog=tr('Available commands:\n\n') + "\n\n".join(
             f"{title}:\n" + "\n".join(
                 f"  {name:<20} {description}"
                 for name, description in entries.items()
             )
             for title, entries in (
-                ("Main workflows", workflow_commands),
-                ("Skill templates (advanced)", skill_commands),
+                (tr('Main workflows'), workflow_commands),
+                (tr('Skill templates (advanced)'), skill_commands),
             )
         ),
     )
@@ -228,7 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         template.add_argument(
             "--force", action="store_true",
-            help="Overwrite SKILL.md and AUTHORING.md in an existing directory; keep other files (default: off).",
+            help="Overwrite SKILL.md, AUTHORING.md and language.json in an existing directory; keep other files (default: off).",
         )
     dataset = create_commands.add_parser(
         "test-dataset",
@@ -517,34 +617,82 @@ def main(
     extraction_provider_factory: Callable[..., Any] | None = None,
     situation_provider_factory: Callable[..., Any] | None = None,
 ) -> int:
+    operation = OperationReport()
+    code = 2
+    with operation_scope(operation):
+        try:
+            code = _main(argv, runs_root=runs_root, skill_agent_factory=skill_agent_factory,
+                         browser_target_factory=browser_target_factory,
+                         extraction_provider_factory=extraction_provider_factory,
+                         situation_provider_factory=situation_provider_factory)
+            return code
+        except BaseException as error:
+            code = exception_exit_code(error)
+            operation.error(error)
+            raise
+        finally:
+            operation.finish(code)
+
+
+def _main(
+    argv: Sequence[str] | None = None,
+    *,
+    runs_root: str | Path | None = None,
+    skill_agent_factory: Callable[..., Any] | None = None,
+    browser_target_factory: Callable[..., Any] | None = None,
+    extraction_provider_factory: Callable[..., Any] | None = None,
+    situation_provider_factory: Callable[..., Any] | None = None,
+) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = build_parser()
     invocation = list(argv) if argv is not None else sys.argv[1:]
     args = parser.parse_args(invocation)
+    current_operation().configure(args, _resolve_output)
     args._invocation = invocation
     args._working_directory = str(Path.cwd().resolve())
+    with language_scope(Language(args.lang)):
+        return _run_parsed(args, parser, runs_root=runs_root,
+            skill_agent_factory=skill_agent_factory, browser_target_factory=browser_target_factory,
+            extraction_provider_factory=extraction_provider_factory,
+            situation_provider_factory=situation_provider_factory)
+
+
+def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_factory,
+                extraction_provider_factory, situation_provider_factory):
     if args.command == "run-agent" and args.page_url and not args.situation_config:
         if args.interactive is not None:
-            parser.error("--interactive and --no-interactive are project mode only; omit both with --page-url.")
+            parser.error(tr('--interactive and --no-interactive are project mode only; omit both with --page-url.'))
         if not (sys.stdin.isatty() and sys.stderr.isatty()):
             parser.error(
-                "--page-url requires terminal stdin and stderr for sign-in, calibration, consent and MATCH review. "
-                "Run directly in a terminal without piping input or redirecting stderr; no interaction flag is needed."
+                tr('--page-url requires terminal stdin and stderr for sign-in, calibration, consent and MATCH review. Run directly in a terminal without piping input or redirecting stderr; no interaction flag is needed.')
             )
         args.interactive = True
     try:
-        with command_log(getattr(args, "log", None)):
-            return _execute(
-                args, parser, runs_root=runs_root,
-                skill_agent_factory=skill_agent_factory,
-                browser_target_factory=browser_target_factory,
-                extraction_provider_factory=extraction_provider_factory,
-                situation_provider_factory=situation_provider_factory,
-            )
+        with language_scope(Language(args.lang)), command_log(getattr(args, "log", None)):
+            # Announce after the log is installed; nested stage calls share this context.
+            if args.lang not in {"en", "zh-TW", "ja", "ko", "zh-CN"}:
+                print(tr('Language {p0}: model-generated content uses this code; interface, fixed headings and offline templates use English.', p0=args.lang), file=sys.stderr)
+            code = 2
+            try:
+                code = _execute(
+                    args, parser, runs_root=runs_root,
+                    skill_agent_factory=skill_agent_factory,
+                    browser_target_factory=browser_target_factory,
+                    extraction_provider_factory=extraction_provider_factory,
+                    situation_provider_factory=situation_provider_factory,
+                )
+            except BaseException as error:
+                code = exception_exit_code(error)
+                current_operation().error(error)
+                raise
+            finally:
+                current_operation().finish(code)
+            return code
     except OSError as error:
-        print(f"lladar: cannot write log: {error}", file=sys.stderr)
+        current_operation().error(error)
+        print(tr('lladar: cannot write log: {p0}', p0=error), file=sys.stderr)
         return 2
 
 
@@ -569,34 +717,34 @@ def _show_resume_instructions(args, error):
             tokens.extend([url_option, ("$" + variable, True)])
             index += 1 if "=" in token else 2
             continue
-        if token in {"--output", "--resume"}:
+        if token in {"--output", "--resume", "--lang"}:
             index += 2
             continue
-        if token == "--force" or token.startswith(("--output=", "--resume=")):
+        if token == "--force" or token.startswith(("--output=", "--resume=", "--lang=")):
             index += 1
             continue
         tokens.append(token)
         index += 1
-    tokens.extend(["--output", hint["output"], "--resume", hint["path"]])
-    print("\nResume interrupted work", file=sys.stderr)
-    print("  Working directory: " + args._working_directory, file=sys.stderr)
-    for key, label in (("knowledge", "Knowledge input"), ("dataset", "Dataset"),
-                       ("responses", "Responses"), ("eval_output", "Evaluation"),
-                       ("project", "Target project"), ("adapt", "Adapter file"), ("skill", "Skill directory"),
-                       ("config", "Configuration file"), ("env_file", "Environment file")):
+    tokens.extend(["--output", hint["output"], "--resume", hint["path"], "--lang", current_language().lang])
+    print(tr('\nResume interrupted work'), file=sys.stderr)
+    print(tr('  Working directory: ') + args._working_directory, file=sys.stderr)
+    for key, label in (("knowledge", tr('Knowledge input')), ("dataset", tr('Dataset')),
+                       ("responses", tr('Responses')), ("eval_output", tr('Evaluation')),
+                       ("project", tr('Target project')), ("adapt", tr('Adapter file')), ("skill", tr('Skill directory')),
+                       ("config", tr('Configuration file')), ("env_file", tr('Environment file'))):
         value = getattr(args, key, None)
         if value:
             for location in value if isinstance(value, list) else [value]:
                 print(f"  {label}: {Path(location).resolve()}", file=sys.stderr)
-    print("  Output: " + hint["output"], file=sys.stderr)
-    print("  Session directory: " + hint["path"], file=sys.stderr)
-    print("  Keep the session directory and inputs unchanged; use the same Python environment.", file=sys.stderr)
+    print(tr('  Output: ') + hint["output"], file=sys.stderr)
+    print(tr('  Session directory: ') + hint["path"], file=sys.stderr)
+    print(tr('  Keep the session directory and inputs unchanged; use the same Python environment.'), file=sys.stderr)
     if hint["persistence_failed"]:
-        print("  The last checkpoint write failed; resume uses the last successfully saved state.", file=sys.stderr)
-    print("  Run these commands to continue (" + ("PowerShell" if os.name == "nt" else "shell") + "):", file=sys.stderr)
+        print(tr('  The last checkpoint write failed; resume uses the last successfully saved state.'), file=sys.stderr)
+    print(tr('  Run these commands to continue (') + ("PowerShell" if os.name == "nt" else "shell") + "):", file=sys.stderr)
     print("  " + ("Set-Location -LiteralPath " if os.name == "nt" else "cd -- ") + quote(args._working_directory), file=sys.stderr)
     for option, variable in url_variables.items():
-        prompt = "Enter the same " + option
+        prompt = tr('Enter the same ') + option
         if os.name == "nt":
             print("  $" + variable + " = [System.Net.NetworkCredential]::new('', (Read-Host " + quote(prompt) + " -AsSecureString)).Password", file=sys.stderr)
         else:
@@ -637,6 +785,8 @@ def _execute(
             args.output = str(_resolve_output(args.output, filenames[args.command]))
         elif args.command == "create" and args.create_command == "situation":
             args.output = str(_resolve_output(args.output, "situation.json"))
+        if current_operation().stage != "test-dataset" and not current_operation().stage.endswith("-skill"):
+            current_operation().set_output(args.output)
         if args.command == "create":
             if args.create_command.endswith("-skill"):
                 stage = args.create_command.removesuffix("-skill")
@@ -648,17 +798,18 @@ def _execute(
                     "eval": "lladar eval RESPONSES --skill {skill} --output evaluation.json",
                     "report": "lladar report EVALUATION --skill {skill} --output report.md",
                 }
-                print(f"Created skill at {destination}")
-                print(f"Author guide: {destination / 'AUTHORING.md'}")
+                print(tr('Created skill at {p0}', p0=destination))
+                print(tr('Author guide: {p0}', p0=destination / 'AUTHORING.md'))
                 skill_arg = (subprocess.list2cmdline([str(destination)]) if os.name == "nt"
                              else shlex.quote(str(destination)))
-                print("Use: " + uses[stage].format(skill=skill_arg))
-                print("\nWork summary")
-                print(f"  Work: Created an editable {stage} method template.")
-                print(f"  Output directory: {destination}")
-                print("  Files:")
-                print(f"    {destination / 'SKILL.md'}\n      Active method instructions loaded by --skill.")
-                print(f"    {destination / 'AUTHORING.md'}\n      Tool contracts, customization guidance and usage examples.")
+                print(tr('Use: ') + uses[stage].format(skill=skill_arg) + tr(' --lang ') + current_language().lang)
+                print(tr('\nWork summary'))
+                print(tr('  Work: Created an editable {p0} method template.', p0=stage))
+                print(tr('  Output directory: {p0}', p0=destination))
+                print(tr('  Files:'))
+                print(tr('    {p0}\n      Active method instructions loaded by --skill.', p0=destination / 'SKILL.md'))
+                print(tr('    {p0}\n      Tool contracts, customization guidance and usage examples.', p0=destination / 'AUTHORING.md'))
+                print(tr('    {p0}\n      Language metadata for presentation and template resources.', p0=destination / 'language.json'))
                 return 0
             if args.create_command == "situation":
                 instructions = args.instructions if args.instructions is not None else args.observe
@@ -673,20 +824,21 @@ def _execute(
                     max_output_tokens=args.max_output_tokens,
                     skill_agent_factory=skill_agent_factory, force=args.force,
                 )
-                print(f"Created situation configuration at {args.output}")
+                print(tr('Created situation configuration at {p0}', p0=args.output))
                 _show_work_summary("situation", args.output)
                 return 0
             if args.controlled_variant_probes and args.controlled_variant_topics:
-                parser.error("--controlled-variant-probes and --controlled-variant-topics cannot be used together")
+                parser.error(tr('--controlled-variant-probes and --controlled-variant-topics cannot be used together'))
             if args.controlled_variant_probes:
                 if not sys.stdin.isatty():
-                    parser.error("--controlled-variant-probes requires terminal input; use --controlled-variant-topics for scripts")
+                    parser.error(tr('--controlled-variant-probes requires terminal input; use --controlled-variant-topics for scripts'))
                 controlled_variant_selector = select_controlled_variant_topics
                 controlled_variant_topics = ()
             else:
                 controlled_variant_selector = None
                 controlled_variant_topics = normalize_controlled_variant_topics(args.controlled_variant_topics)
             output = _resolve_dataset_output(args.output)
+            current_operation().set_output(output)
             records = create_test_dataset(
                 [Path(path) for path in args.knowledge] if args.knowledge else None,
                 from_github=args.from_github,
@@ -709,6 +861,10 @@ def _execute(
                 verbose=args.verbose,
             )
             metadata = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+            current_operation().record(count=len(records), status=metadata.get("status"))
+            current_operation().record(summary=metadata.get("stats"))
+            if isinstance(metadata.get("skipped"), list):
+                current_operation().record(summary={"skipped": len(metadata["skipped"])})
             graph_path = Path(str(output) + ".graph.json")
             graph = json.loads(graph_path.read_text(encoding="utf-8")) if graph_path.exists() else {}
             concept_count = sum(node.get("type") == "concept" for node in graph.get("nodes", []))
@@ -724,28 +880,28 @@ def _execute(
                 f"controlled_dimensions={len(dimensions)}; controlled_records={selected_controls}; "
                 f"provenance={output}.generation.json)"
             )
-            print(f"Generated {len(records)} record(s) at {output}{status}")
+            print(tr('Generated {p0} record(s) at {p1}{p2}', p0=len(records), p1=output, p2=status))
             if args.from_github:
                 from .github_dataset import artifact_paths
                 report_path, _ = artifact_paths(output)
-                print(f"Generation evidence report: {report_path.resolve()}")
+                print(tr('Generation evidence report: {p0}', p0=report_path.resolve()))
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
             if args.adapt is not None and (args.project is None or args.page_url is not None):
-                parser.error("--adapt requires an explicit --project and cannot be combined with --page-url")
+                parser.error(tr('--adapt requires an explicit --project and cannot be combined with --page-url'))
             if args.calibration_question is not None and args.page_url is None:
-                parser.error("--calibration-question requires --page-url")
+                parser.error(tr('--calibration-question requires --page-url'))
             if args.situation_config:
                 if args.dataset is not None or args.skill is not None:
-                    parser.error("--situation-config cannot be combined with DATASET or --skill")
+                    parser.error(tr('--situation-config cannot be combined with DATASET or --skill'))
                 if args.num_scenarios is None:
-                    parser.error("--num-scenarios is required with --situation-config")
+                    parser.error(tr('--num-scenarios is required with --situation-config'))
                 if args.page_url is not None:
-                    parser.error("multi-turn browser sessions are not supported yet")
+                    parser.error(tr('multi-turn browser sessions are not supported yet'))
                 if any((args.confirm_browser_run,
                         args.fresh_browser_profile, args.allow_response_model_transfer)):
-                    parser.error("browser options do not apply to situation mode")
+                    parser.error(tr('browser options do not apply to situation mode'))
                 completed = run_situation(
                     args.situation_config, args.output,
                     project=args.project or ".", num_scenarios=args.num_scenarios,
@@ -759,14 +915,15 @@ def _execute(
                     graphify_python=args.graphify_python, interactive=args.interactive,
                     adapt=args.adapt,
                 )
-                print(f"Completed {completed} situation trial(s) at {args.output}")
+                print(tr('Completed {p0} situation trial(s) at {p1}', p0=completed, p1=args.output))
+                current_operation().record(count=completed)
                 _show_work_summary("run-agent", args.output, situation=True,
                                    situation_config=args.situation_config)
                 return 0
             if args.dataset is None:
-                parser.error("DATASET is required unless --situation-config is set")
+                parser.error(tr('DATASET is required unless --situation-config is set'))
             if args.num_scenarios is not None:
-                parser.error("--num-scenarios requires --situation-config")
+                parser.error(tr('--num-scenarios requires --situation-config'))
             project = args.project if args.project is not None else (None if args.page_url else ".")
             completed = run_agent(
                 args.dataset,
@@ -799,7 +956,8 @@ def _execute(
                 allow_response_model_transfer=args.allow_response_model_transfer,
                 strategy_agent_factory=skill_agent_factory,
             )
-            print(f"Answered {completed} record(s) at {args.output}")
+            print(tr('Answered {p0} record(s) at {p1}', p0=completed, p1=args.output))
+            current_operation().record(count=completed)
             _show_work_summary("run-agent", args.output)
             return 0
         if args.command == "eval":
@@ -815,11 +973,8 @@ def _execute(
                     provider_factory=situation_provider_factory,
                 )
                 summary = result["summary"]
-                print(f"Evaluated {len(result['items'])} situation trial(s) at {args.output} "
-                      f"(valid_determinate={summary['valid_determinate']}, "
-                      f"judge_error={summary['judge_error']}, "
-                      f"execution_error={summary['execution_error']}, "
-                      f"invalid={summary['invalid']}, indeterminate={summary['indeterminate']})")
+                current_operation().record(count=len(result["items"]), summary=summary)
+                print(tr('Evaluated {p0} situation trial(s) at {p1} (valid_determinate={p2}, judge_error={p3}, execution_error={p4}, invalid={p5}, indeterminate={p6})', p0=len(result['items']), p1=args.output, p2=summary['valid_determinate'], p3=summary['judge_error'], p4=summary['execution_error'], p5=summary['invalid'], p6=summary['indeterminate']))
                 _show_work_summary("eval", args.output, situation=True)
                 return 0
             result = evaluate(
@@ -836,7 +991,8 @@ def _execute(
                 resume=resume,
                 skill_agent_factory=skill_agent_factory,
             )
-            print(f"Evaluated {result['summary']['evaluated']} record(s) at {args.output}")
+            print(tr('Evaluated {p0} record(s) at {p1}', p0=result['summary']['evaluated'], p1=args.output))
+            current_operation().record(summary=result["summary"])
             _show_work_summary("eval", args.output)
             return 0
         destination = create_report(
@@ -849,21 +1005,25 @@ def _execute(
             resume=resume, verbose=args.verbose, skill_agent_factory=skill_agent_factory,
             max_input_tokens=args.max_input_tokens,max_output_tokens=args.max_output_tokens,
         )
-        print(f"Created evaluation report at {destination}")
+        print(tr('Created evaluation report at {p0}', p0=destination))
         _show_work_summary("report", destination)
         return 0
     except NeedsConfirmation as error:
-        print(f"lladar: {error}", file=sys.stderr)
+        current_operation().error(error)
+        print(tr('lladar: {p0}', p0=error), file=sys.stderr)
         return 3
     except ProviderError as error:
-        print("lladar: provider generation failed", file=sys.stderr)
+        current_operation().error(error)
+        print(tr('lladar: provider generation failed'), file=sys.stderr)
         _show_resume_instructions(args, error)
         return 2
     except KeyboardInterrupt as error:
-        print("lladar: Cancelled.", file=sys.stderr)
+        current_operation().error(error)
+        print(tr('lladar: Cancelled.'), file=sys.stderr)
         _show_resume_instructions(args, error)
         return 130
     except Exception as error:
+        current_operation().error(error)
         if args.command == "run-agent" and args.page_url:
             if isinstance(error, AssertionError) and (
                 browser_target_factory is not None or extraction_provider_factory is not None
@@ -876,7 +1036,7 @@ def _execute(
             message = str(error)
         else:
             raise
-        print(f"lladar: {message}", file=sys.stderr)
+        print(tr('lladar: {p0}', p0=localize_error(message)), file=sys.stderr)
         _show_resume_instructions(args, error)
         return 2
 

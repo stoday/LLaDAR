@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .language import tr, language_stage, current_language
+
 import hashlib
 import json
 import shutil
@@ -107,11 +109,11 @@ def copy_project(project: str | Path, *, runs_root: str | Path | None = None):
     shutil.copytree(source, workspace, ignore=ignore)
     yield workspace
 
-
 from .work_session import current_session, stage_session, publish_bundle, publication_metadata, file_sha
 from .run_strategy import ScheduledCase, StrategyCase
 
 
+@language_stage
 @stage_session("run-agent")
 def run_agent(
     dataset: str | Path,
@@ -146,6 +148,7 @@ def run_agent(
     fresh_browser_profile: bool = False,
     extraction_provider_factory: Callable[..., Any] | None = None,
     allow_response_model_transfer: bool = False,
+    lang: str | None = None,
 ) -> int:
     """Fill actual_response in a new JSONL file without evaluating it."""
     if sum(value is not None for value in (answer, project, page_url)) != 1:
@@ -309,7 +312,7 @@ def run_agent(
                     )
                 except (Exception, KeyboardInterrupt) as error:
                     diagnostic = browser_failure_diagnostic(error, browser_target.evidence)
-                    reporter.emit("WARN", "phase=browser_prepare " + " ".join(
+                    reporter.emit("WARN", tr('phase=browser_prepare ') + " ".join(
                         f"{key}={str(value).lower() if isinstance(value, bool) else value}"
                         for key, value in diagnostic.items()
                     ))
@@ -366,7 +369,7 @@ def run_agent(
                             errors.append({"line": item.case.record_index, "trial": trial, "error": previous.get("error", "execution_error")})
                         if previous["status"] == "ok" and result["actual_response"] is None:
                             result["actual_response"] = previous["actual_response"]
-                        reporter.session(len(trials) + 1, sum(item.repeats for item in schedule), "Resumed trials")
+                        reporter.session(len(trials) + 1, sum(item.repeats for item in schedule), tr('Resumed trials'))
                         trials.append({key: value for key, value in previous.items() if key != "actual_response"})
                         json.dump(previous, trial_stream, ensure_ascii=False)
                         trial_stream.write("\n")
@@ -428,7 +431,7 @@ def run_agent(
                     trial_result["duration_seconds"] = time.perf_counter() - started
                     if session:
                         session.put_item("run_trials", trial_id, trial_result)
-                    reporter.session(len(trials) + 1, sum(item.repeats for item in schedule), "Completed trials")
+                    reporter.session(len(trials) + 1, sum(item.repeats for item in schedule), tr('Completed trials'))
                     trials.append({key: value for key, value in trial_result.items() if key != "actual_response"})
                     json.dump(trial_result, trial_stream, ensure_ascii=False)
                     trial_stream.write("\n")
@@ -437,7 +440,7 @@ def run_agent(
                     completed += 1
                 json.dump(result, response_stream, ensure_ascii=False)
                 response_stream.write("\n")
-                reporter.emit("SESSION", f"record={item.case.record_index} status={status}")
+                reporter.emit("SESSION", tr('record={p0} status={p1}', p0=item.case.record_index, p1=status))
         finally:
             if browser_target is not None:
                 target_evidence = dict(browser_target.evidence)

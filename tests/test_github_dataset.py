@@ -354,7 +354,7 @@ def test_agent_selects_specific_data_rows_and_report_retains_original_positions(
                                github_client=RowsClient(), skill_agent_factory=RowsAgent, verbose=False)
     assert rows[0]["expected_answer"] == "60 days"
     report = (tmp_path / "qa.generation-report.md").read_text(encoding="utf-8")
-    assert "資料列：2" in report
+    assert "Data row: 2" in report
 
 
 def test_agent_can_repair_missing_answer_basis_from_final_validation_feedback(tmp_path):
@@ -418,7 +418,7 @@ def test_final_report_excludes_filtered_candidates_and_explains_count_and_review
     assert metadata["github"]["counts"]["count_limit_excluded"] == 1
     assert metadata["github"]["counts"]["model_review_rejected"] == 1
     report = (tmp_path / "qa.generation-report.md").read_text(encoding="utf-8")
-    assert "### 題目 1" in report and "### 題目 2" not in report
+    assert "### Question 1" in report and "### Question 2" not in report
     assert "Third candidate" not in report
 
 

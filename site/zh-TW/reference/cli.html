@@ -5,7 +5,25 @@
   <header class="site-header"><a class="brand" href="../index.html">LLaDAR</a><nav aria-label="主要導覽"><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">使用指南</a><a href="../examples/support-demo-agent.html">範例</a><a class="language" href="../../reference/cli.html" lang="en">English</a></nav></header>
   <nav class="toc" aria-label="文件導覽"><div class="wrap"><a href="../index.html">綜覽</a><a href="../getting-started.html">開始使用</a><a href="../guides/create-dataset.html">建立測試資料</a><a href="../guides/run-agent.html">執行 Agent</a><a href="../guides/situations.html">多輪情境</a><a href="../guides/evaluate.html">評估回答</a><a href="../guides/report.html">產生報告</a><a href="cli.html" aria-current="page">命令參考</a><a href="../examples/support-demo-agent.html">客服 Agent 範例</a></div></nav>
   <main class="wrap">
-    <section id="output-paths"><h2>輸出路徑</h2><p>所有主要階段都可省略 <code>--output</code>，也可指定資料夾或完整檔案路徑。
+    <section id="operation-reports"><h2>作業結果報告</h2>
+      <p>每次 CLI 主流程或 Skill 範本命令成功、失敗、取消或需要人工確認後，都自動嘗試產生 UTF-8 Markdown 報告。包含情境模式；help、版本查詢及 Python API 不產生此報告。</p>
+      <p>報告沿用 <code>--lang</code>，列出狀態、退出碼、時間、允許記錄的設定、輸入路徑、已知統計、產物、經清理的問題與下一步，區分新增、修改與既有檔案。本次失敗提供工作階段資訊時才附續跑指引。答案不正確是評估結果；執行或判斷錯誤才列為作業問題。</p>
+      <p><code>artifacts/evaluation.json</code> 對應 <code>artifacts/evaluation.json.operation.md</code>；範本目錄 <code>lladar-skills/eval</code> 對應目錄旁的 <code>lladar-skills/eval.operation.md</code>。已有報告時使用 <code>.operation-2.md</code>、<code>.operation-3.md</code>，即使 <code>--force</code> 也保留歷次報告。輸出位置未解析或無法寫入時，退回原工作目錄的 <code>.lladar/operation-reports/STAGE.operation.md</code>。</p>
+      <p>不增加模型呼叫，也不改退出碼。<code>--no-verbose</code> 仍顯示報告位置；日誌啟用後也記入 <code>--log</code>。報告省略原始提示詞、回答、URL、憑證與任意例外訊息，搭配日誌及生成／評估證據使用。兩處都無法寫入時顯示警告；程序被強制終止時無法保證產生報告。</p>
+    </section>
+        <section id="language"><h2>語言設定：<code>--lang CODE</code></h2>
+      <p>所有流程、Skill 範本命令與 help 都接受此選項。新工作預設 <code>en</code>，包含生成敘述。<code>en</code>、<code>zh-TW</code>、<code>ja</code>（別名 <code>jp</code>／<code>Jp</code>）、<code>ko</code>、<code>zh-CN</code> 提供完整介面、固定報告標題與離線範本資源。</p>
+      <p>其他有效代碼如 <code>fr</code> 交由模型理解，介面、固定標題與範本使用英文並顯示簡短提示。接受代碼不代表模型一定支援。代碼由英文字母與可選的連字號分隔英數子標籤組成。</p>
+      <pre><code>lladar --lang ja --help
+lladar create test-dataset --knowledge knowledge.md --lang zh-TW --output dataset.jsonl
+lladar run-agent dataset.jsonl --project ../my-agent --lang zh-TW
+lladar eval responses.jsonl --lang zh-TW
+lladar report evaluation.json --lang ko
+lladar create report-skill --lang zh-CN</code></pre>
+      <p>保存的問題、受測回答、引文、ID、欄位名稱、精確 probe 與數值保留原值。網站答案擷取保留原回答；技術診斷與第三方追蹤可能保留原始語言。情境模式自由文字使用指定語言；此選項不增加受測 Agent 語言要求或評分條件。</p>
+      <p>下一步命令帶上語言。新階段省略時使用 <code>en</code>；<code>--resume</code> 省略語言時恢復保存值，明確指定時須相同。衝突會被拒絕；舊工作沒有語言紀錄時請使用原版本或建立新工作。Python 階段 API 接受 <code>lang="ja"</code>。紀錄區分 <code>lang</code> 與 <code>ui_lang</code>；範本的 <code>language.json</code> 另記錄 <code>template_lang</code>。</p>
+    </section>
+<section id="output-paths"><h2>輸出路徑</h2><p>所有主要階段都可省略 <code>--output</code>，也可指定資料夾或完整檔案路徑。
 省略時輸出到目前工作目錄：資料集使用 <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>，
 其他階段依序使用 <code>situation.json</code>、<code>responses.jsonl</code>、<code>evaluation.json</code>、<code>report.md</code>。
 指定 <code>--output ./artifacts</code> 時，預設檔名與附屬檔都放進 <code>./artifacts/</code>。

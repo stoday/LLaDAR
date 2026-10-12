@@ -269,6 +269,68 @@ lladar report evaluation.json --output report.md
 筆數、比率與穩定性由 Python 計算。`report` 只解讀已儲存的事實，並附上逐次稽核表；
 可用 `--skill ./skills/my-report` 指定本地報告方法。
 
+## 作業結果報告
+
+每次 CLI 階段命令在成功、失敗、取消或需要人工確認後，都會自動嘗試產生 UTF-8
+Markdown 作業結果報告。涵蓋五種主流程、情境模式及五種 Skill 範本命令；
+help、版本查詢與 Python API 呼叫不產生此報告。
+
+例如 `--output artifacts/evaluation.json` 會產生
+`artifacts/evaluation.json.operation.md`；範本目錄 `lladar-skills/eval` 的報告放在
+目錄旁的 `lladar-skills/eval.operation.md`。重複執行依序使用 `.operation-2.md`、
+`.operation-3.md`，即使 `--force` 也不覆寫歷次報告。尚未解析出輸出位置或該位置無法
+寫入時，退回原工作目錄的 `.lladar/operation-reports/STAGE.operation.md`。
+
+報告沿用 `--lang`，包含狀態、退出碼、時間、允許記錄的設定、輸入路徑、已知統計、
+產物位置、經清理的問題與下一步；區分新增、修改與既有檔案，並在本次失敗提供工作階段
+資訊時附上續跑指引。答案不正確是評估結果；執行或判斷錯誤才列為作業問題。
+報告由程式產生，不增加模型呼叫，也不改變原本退出碼。
+
+`--no-verbose` 仍顯示報告位置；日誌啟用後也會記入 `--log`。報告省略原始提示詞、
+回答、URL、憑證與任意例外訊息，搭配終端日誌、生成依據報告與評估分析報告使用。
+若兩處皆無法寫入，只顯示警告；程序被強制終止時無法保證報告存在。
+詳細規格見 [作業結果報告 PRD](docs/PRD-operation-result-report.zh-TW.md)。
+
+## 語言設定
+
+所有流程、Skill 範本命令與 `--help` 都接受 `--lang CODE`。
+新工作預設使用英文 `en`，包含新生成的問題與說明，不再隱含跟隨來源語言。
+
+| 代碼 | 語言 |
+| --- | --- |
+| `en` | 英文 |
+| `zh-TW` | 繁體中文 |
+| `ja` | 日文，接受 `jp`／`Jp` 別名 |
+| `ko` | 韓文 |
+| `zh-CN` | 簡體中文 |
+
+以上五種語言提供操作介面、固定報告標題與離線 Skill 範本。
+其他代碼如 `fr` 可用於模型生成，介面、固定標題與範本使用英文並顯示簡短提示。
+代碼接受英文字母與連字號分隔的英數子標籤，例如 `en-US`；接受代碼不代表模型一定支援該語言。
+生成敘述仍可保留原始引文與專有名詞。
+
+```powershell
+lladar --lang ja --help
+lladar create test-dataset --knowledge knowledge.md --lang zh-TW --output dataset.jsonl
+lladar run-agent dataset.jsonl --project ../my-agent --lang zh-TW --output responses.jsonl
+lladar eval responses.jsonl --lang zh-TW --output evaluation.json
+lladar report evaluation.json --lang ko --output report.md
+lladar create report-skill --lang zh-CN
+```
+
+語言設定涵蓋進度、操作提示、工作摘要與 LLaDAR 新生成內容。
+已保存的測試問題、受測 Agent 回答、來源引文、ID、欄位名稱、程式碼與數值保持原值；
+不會要求受測 Agent 切換語言，也不新增語言評分條件。
+情境模式新生成的自由對話使用指定語言，精確 probe 與校準 token 保留。
+網站答案擷取始終保留原回答；技術診斷細節與第三方追蹤可能保留原始語言。
+
+下一步命令會帶上 `--lang`。新階段省略時使用 `en`；續跑省略時恢復保存的語言，
+明確指定不同語言會在新工作開始前拒絕。沒有語言紀錄的舊工作階段，請使用原版本續跑或建立新工作。
+
+Python 階段 API 接受 `lang="ja"`；預設 `None` 在新工作解析為英文、續跑時恢復原設定。
+工作紀錄區分生成語言要求 `lang` 與實際介面語言 `ui_lang`；範本另有 `language.json`，
+記錄 `template_lang`。多語範本維持相同工具與資料契約，保留可執行範例，建立時不需要模型或 API key。
+
 ## 作業紀錄
 
 Verbose 出題時會即時顯示逐筆提交的候選預覽，以及最終採用的問句與標準答案；

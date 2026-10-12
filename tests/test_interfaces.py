@@ -58,7 +58,7 @@ def test_terminal_input_in_real_process(tmp_path, stdin, expected):
     result = subprocess.run([sys.executable, "-X", "utf8", "-c", code, str(path)],
                             input=stdin, capture_output=True, text=True, encoding="utf-8", check=True)
     assert json.loads(result.stdout) == expected
-    assert "流程" in result.stderr and "入口" in result.stderr
+    assert "Flow:" in result.stderr and "Entry point:" in result.stderr
 
 
 def test_confirmation_message_points_to_the_supported_workflow(tmp_path):
