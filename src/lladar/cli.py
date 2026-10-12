@@ -17,6 +17,7 @@ from pathlib import Path
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
 from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
 from .command_log import command_log
+from .operation_report import OperationReport, current_operation, exception_exit_code, operation_scope
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
 from .exceptions import LladarError, ProviderError
@@ -41,22 +42,39 @@ class _LanguageParser(argparse.ArgumentParser):
                 codes.append(value)
             elif option in {"--la", "--lan", "--lang"} and index + 1 < len(invocation):
                 codes.append(invocation[index + 1])
+        language_error = None
         try:
             normalized = [normalize_lang(code) for code in codes]
             if len(set(normalized)) > 1:
                 raise ValueError("conflicting --lang values; use one language per command")
             requested = normalized[0] if normalized else None
         except ValueError as error:
-            self.error(str(error))
+            # Parse the route first so an invalid language still gets a stage report.
+            language_error = str(error)
+            requested = None
         language = Language(requested or "en")
+        if current_operation():
+            current_operation().language = language
         with language_scope(language):
             # Help exits during parsing; no session or provider is required.
             if any(token in {"-h", "--help"} for token in invocation):
+                if language_error:
+                    self.error(language_error)
                 with language_scope(language, announce=False):
                     if language.ui_lang != language.lang:
                         print(tr('Language {p0}: interface, fixed headings and offline templates use English.', p0=language.lang), file=sys.stderr)
                     return super().parse_args(invocation, namespace)
+            namespace = namespace if namespace is not None else argparse.Namespace()
+            if current_operation():
+                current_operation().partial_args = namespace
             parsed = super().parse_args(invocation, namespace)
+            if current_operation():
+                command = getattr(parsed, "command", None)
+                stage = getattr(parsed, "create_command", None) if command == "create" else command
+                if stage:
+                    current_operation().identify("lladar create " + stage if command == "create" else "lladar " + stage)
+            if language_error:
+                self.error(language_error)
             try:
                 language = resolve_language(requested, getattr(parsed, "resume", None))
             except (ValueError, OSError, KeyError, json.JSONDecodeError) as error:
@@ -65,6 +83,15 @@ class _LanguageParser(argparse.ArgumentParser):
             return parsed
 
     def error(self, message):
+        if current_operation():
+            current_operation().identify(self.prog)
+            if self.prog == "lladar":
+                partial = getattr(current_operation(), "partial_args", None)
+                command = getattr(partial, "command", None)
+                stage = getattr(partial, "create_command", None) if command == "create" else command
+                if stage:
+                    current_operation().identify("lladar create " + stage if command == "create" else "lladar " + stage)
+            current_operation().error(category="arguments")
         self.print_usage(sys.stderr)
         self.exit(2, tr("{prog}: error: {message}\n", prog=self.prog, message=localize_error(message)))
 
@@ -590,12 +617,39 @@ def main(
     extraction_provider_factory: Callable[..., Any] | None = None,
     situation_provider_factory: Callable[..., Any] | None = None,
 ) -> int:
+    operation = OperationReport()
+    code = 2
+    with operation_scope(operation):
+        try:
+            code = _main(argv, runs_root=runs_root, skill_agent_factory=skill_agent_factory,
+                         browser_target_factory=browser_target_factory,
+                         extraction_provider_factory=extraction_provider_factory,
+                         situation_provider_factory=situation_provider_factory)
+            return code
+        except BaseException as error:
+            code = exception_exit_code(error)
+            operation.error(error)
+            raise
+        finally:
+            operation.finish(code)
+
+
+def _main(
+    argv: Sequence[str] | None = None,
+    *,
+    runs_root: str | Path | None = None,
+    skill_agent_factory: Callable[..., Any] | None = None,
+    browser_target_factory: Callable[..., Any] | None = None,
+    extraction_provider_factory: Callable[..., Any] | None = None,
+    situation_provider_factory: Callable[..., Any] | None = None,
+) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = build_parser()
     invocation = list(argv) if argv is not None else sys.argv[1:]
     args = parser.parse_args(invocation)
+    current_operation().configure(args, _resolve_output)
     args._invocation = invocation
     args._working_directory = str(Path.cwd().resolve())
     with language_scope(Language(args.lang)):
@@ -620,14 +674,24 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
             # Announce after the log is installed; nested stage calls share this context.
             if args.lang not in {"en", "zh-TW", "ja", "ko", "zh-CN"}:
                 print(tr('Language {p0}: model-generated content uses this code; interface, fixed headings and offline templates use English.', p0=args.lang), file=sys.stderr)
-            return _execute(
-                args, parser, runs_root=runs_root,
-                skill_agent_factory=skill_agent_factory,
-                browser_target_factory=browser_target_factory,
-                extraction_provider_factory=extraction_provider_factory,
-                situation_provider_factory=situation_provider_factory,
-            )
+            code = 2
+            try:
+                code = _execute(
+                    args, parser, runs_root=runs_root,
+                    skill_agent_factory=skill_agent_factory,
+                    browser_target_factory=browser_target_factory,
+                    extraction_provider_factory=extraction_provider_factory,
+                    situation_provider_factory=situation_provider_factory,
+                )
+            except BaseException as error:
+                code = exception_exit_code(error)
+                current_operation().error(error)
+                raise
+            finally:
+                current_operation().finish(code)
+            return code
     except OSError as error:
+        current_operation().error(error)
         print(tr('lladar: cannot write log: {p0}', p0=error), file=sys.stderr)
         return 2
 
@@ -721,6 +785,8 @@ def _execute(
             args.output = str(_resolve_output(args.output, filenames[args.command]))
         elif args.command == "create" and args.create_command == "situation":
             args.output = str(_resolve_output(args.output, "situation.json"))
+        if current_operation().stage != "test-dataset" and not current_operation().stage.endswith("-skill"):
+            current_operation().set_output(args.output)
         if args.command == "create":
             if args.create_command.endswith("-skill"):
                 stage = args.create_command.removesuffix("-skill")
@@ -772,6 +838,7 @@ def _execute(
                 controlled_variant_selector = None
                 controlled_variant_topics = normalize_controlled_variant_topics(args.controlled_variant_topics)
             output = _resolve_dataset_output(args.output)
+            current_operation().set_output(output)
             records = create_test_dataset(
                 [Path(path) for path in args.knowledge] if args.knowledge else None,
                 from_github=args.from_github,
@@ -794,6 +861,10 @@ def _execute(
                 verbose=args.verbose,
             )
             metadata = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+            current_operation().record(count=len(records), status=metadata.get("status"))
+            current_operation().record(summary=metadata.get("stats"))
+            if isinstance(metadata.get("skipped"), list):
+                current_operation().record(summary={"skipped": len(metadata["skipped"])})
             graph_path = Path(str(output) + ".graph.json")
             graph = json.loads(graph_path.read_text(encoding="utf-8")) if graph_path.exists() else {}
             concept_count = sum(node.get("type") == "concept" for node in graph.get("nodes", []))
@@ -845,6 +916,7 @@ def _execute(
                     adapt=args.adapt,
                 )
                 print(tr('Completed {p0} situation trial(s) at {p1}', p0=completed, p1=args.output))
+                current_operation().record(count=completed)
                 _show_work_summary("run-agent", args.output, situation=True,
                                    situation_config=args.situation_config)
                 return 0
@@ -885,6 +957,7 @@ def _execute(
                 strategy_agent_factory=skill_agent_factory,
             )
             print(tr('Answered {p0} record(s) at {p1}', p0=completed, p1=args.output))
+            current_operation().record(count=completed)
             _show_work_summary("run-agent", args.output)
             return 0
         if args.command == "eval":
@@ -900,6 +973,7 @@ def _execute(
                     provider_factory=situation_provider_factory,
                 )
                 summary = result["summary"]
+                current_operation().record(count=len(result["items"]), summary=summary)
                 print(tr('Evaluated {p0} situation trial(s) at {p1} (valid_determinate={p2}, judge_error={p3}, execution_error={p4}, invalid={p5}, indeterminate={p6})', p0=len(result['items']), p1=args.output, p2=summary['valid_determinate'], p3=summary['judge_error'], p4=summary['execution_error'], p5=summary['invalid'], p6=summary['indeterminate']))
                 _show_work_summary("eval", args.output, situation=True)
                 return 0
@@ -918,6 +992,7 @@ def _execute(
                 skill_agent_factory=skill_agent_factory,
             )
             print(tr('Evaluated {p0} record(s) at {p1}', p0=result['summary']['evaluated'], p1=args.output))
+            current_operation().record(summary=result["summary"])
             _show_work_summary("eval", args.output)
             return 0
         destination = create_report(
@@ -934,17 +1009,21 @@ def _execute(
         _show_work_summary("report", destination)
         return 0
     except NeedsConfirmation as error:
+        current_operation().error(error)
         print(tr('lladar: {p0}', p0=error), file=sys.stderr)
         return 3
     except ProviderError as error:
+        current_operation().error(error)
         print(tr('lladar: provider generation failed'), file=sys.stderr)
         _show_resume_instructions(args, error)
         return 2
     except KeyboardInterrupt as error:
+        current_operation().error(error)
         print(tr('lladar: Cancelled.'), file=sys.stderr)
         _show_resume_instructions(args, error)
         return 130
     except Exception as error:
+        current_operation().error(error)
         if args.command == "run-agent" and args.page_url:
             if isinstance(error, AssertionError) and (
                 browser_target_factory is not None or extraction_provider_factory is not None

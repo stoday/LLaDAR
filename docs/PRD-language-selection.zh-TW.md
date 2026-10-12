@@ -6,6 +6,9 @@
 
 適用流程：create → run-agent → eval → report，以及 Skill 範本建立
 
+CLI 每次階段命令結束後的作業結果報告，也沿用此介面語言設定，由程式直接產生，
+不增加模型呼叫；報告位置與例外路徑見 [作業結果報告 PRD](PRD-operation-result-report.zh-TW.md)。
+
 ## 問題與目標
 
 目前 LLaDAR 沒有統一的語言參數。CLI 說明、進度、完成摘要、錯誤與續跑指引多為英文，部分互動選單則使用中文；模型生成內容依 prompt 與 Skill 而異，報告還包含程式直接輸出的固定標題。

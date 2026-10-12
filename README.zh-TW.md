@@ -269,6 +269,28 @@ lladar report evaluation.json --output report.md
 筆數、比率與穩定性由 Python 計算。`report` 只解讀已儲存的事實，並附上逐次稽核表；
 可用 `--skill ./skills/my-report` 指定本地報告方法。
 
+## 作業結果報告
+
+每次 CLI 階段命令在成功、失敗、取消或需要人工確認後，都會自動嘗試產生 UTF-8
+Markdown 作業結果報告。涵蓋五種主流程、情境模式及五種 Skill 範本命令；
+help、版本查詢與 Python API 呼叫不產生此報告。
+
+例如 `--output artifacts/evaluation.json` 會產生
+`artifacts/evaluation.json.operation.md`；範本目錄 `lladar-skills/eval` 的報告放在
+目錄旁的 `lladar-skills/eval.operation.md`。重複執行依序使用 `.operation-2.md`、
+`.operation-3.md`，即使 `--force` 也不覆寫歷次報告。尚未解析出輸出位置或該位置無法
+寫入時，退回原工作目錄的 `.lladar/operation-reports/STAGE.operation.md`。
+
+報告沿用 `--lang`，包含狀態、退出碼、時間、允許記錄的設定、輸入路徑、已知統計、
+產物位置、經清理的問題與下一步；區分新增、修改與既有檔案，並在本次失敗提供工作階段
+資訊時附上續跑指引。答案不正確是評估結果；執行或判斷錯誤才列為作業問題。
+報告由程式產生，不增加模型呼叫，也不改變原本退出碼。
+
+`--no-verbose` 仍顯示報告位置；日誌啟用後也會記入 `--log`。報告省略原始提示詞、
+回答、URL、憑證與任意例外訊息，搭配終端日誌、生成依據報告與評估分析報告使用。
+若兩處皆無法寫入，只顯示警告；程序被強制終止時無法保證報告存在。
+詳細規格見 [作業結果報告 PRD](docs/PRD-operation-result-report.zh-TW.md)。
+
 ## 語言設定
 
 所有流程、Skill 範本命令與 `--help` 都接受 `--lang CODE`。

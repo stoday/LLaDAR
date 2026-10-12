@@ -334,6 +334,33 @@ dimensions and judge each completed record. Counts, rates, distributions,
 means, medians, minima, and maxima are calculated by Python. `report` renders
 those saved facts and includes a record-level appendix.
 
+## Operation result reports
+
+Each CLI stage command automatically attempts to save a UTF-8 Markdown operation
+report after success, failure, cancellation, or a request for human confirmation.
+This includes the five main workflows, situation modes, and five Skill-template
+commands. Help, version queries, and Python API calls do not create these reports.
+
+For `--output artifacts/evaluation.json`, the report is
+`artifacts/evaluation.json.operation.md`. A template at `lladar-skills/eval`
+gets a sibling `lladar-skills/eval.operation.md`. Repeated runs use
+`.operation-2.md`, `.operation-3.md`, and so on, including with `--force`.
+If the output location is unresolved or unwritable, the fallback is
+`.lladar/operation-reports/STAGE.operation.md` in the original working directory.
+
+The report follows `--lang` and records status, exit code, timing, permitted
+settings, input paths, available counts, artifact locations, sanitized problems,
+and next steps. It distinguishes new or modified files from existing files and
+includes resume guidance when the failed invocation supplies a work-session hint.
+Wrong answers are evaluation findings; execution or judging errors are operation
+issues. No extra model call is made, and the original exit code is preserved.
+
+The report location remains visible with `--no-verbose` and is saved in `--log`
+when the log is active. These reports omit raw prompts, answers, URLs,
+credentials, and arbitrary exception messages. They complement the terminal log,
+generation evidence report, and evaluation analysis report. If neither location
+can be written, a warning is shown; forced termination cannot guarantee a report.
+
 ## Language
 
 Use `--lang CODE` on any workflow or Skill-template command, including `--help`.
