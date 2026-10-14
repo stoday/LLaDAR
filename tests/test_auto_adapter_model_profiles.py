@@ -16,7 +16,7 @@ from lladar.runner import run_agent
     ("gemini:gemini-3-flash-preview", (1_048_576, 65_536)),
     ("gemini:gemini-3.7-flash", (1_048_576, 65_536)),
     ("gemini:gemini-2.5-flash", (1_048_576, 65_536)),
-    ("unknown:model", (16_384, 8_192)),
+    ("unknown:model", (131_072, 65_536)),
 ])
 def test_adapter_resolves_shared_profile(tmp_path, model, expected):
     project = tmp_path / "project"
@@ -100,7 +100,7 @@ def test_invalid_budget_fails_before_evidence_creation(tmp_path, name, value):
         run_agent(tmp_path / "absent.jsonl", tmp_path / "answers.jsonl", project=project, **{name: value})
 
 
-@pytest.mark.parametrize("target", [{"answer": lambda question: question}, {"page_url": "https://example.test"}])
+@pytest.mark.parametrize("target", [{"answer": lambda question: question}])
 @pytest.mark.parametrize("name", ["max_input_tokens", "max_output_tokens"])
 def test_adapter_budget_is_rejected_for_other_targets(tmp_path, target, name):
     with pytest.raises(ValueError, match="apply only to a project target"):

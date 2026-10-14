@@ -53,7 +53,7 @@ class Provider:
 
 @pytest.mark.parametrize("model,expected_input,expected_output", [
     ("gemini:gemini-3.7-flash", 1_048_576, 65_536),
-    ("other:model", 16_384, 8_192),
+    ("other:model", 131_072, 65_536),
 ])
 def test_situation_authoring_uses_lladar_model_budget(tmp_path, model, expected_input, expected_output):
     received = {}

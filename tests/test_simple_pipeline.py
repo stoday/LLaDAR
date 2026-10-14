@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import re
-from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
 from lladar.cli import build_parser, main
-from lladar.browser_target import BrowserConfirmationRequired
+from lladar.browser_target import BrowserDiscoveryError
 from lladar.answer_extraction import ExtractionError
 from lladar.evaluation import evaluate
 from lladar.records import read_records
@@ -17,89 +16,6 @@ from lladar.runner import run_agent
 from fixture_extraction import browser_cli_terminal
 
 
-@pytest.mark.parametrize("failure,reason,http_status", [
-    ("http", "http_error", 503),
-    ("timeout", "timeout", None),
-    ("unknown", "browser_request_failed", None),
-    ("extraction", "provider_rate_limited", None),
-    ("stream", "stream_read_failed", 200),
-    ("decode", "utf8_decode_failed", 200),
-])
-@pytest.mark.parametrize("verbose", [True, False])
-def test_browser_failure_diagnostics_reach_verbose_log_and_sidecars(
-    tmp_path, capsys, failure, reason, http_status, verbose,
-):
-    from lladar.browser_target import BrowserTarget, BrowserRequestFailure
-
-    source, output, log = (tmp_path / name for name in ("dataset.jsonl", "responses.jsonl", "run.log"))
-    make_dataset(source, count=2)
-    calls = []
-
-    def replay(*args, **kwargs):
-        calls.append(args)
-        if failure == "http":
-            raise BrowserRequestFailure("http_error", http_status=503)
-        if failure == "timeout":
-            raise TimeoutError("https://secret.test/token?key=fixture-secret Cookie=fixture-secret")
-        if failure == "extraction":
-            return object()
-        if failure in {"stream", "decode"}:
-            raise BrowserRequestFailure(reason, http_status=200, received_bytes=12345, elapsed_seconds=90.253)
-        raise RuntimeError("https://secret.test/token?key=fixture-secret Cookie=fixture-secret")
-
-    def extract(*args, **kwargs):
-        raise ExtractionError("provider_rate_limited")
-
-    class Target(BrowserTarget):
-        def __init__(self, **kwargs):
-            self.evidence = {"mode": "browser", "status": "verified", "stage": "ready"}
-            self._template = object()
-            self._extractor = SimpleNamespace(check_budget=lambda: None, remaining_seconds=lambda: 60, extract=extract)
-            self._remaining_requests = 6
-            self.driver = SimpleNamespace(replay=replay)
-
-        def prepare(self, *args, **kwargs):
-            pass
-
-        def close(self):
-            pass
-
-    with browser_cli_terminal():
-        main(["run-agent", str(source), "--page-url", "https://example.test/chat",
-              "--output", str(output), "--log", str(log),
-              *([] if verbose else ["--no-verbose"])],
-             skill_agent_factory=StrategySkillAgent, browser_target_factory=Target)
-    terminal = capsys.readouterr()
-    logged = log.read_text(encoding="utf-8")
-    trials = [json.loads(line) for line in Path(str(output) + ".trials.jsonl").read_text().splitlines()]
-    run = json.loads(Path(str(output) + ".run.json").read_text())
-    assert len(calls) == 1
-    first = trials[0]["diagnostic"]
-    stage = "dataset_extraction" if failure == "extraction" else "dataset_request"
-    assert first["stage"] == stage and first["reason"] == reason
-    assert first["request_attempted"] is True
-    assert first.get("http_status") == http_status
-    if failure in {"stream", "decode"}:
-        assert first["received_bytes"] == 12345 and first["elapsed_seconds"] == 90.253
-    assert run["target"]["diagnostic"] == first
-    for trial in trials[1:]:
-        assert trial["diagnostic"]["reason"] == "extraction_blocked"
-        assert trial["diagnostic"]["blocked_by"] == reason
-        assert trial["diagnostic"]["request_attempted"] is False
-        assert "received_bytes" not in trial["diagnostic"] and "elapsed_seconds" not in trial["diagnostic"]
-    for text in (terminal.err, logged):
-        if not verbose:
-            assert "request_attempted=" not in text
-            continue
-        assert "stage=" + stage in text
-        assert "reason=" + reason in text
-        assert "request_attempted=false" in text and "blocked_by=" + reason in text
-        if http_status:
-            assert f"http_status={http_status}" in text
-        if failure in {"stream", "decode"}:
-            assert "received_bytes=12345" in text and "elapsed_seconds=90.253" in text
-    for text in (terminal.out + terminal.err, logged, json.dumps(trials), json.dumps(run)):
-        assert "fixture-secret" not in text and "secret.test" not in text
 
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -175,6 +91,7 @@ class BrowserFixtureTarget:
     }
 
     def prepare(self, _probes, *, interactive, record_count, request_count):
+        assert _probes == [], "Browser discovery must use independent probes"
         return None
 
     def answer(self, question: str, request_id: str) -> str:
@@ -190,11 +107,11 @@ class BlockingBrowserFixtureTarget:
             "mode": "browser",
             "origin": "https://example.test",
             "path_shape": "/api/{opaque}/ask",
-            "status": "confirmation_required",
+            "status": "consent_required",
         }
 
     def prepare(self, _probes, *, interactive, record_count, request_count):
-        raise BrowserConfirmationRequired("fixture decline")
+        raise BrowserDiscoveryError("consent_required")
 
     def close(self) -> None:
         return None
@@ -257,11 +174,11 @@ def test_run_agent_cli_accepts_one_project_or_browser_target():
 
     browser = parser.parse_args([
         "run-agent", "dataset.jsonl", "--page-url", "https://example.test/chat",
-        "--confirm-browser-run", "--fresh-browser-profile",
+        "--fresh-browser-profile",
     ])
 
     assert browser.page_url == "https://example.test/chat" and browser.project is None
-    assert browser.confirm_browser_run is True and browser.interactive is None
+    assert browser.confirm_browser_run is False and browser.interactive is None
     assert browser.fresh_browser_profile is True
     with pytest.raises(SystemExit):
         parser.parse_args([
@@ -270,45 +187,6 @@ def test_run_agent_cli_accepts_one_project_or_browser_target():
         ])
 
 
-def test_run_agent_help_explains_browser_setup_handoffs_and_artifacts(capsys):
-    with pytest.raises(SystemExit) as raised:
-        main(["run-agent", "--help"])
-
-    assert raised.value.code == 0
-    help_text = re.sub(r"\s+", " ", capsys.readouterr().out)
-    for explanation in (
-        "python -m playwright install chromium",
-        "exact calibration question",
-        "401/403",
-        "raw streams",
-        "--service-url does not discover an arbitrary API",
-        "3600 seconds / 60 minutes",
-        "300 seconds (5 minutes)",
-        "--timeout controls website response waiting, not navigation",
-        "--allow-response-model-transfer",
-        "real response content",
-        "gemini:gemini-3.8-flash",
-        "N+2 model calls",
-        "Approval flags do not skip review",
-        "One YES approves BOTH",
-        "color terminal review (stderr)",
-        "NO_COLOR",
-        "redirected review output is refused",
-        "Preapprove only the browser verification",
-        "project mode only",
-        "requires terminal stdin and stderr",
-        "stops before opening the browser",
-        "Additional guidance:",
-        "Sign-in and calibration:",
-        "Review and approval:",
-        "Execution limits:",
-        "Outputs and local session:",
-        "scheduled dataset trials (including repeats)",
-        "deadline starts after approval",
-        "retains local sign-in state",
-        "removed when the browser target closes",
-    ):
-        assert explanation in help_text
 
 
 def test_each_cli_argument_explains_its_default_or_requirement():
@@ -487,14 +365,14 @@ def test_browser_execution_failure_persists_no_raw_transport_diagnostic(tmp_path
     assert completed == 0
     assert read_records(output)[0]["actual_response"] is None
     run = json.loads(output.with_name(output.name + ".run.json").read_text(encoding="utf-8"))
-    assert run["failed"] == 3
+    assert run["failed"] == 1  # stop dispatch after the failed request; do not fabricate further trials
     captured = capsys.readouterr()
     evidence = captured.out + captured.err + "".join(
         path.read_text(encoding="utf-8") for path in tmp_path.rglob("*") if path.is_file()
     )
     assert "fixture-error-secret" not in evidence
     assert "fixture-private-body" not in evidence
-    assert "RuntimeError" in evidence
+    assert "BrowserDiscoveryError" in evidence
 
 
 @pytest.mark.parametrize("phase", ["open", "prepare"])
@@ -527,7 +405,7 @@ def test_browser_cli_redacts_native_browser_errors(tmp_path: Path, capsys, phase
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "fixture-native-secret" not in captured.out + captured.err
-    assert "browser" in captured.err.lower()
+    assert "website integration" in captured.err.lower()
     assert not output.exists()
 
 
@@ -547,37 +425,12 @@ def test_injected_browser_fixture_assertion_is_not_redacted(tmp_path: Path):
         )
 
 
-@pytest.mark.parametrize(("error", "instruction"), [
-    (RuntimeError("Playwright Chromium is unavailable; run: python -m playwright install chromium"),
-     "python -m playwright install chromium"),
-    (BrowserConfirmationRequired("fixture-internal-secret"), "before typing YES"),
-    (ExtractionError("fixture-internal-secret"), "private diagnostics withheld"),
-    (TimeoutError("fixture-internal-secret"), "use --timeout"),
-])
-def test_safe_browser_cli_errors_keep_actionable_instructions(tmp_path: Path, capsys, error, instruction):
-    dataset = tmp_path / "dataset.jsonl"
-    make_dataset(dataset, count=1)
-
-    def browser_factory(**_options):
-        raise error
-
-    with browser_cli_terminal():
-        exit_code = main(
-            ["run-agent", str(dataset), "--page-url", "https://example.test/chat",
-             "--output", str(tmp_path / "responses.jsonl"), "--no-verbose"],
-            browser_target_factory=browser_factory,
-        )
-
-    captured = capsys.readouterr()
-    assert exit_code == 2
-    assert instruction in captured.err
-    assert "fixture-internal-secret" not in captured.out + captured.err
 
 
 @pytest.mark.parametrize("save_log", [False, True])
-@pytest.mark.parametrize("calibration_question", [None, "客服幾點開？"])
+@pytest.mark.parametrize("probe_question", [None, "客服幾點開？"])
 @pytest.mark.parametrize("output_directory", [False, True])
-def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, calibration_question, output_directory):
+def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, probe_question, output_directory):
     source, output = tmp_path / "dataset.jsonl", tmp_path / "responses.jsonl"
     destination = tmp_path / "nested" / "results" if output_directory else output
     if output_directory:
@@ -586,7 +439,7 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, ca
     make_dataset(source, count=1)
 
     def target_factory(**options):
-        assert options["calibration_question"] == calibration_question
+        assert options["probe_question"] == probe_question
         return BrowserFixtureTarget()
 
     with browser_cli_terminal():
@@ -595,7 +448,7 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, ca
                 "run-agent", str(source), "--page-url", "https://example.test/chat",
                 "--output", str(destination), "--no-verbose",
                 *(["--log", str(log)] if save_log else []),
-                *(["--calibration-question", calibration_question] if calibration_question is not None else []),
+                *(["--demo-question", probe_question] if probe_question is not None else []),
             ],
             skill_agent_factory=StrategySkillAgent,
             browser_target_factory=target_factory,
@@ -614,25 +467,25 @@ def test_run_agent_page_url_cli_uses_browser_target(tmp_path: Path, save_log, ca
         assert "Individual repeated trials" in saved_log
 
 
-def test_calibration_question_requires_browser_target_before_execution(tmp_path):
+def test_probe_question_requires_browser_target_before_execution(tmp_path):
     with pytest.raises(ValueError, match="requires --page-url"):
         run_agent(tmp_path / "missing.jsonl", tmp_path / "responses.jsonl",
-                  answer=lambda _question: "unused", calibration_question="客服幾點開？")
+                  answer=lambda _question: "unused", probe_question="客服幾點開？")
     assert not (tmp_path / "responses.jsonl").exists()
 
 
 @pytest.mark.parametrize("question", ["", " \t\n"])
-def test_blank_calibration_question_is_rejected_before_dataset_read(tmp_path, question):
+def test_blank_probe_question_is_rejected_before_dataset_read(tmp_path, question):
     with pytest.raises(ValueError, match="non-empty question"):
         run_agent(tmp_path / "missing.jsonl", tmp_path / "responses.jsonl",
-                  page_url="https://example.test/chat", calibration_question=question)
+                  page_url="https://example.test/chat", probe_question=question)
 
 
 def test_browser_preparation_blocker_writes_safe_run_evidence_without_response_files(tmp_path: Path):
     source, output = tmp_path / "dataset.jsonl", tmp_path / "responses.jsonl"
     make_dataset(source, count=1)
 
-    with pytest.raises(BrowserConfirmationRequired):
+    with pytest.raises(BrowserDiscoveryError):
         run_agent(
             source,
             output,
@@ -649,13 +502,13 @@ def test_browser_preparation_blocker_writes_safe_run_evidence_without_response_f
     assert run["status"] == "blocked"
     assert run["blocker"] == {
         "stage": "browser_prepare",
-        "error_type": "BrowserConfirmationRequired",
+        "error_type": "BrowserDiscoveryError",
         "diagnostic": {
-            "stage": "unknown", "error_type": "BrowserConfirmationRequired",
-            "reason": "confirmation_required", "request_attempted": False, "requests_stopped": True,
+            "stage": "unknown", "error_type": "BrowserDiscoveryError",
+            "reason": "consent_required", "request_attempted": False, "requests_stopped": True,
         },
     }
-    assert run["target"]["status"] == "confirmation_required"
+    assert run["target"]["status"] == "consent_required"
     assert "fixture decline" not in json.dumps(run)
 
 

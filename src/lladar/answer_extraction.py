@@ -3,19 +3,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import re
 import time
 from typing import Any, Callable
 
 from .response_capture import ObservedAnswer, ObservedResponse, observation_order
+from .resource_limits import resource_limit
 
 
 DEFAULT_EXTRACTION_MODEL = "gemini:gemini-3.8-flash"
-GEMINI_ORIGIN = "https://generativelanguage.googleapis.com"
-PROMPT_VERSION = "captured-answer-v1"
-MAX_INPUT_BYTES = 120 * 1024
-MAX_CAPTURE_BYTES = 1024 * 1024
-MAX_OUTPUT_BYTES = 256 * 1024
+AKASHA_DESTINATION = "Akasha configured model endpoint (.env / environment)"
+PROMPT_VERSION = "captured-answer-v2"
+MAX_INPUT_BYTES = resource_limit("MAX_INPUT_BYTES")
+MAX_CAPTURE_BYTES = resource_limit("MAX_CAPTURE_BYTES")
+MAX_OUTPUT_BYTES = resource_limit("MAX_OUTPUT_BYTES")
 _REASONS = frozenset({
     "response_transfer_not_approved", "reference_required", "reference_declined", "reference_mismatch",
     "request_identity_mismatch", "independent_observation_required", "completion_unconfirmed",
@@ -29,6 +31,7 @@ _REASONS = frozenset({
     "provider_output_incomplete", "provider_response_invalid", "provider_output_limit",
     "provider_max_tokens", "provider_safety_blocked", "provider_cancelled",
     "provider_network_failed",
+    "provider_destination_changed", "provider_destination_unconfirmed",
 })
 
 
@@ -40,7 +43,7 @@ class ExtractionError(ValueError):
         super().__init__("Response extraction blocked: " + self.reason)
 
 
-def validate_result(result: Any) -> str:
+def validate_result(result: Any, *, max_output_bytes: int = MAX_OUTPUT_BYTES) -> str:
     if type(result) is not dict:
         raise ExtractionError("provider_response_invalid")
     status = result.get("status")
@@ -49,7 +52,7 @@ def validate_result(result: Any) -> str:
     if (set(result) != {"status", "text"} or status != "final" or type(result["text"]) is not str
             or not result["text"].strip()):
         raise ExtractionError("provider_response_invalid")
-    if len(result["text"].encode("utf-8")) > MAX_OUTPUT_BYTES:
+    if len(result["text"].encode("utf-8")) > max_output_bytes:
         raise ExtractionError("provider_output_limit")
     return result["text"]
 
@@ -67,19 +70,34 @@ _CREDENTIAL_PATTERN = re.compile(
     r'|(?:bearer\s+[a-z0-9._~-]+)|(?:eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+)'
     r'|(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)'
 )
+_HOST_REFERENCE_METADATA = re.compile(
+    r'''(?i)["']?(?:token|access[_-]?token|refresh[_-]?token|api[_-]?key|password|authorization|cookie|client[_-]?secret)["']?\s*[:=]\s*["']\[host-private(?::private-metadata-[0-9]+)?\]["']'''
+)
 
 
-def contains_sensitive_text(body: str, protected_values: tuple[str, ...]) -> bool:
+def contains_sensitive_text(body: str, protected_values: tuple[str, ...], *,
+                            allow_credential_patterns: bool = False) -> bool:
     """Inspect escaped/nested JSON strings too, without changing model evidence.
 
     This is only a conservative credential screen, not a universal secret detector
-    and never an answer-field recognizer. Excessive encoding is refused.
+    and never an answer-field recognizer. Authorized website recordings may
+    contain credential-shaped fields; actual protected values stay screened.
+    Excessive encoding is refused when a screen is required.
     """
+    if allow_credential_patterns and not protected_values:
+        return False
     escapes = {'"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t"}
     def unescape(match):
         return chr(int(match[1], 16)) if match[1] else escapes[match[2]]
     for _ in range(8):
-        if _CREDENTIAL_PATTERN.search(body) or any(value and value in body for value in protected_values):
+        # A one-character cookie flag is not identifiable inside prose (for
+        # example, "1" in a numbered answer). Still block a standalone echo;
+        # labelled credentials are independently screened above.
+        screened = _HOST_REFERENCE_METADATA.sub('[redacted credential metadata]', body)
+        if (not allow_credential_patterns and _CREDENTIAL_PATTERN.search(screened)) or any(
+            value and (value in body if len(value) > 1 else body.strip() == value)
+            for value in protected_values
+        ):
             return True
         decoded = re.sub(r'\\(?:u([0-9a-fA-F]{4})|(["\\/bfnrt]))', unescape, body)
         if decoded == body:
@@ -88,7 +106,9 @@ def contains_sensitive_text(body: str, protected_values: tuple[str, ...]) -> boo
     return True
 
 
-def response_input(observation: ObservedResponse, protected_values: tuple[str, ...] = ()) -> dict:
+def response_input(observation: ObservedResponse, protected_values: tuple[str, ...] = (), *,
+                   max_input_bytes: int = MAX_INPUT_BYTES,
+                   allow_recorded_credentials: bool = False) -> dict:
     if not (observation.stream_closed or observation.manual_complete):
         raise ExtractionError("completion_unconfirmed")
     media_type = observation.content_type.partition(";")[0].strip().lower()
@@ -102,10 +122,11 @@ def response_input(observation: ObservedResponse, protected_values: tuple[str, .
             raise ValueError()
         if len(body.encode("utf-8")) > MAX_CAPTURE_BYTES:
             raise ExtractionError("response_size_limit")
-        if contains_sensitive_text(body, protected_values):
+        if contains_sensitive_text(body, protected_values,
+                                   allow_credential_patterns=allow_recorded_credentials):
             raise ExtractionError("sensitive_response")
         request = {"content_type": media_type, "body": body}
-        if len(json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")) > MAX_INPUT_BYTES:
+        if len(json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")) > max_input_bytes:
             raise ExtractionError("provider_input_limit")
         return request
     except (UnicodeError, TypeError, ValueError) as error:
@@ -119,18 +140,46 @@ class ExtractionOptions:
     model_destination: str = DEFAULT_EXTRACTION_MODEL
     provider_factory: Callable[..., Any] | None = None
     transfer_approved: bool = False
+    allow_recorded_credentials: bool = False
     reference_reader: Callable[[ObservedResponse, str], ObservedAnswer] | None = None
-    provider_origin: str = GEMINI_ORIGIN
+    provider_origin: str = AKASHA_DESTINATION
+    max_output_tokens: int | None = None
+    max_input_tokens: int | None = None
+    expected_destination: dict[str, str] | None = None
+
+    @property
+    def input_byte_limit(self) -> int:
+        from .model_profiles import resolve_model_profile
+        limit = resolve_model_profile(self.model_destination).max_input_tokens if self.max_input_tokens is None else self.max_input_tokens
+        if type(limit) is not int or limit <= 0:
+            raise ExtractionError("invalid_provider_budget")
+        return min(MAX_INPUT_BYTES, limit * 4)
+
+    @property
+    def output_token_limit(self) -> int:
+        from .model_profiles import resolve_model_profile
+
+        model = re.sub(r"^(?:google|gemi):", "gemini:", self.model_destination)
+        limit = resolve_model_profile(model).max_output_tokens if self.max_output_tokens is None else self.max_output_tokens
+        if type(limit) is not int or limit <= 0:
+            raise ExtractionError("invalid_provider_budget")
+        return limit
 
 
 class ResponseExtractor:
-    def __init__(self, options: ExtractionOptions, *, max_calls: int, protected_values: tuple[str, ...] = ()):
+    def __init__(self, options: ExtractionOptions, *, max_calls: int, protected_values: tuple[str, ...] = (), deadline: float | None = None, progress_callback=None):
         if type(max_calls) is not int or max_calls < 1:
             raise ExtractionError("invalid_provider_budget")
         self.options = options
+        self.progress_callback = progress_callback
         self.max_calls = max_calls
         self._provider = None
-        self._deadline = time.monotonic() + 3600
+        timeout = resource_limit("EXTRACTION_TIMEOUT_SECONDS")
+        self._deadline = time.monotonic() + timeout
+        if deadline is not None:
+            if not isinstance(deadline,(int,float)) or not math.isfinite(deadline):
+                raise ExtractionError('invalid_provider_budget')
+            self._deadline = min(self._deadline,deadline)
         self._protected_values = protected_values
         self._source = None
         self._not_before = -1
@@ -138,8 +187,9 @@ class ResponseExtractor:
         self._blocked = False
         self.evidence = {"model": options.model_destination, "prompt_version": PROMPT_VERSION,
                          "schema_version": 1, "calls": 0, "max_calls": max_calls,
-                         "max_output_tokens": 8192, "input_byte_limit": MAX_INPUT_BYTES,
-                         "total_deadline_seconds": 3600, "events": []}
+                         "max_output_tokens": options.output_token_limit, "input_byte_limit": options.input_byte_limit,
+                         "capture_byte_limit": MAX_CAPTURE_BYTES, "output_byte_limit": MAX_OUTPUT_BYTES,
+                         "total_deadline_seconds": timeout, "events": []}
 
     def check_budget(self) -> None:
         if self._blocked:
@@ -149,16 +199,26 @@ class ResponseExtractor:
         if self.evidence["calls"] >= self.max_calls:
             raise ExtractionError("extraction_budget_exhausted")
 
+    def update_protected_values(self, values: tuple[str,...]) -> None:
+        """Add host-discovered private values without resetting calls or time."""
+        if any(type(value) is not str for value in values):
+            raise ExtractionError('sensitive_response')
+        self._protected_values=tuple(dict.fromkeys((*self._protected_values,*values)))
+
     def remaining_seconds(self) -> float:
         self.check_budget()
         return max(0.001, self._deadline - time.monotonic())
 
-    def extract(self, observation: ObservedResponse, *, request_id: str) -> str:
+    def extract(self, observation: ObservedResponse, *, request_id: str, stage: str = "response") -> str:
         started = time.monotonic()
         index = len(self.evidence["events"])
         event = {"index": index + 1, "status": "blocked", "usage": None,
-                 "stage": ("calibration", "verification")[index] if index < 2 else "dataset"}
+                 "stage": stage if type(stage) is str and stage in {"response", "calibration", "probe", "verification", "formal"} else "response"}
+        def report(phase):
+            if self.progress_callback:
+                self.progress_callback(phase)
         try:
+            report('checking_input')
             self.check_budget()
             if self.options.transfer_approved is not True:
                 raise ExtractionError("response_transfer_not_approved")
@@ -168,35 +228,50 @@ class ResponseExtractor:
             if ((self._source is not None and receipt.source is not self._source)
                     or receipt.started_order <= self._not_before or request_id in self._request_ids):
                 raise ExtractionError("independent_observation_required")
-            request = response_input(observation, self._protected_values)
+            request = response_input(observation, self._protected_values,
+                max_input_bytes=self.options.input_byte_limit,
+                allow_recorded_credentials=self.options.allow_recorded_credentials)
             if self._provider is None:
+                from functools import partial
+                from .extraction_provider import AkashaExtractionProvider
                 factory = self.options.provider_factory
                 if factory is None:
-                    from .extraction_provider import GeminiExtractionProvider
-                    factory = GeminiExtractionProvider
-                self._provider = factory(model_destination=self.options.model_destination,
-                                         timeout_seconds=3600, max_output_tokens=8192)
+                    factory = AkashaExtractionProvider
+                configuration = dict(model_destination=self.options.model_destination,
+                                     timeout_seconds=self.evidence["total_deadline_seconds"],
+                                     max_output_tokens=self.options.output_token_limit)
+                if self.options.expected_destination is not None:
+                    configuration["expected_destination"] = self.options.expected_destination
+                implementation = factory.func if isinstance(factory, partial) else factory
+                if implementation is AkashaExtractionProvider:
+                    configuration["allow_recorded_credentials"] = self.options.allow_recorded_credentials
+                self._provider = factory(**configuration)
             self.check_budget()
             self.evidence["calls"] += 1
             self._request_ids.add(request_id)
             self._source = receipt.source
+            report('model_running')
             result = self._provider.extract(request, timeout_seconds=self._deadline - time.monotonic())
+            report('validating_result')
             if time.monotonic() >= self._deadline:
                 raise ExtractionError("extraction_time_exhausted")
             if type(result) is not dict or set(result) != {"result", "usage"}:
                 raise ExtractionError("provider_response_invalid")
             event["usage"] = safe_usage(result["usage"])
             text = validate_result(result["result"])
-            if contains_sensitive_text(text, self._protected_values):
+            if contains_sensitive_text(text, self._protected_values,
+                                       allow_credential_patterns=self.options.allow_recorded_credentials):
                 raise ExtractionError("sensitive_response")
             self._not_before = observation_order()
             event["status"] = "final"
+            report('final')
             return text
         except BaseException as error:
             self._blocked = True
             reason = (error.reason if isinstance(error, ExtractionError) else
                       "provider_cancelled" if isinstance(error, KeyboardInterrupt) else "provider_failed")
             event["reason"] = reason
+            report('blocked')
             if isinstance(error, ExtractionError) and error.usage is not None:
                 event["usage"] = error.usage
             if isinstance(error, (KeyboardInterrupt, SystemExit)):

@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from .runner import SandboxTools
+from .model_profiles import resolve_model_profile
+from .resource_limits import resource_limit
 
 
 _PROMPT = """Inspect the target project's README and relevant code/configuration using the tools.
@@ -50,13 +52,14 @@ def describe_project(workspace: Path, *, model: str, env_file: str | Path | None
     import akasha
 
     explorer = SandboxTools(workspace)
+    profile = resolve_model_profile(model)
     def safe_read(name: str) -> str:
         parts = [part.casefold() for part in Path(name).parts]
         if any(part.startswith(".env") or part in {"secrets", "credentials.json",
                                                      "id_rsa", ".ssh"} for part in parts):
             raise ValueError("project profile cannot read credential files")
         path = explorer._path(name)
-        if path.stat().st_size > 128_000:
+        if path.stat().st_size > resource_limit('PROJECT_READ_BYTES'):
             raise ValueError("project profile read exceeds size limit")
         return explorer.read_file(name)
 
@@ -67,8 +70,8 @@ def describe_project(workspace: Path, *, model: str, env_file: str | Path | None
     ]
     agent = akasha.agents(model=model, env_file=str(env_file) if env_file else None,
                           tools=tools, stream=False, thinking=True, verbose=False,
-                          keep_logs=False, max_round=30,
-                          max_input_tokens=24000, max_output_tokens=4096)
+                          keep_logs=False, max_round=resource_limit('PROJECT_AGENT_ROUNDS'),
+                          max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
     result = _object(agent(_PROMPT))
     evidence = result.get("evidence")
     if not isinstance(evidence, list) or not all(isinstance(path, str) for path in evidence):

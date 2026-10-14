@@ -5,6 +5,42 @@ from lladar.runner import run_agent
 from test_simple_pipeline import StrategySkillAgent, write_jsonl
 
 
+@pytest.mark.parametrize('changed_report', [False, True])
+def test_resume_after_browser_prepare_failure_preserves_blocked_report(tmp_path, changed_report):
+    source, output = tmp_path/'qa.jsonl', tmp_path/'responses.jsonl'
+    write_jsonl(source, [{'question':'Retention?', 'expected_answer':'30 days', 'actual_response':None}])
+    class Target:
+        evidence = {}
+        def __init__(self, **kwargs):
+            pass
+        def prepare(self, *args, **kwargs):
+            raise RuntimeError('fixture discovery failure')
+        def close(self):
+            pass
+    options = dict(page_url='https://fixture.test/chat', browser_target_factory=Target,
+                   strategy_agent_factory=StrategySkillAgent, verbose=False)
+    with pytest.raises(RuntimeError, match='fixture discovery failure'):
+        run_agent(source, output, **options)
+    report = Path(str(output)+'.run.json')
+    original = report.read_bytes()
+    if changed_report:
+        report.write_text('{}', encoding='utf-8')
+    class Resumed(Target):
+        def prepare(self, *args, **kwargs):
+            pass
+        def answer(self, *args):
+            return 'Resumed answer'
+    options['browser_target_factory'] = Resumed
+    if changed_report:
+        with pytest.raises(FileExistsError):
+            run_agent(source, output, resume=Path(str(output)+'.work'), **options)
+        assert report.read_text() == '{}'
+    else:
+        assert run_agent(source, output, resume=Path(str(output)+'.work'), **options) == 1
+        assert json.loads(output.read_text())['actual_response'] == 'Resumed answer'
+        assert any(p.read_bytes() == original for p in Path(str(output)+'.work').glob('blocked-run-*.json'))
+
+
 def test_resume_does_not_repeat_finished_or_completion_unknown_trials(tmp_path):
     source, output = tmp_path / 'qa.jsonl', tmp_path / 'responses.jsonl'
     write_jsonl(source, [{'question': 'Retention?', 'expected_answer': '30 days', 'actual_response': None},
@@ -115,11 +151,11 @@ def crash(src,dst):
     replace(src,dst)
     if Path(dst)==output: os._exit(9)
 os.replace=crash
-run_agent(source,output,answer=lambda question:'Captured',verbose=False)
+run_agent(source,output,answer=lambda question:'Captured',verbose=False,max_tool_calls=1000)
 """
     completed=subprocess.run([sys.executable,'-c',script,str(source),str(output)],capture_output=True)
     assert completed.returncode==9
     def forbidden(question):
         raise AssertionError('completed target request must not repeat')
-    assert run_agent(source,output,answer=forbidden,resume=Path(str(output)+'.work'),verbose=False)==1
+    assert run_agent(source,output,answer=forbidden,resume=Path(str(output)+'.work'),verbose=False,max_tool_calls=1000)==1
     assert json.loads(output.read_text(encoding='utf-8'))['actual_response']=='Captured'

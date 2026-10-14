@@ -23,6 +23,7 @@ from .exceptions import EvaluationError, ProviderError, LladarError
 from .interfaces import validate_service_url
 from .method_skill import invoke_skill, resolve_skill
 from .model_profiles import resolve_model_profile
+from .resource_limits import resource_limit
 from .providers.akasha import AkashaProvider
 from .progress import ProgressReporter
 from .runner import DEFAULT_ADAPTER_MODEL, copy_project
@@ -160,8 +161,8 @@ def create_situation(
             raise ValueError(f"knowledge must be an existing .md or .txt file: {path}")
         content = path.read_text(encoding="utf-8")
         total += len(content)
-        if total > 100_000:
-            raise ValueError("knowledge exceeds 100000 characters")
+        if total > resource_limit('SITUATION_KNOWLEDGE_CHARS'):
+            raise ValueError(f"knowledge exceeds {resource_limit('SITUATION_KNOWLEDGE_CHARS')} characters")
         sources.append({"path": str(path), "sha256": _digest(path), "text": content})
     selected = resolve_skill(skill, BUILTIN_SITUATION_SKILL)
     submitted: dict[str, Any] | None = None
@@ -252,7 +253,7 @@ def load_situation(path: str | Path) -> tuple[dict[str, Any], str]:
 
 
 def _provider(factory: ProviderFactory | None, env_file: str | Path,
-              max_output_tokens: int = 2048, *, verbose: bool = False,
+              max_output_tokens: int | None = None, *, verbose: bool = False,
               stream: bool = False) -> Any:
     return (factory or AkashaProvider)(
         env_file=str(Path(env_file).resolve()), max_output_tokens=max_output_tokens,

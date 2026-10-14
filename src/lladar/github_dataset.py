@@ -26,14 +26,17 @@ from .exceptions import DatasetValidationError, KnowledgeLoadError, LladarError,
 from .question_types import record_fingerprint
 from .progress import ProgressReporter
 from .skill_generation import generate_with_skill
+from .resource_limits import resource_limit
+
+csv.field_size_limit(resource_limit('CSV_FIELD_CHARS'))
 
 
 GITHUB_SKILL = Path(__file__).parent / "skill_assets" / "github-dataset"
 FORMATS = {".md", ".txt", ".csv", ".json", ".jsonl"}
-LIMITS = {"file_bytes": 2 * 1024 * 1024, "total_bytes": 20 * 1024 * 1024,
-          "requests": 100, "timeout_seconds": 20, "redirects": 5, "repository_files": 2000,
-          "stream_file_bytes": 16 * 1024 * 1024, "sample_rows": 200000, "sample_size": 100,
-          "selected_source_chars": 24000, "host_tool_calls": 160, "model_rounds": 80}
+LIMITS = {"file_bytes": resource_limit('GITHUB_FILE_BYTES'), "total_bytes": resource_limit('GITHUB_TOTAL_BYTES'),
+          "requests": resource_limit('GITHUB_REQUESTS'), "timeout_seconds": resource_limit('GITHUB_TIMEOUT_SECONDS'), "redirects": resource_limit('GITHUB_REDIRECTS'), "repository_files": resource_limit('GITHUB_REPOSITORY_FILES'),
+          "stream_file_bytes": resource_limit('GITHUB_STREAM_FILE_BYTES'), "sample_rows": resource_limit('GITHUB_SAMPLE_ROWS'), "sample_size": resource_limit('GITHUB_SAMPLE_SIZE'),
+          "selected_source_chars": resource_limit('GITHUB_SELECTED_SOURCE_CHARS'), "host_tool_calls": resource_limit('GITHUB_HOST_TOOL_CALLS'), "model_rounds": resource_limit('GITHUB_MODEL_ROUNDS')}
 
 
 class _PublicAddressAdapter(requests.adapters.HTTPAdapter):
@@ -210,7 +213,9 @@ from .work_session import current_session
 class Discovery:
     """Repository browsing capabilities; the Agent selects the data paths."""
 
-    def __init__(self, url, client, reporter=None, max_selected_chars=24000):
+    def __init__(self, url, client, reporter=None, max_selected_chars=None):
+        if max_selected_chars is None:
+            max_selected_chars = LIMITS['selected_source_chars']
         self.owner, self.repo = repository_identity(url)
         self.url = f"https://github.com/{self.owner}/{self.repo}"
         self.client = client
@@ -287,12 +292,12 @@ class Discovery:
         return self._page(url, start_char)
 
     def sample_dataset_rows(self, path: str, sample_size: int = 20, seed: int = 0,
-                            max_rows: int = 200000) -> dict:
+                            max_rows: int = LIMITS['sample_rows']) -> dict:
         """Reservoir sample complete CSV/JSONL rows within explicit download and scan budgets."""
         if path not in {item["path"] for item in self.files} or Path(path).suffix.lower() not in {".csv", ".jsonl"}:
             raise ValueError("sampling requires a declared CSV or JSONL file")
         if type(sample_size) is not int or not 1 <= sample_size <= LIMITS["sample_size"]:
-            raise ValueError("sample_size must be between 1 and 100")
+            raise ValueError(f"sample_size must be between 1 and {LIMITS['sample_size']}")
         if type(seed) is not int or type(max_rows) is not int or not 1 <= max_rows <= LIMITS["sample_rows"]:
             raise ValueError("invalid seed or max_rows scan budget")
         session = current_session()

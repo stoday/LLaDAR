@@ -26,9 +26,10 @@ from .target_environment import target_environment
 from .interfaces import DISCOVERY_PROMPT, NeedsConfirmation, choose_interface, parse_object, validate_plan, validate_service_url, write_json
 from .validation_retry import run_validated
 from .model_profiles import resolve_model_profile
+from .resource_limits import resource_limit
 
 
-MAX_ADAPTER_REPAIR_ATTEMPTS = 50
+MAX_ADAPTER_REPAIR_ATTEMPTS = resource_limit('AUTO_ADAPTER_REPAIR_ATTEMPTS')
 
 
 ADAPTER_RUNTIME_PROTOCOL = {
@@ -656,7 +657,7 @@ class AutoAdapter:
                                 model=self.model, env_file=self.env_file, tools=tools[:5],
                                 max_input_tokens=self.model_profile.max_input_tokens,
                                 max_output_tokens=self.model_profile.max_output_tokens,
-                                max_round=30, thinking=True, stream=True,
+                                max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
                                 verbose=self.verbose, keep_logs=False)
                             return _stream_answer(discovery(prompt))
 
@@ -720,7 +721,7 @@ class AutoAdapter:
                         model=self.model, env_file=self.env_file, tools=tools,
                         max_input_tokens=self.model_profile.max_input_tokens,
                         max_output_tokens=self.model_profile.max_output_tokens,
-                        max_round=30, thinking=True, stream=True,
+                        max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
                         verbose=self.verbose, keep_logs=False,
                     )
 

@@ -12,8 +12,11 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
   "akasha-terminal[light]>=1.8",
   "requests>=2.31,<3",
+  "urllib3>=2.7,<3",
   "pypdf>=4,<7",
   "playwright>=1.52,<2",
+  "websockets>=15,<16",
+  "pydantic-monty==1.1.0",
   "llama-index-core>=0.14.25",
   "tqdm>=4.66,<5",
 ]

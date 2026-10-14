@@ -412,7 +412,7 @@ def test_large_local_source_is_read_in_host_assigned_batches(tmp_path):
                 f'What is the retention under policy segment {len(assignments)}?', '30 days', refs,
                 'derived_criterion','Read the assigned policy segment.')
             return self.evidence()
-    records=create_test_dataset(source,output=output,skill_agent_factory=Batched,verbose=False)
+    records=create_test_dataset(source,output=output,skill_agent_factory=Batched,verbose=False,max_input_tokens=96000)
     assert len(records)==len(assignments)>1
     assert assignments[0][0]==0 and assignments[-1][1]==len(source.read_text(encoding='utf-8'))
     metadata=json.loads(Path(str(output)+'.generation.json').read_text(encoding='utf-8'))

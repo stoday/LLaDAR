@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+from .resource_limits import resource_limit
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,8 @@ MODEL_PROFILES = {
     ),
 }
 DEFAULT_MODEL_PROFILE = ModelProfile(
-    max_input_tokens=16_384,
-    max_output_tokens=8_192,
+    max_input_tokens=resource_limit('DEFAULT_MODEL_INPUT_TOKENS'),
+    max_output_tokens=resource_limit('DEFAULT_MODEL_OUTPUT_TOKENS'),
 )
 
 
@@ -41,6 +43,7 @@ def resolve_model_profile(
     max_output_tokens: int | None = None,
     auto_window_ratio: float | None = None,
 ) -> ModelProfile:
+    model = re.sub(r"^(?:google|gemi):", "gemini:", model)
     base = MODEL_PROFILES.get(model, DEFAULT_MODEL_PROFILE)
     resolved_input = base.max_input_tokens if max_input_tokens is None else max_input_tokens
     resolved_output = (

@@ -64,7 +64,7 @@ lladar run-agent dataset.jsonl --page-url https://example.test/chat --output res
 ```
 
 Use your own question-page URL. LLaDAR opens a browser and guides you through
-sign-in, calibration, approval, and answer verification before running the tests.
+sign-in, discovery approval, and independent full-answer verification before running the tests.
 See the [target selection guide](site/guides/run-agent.html#choose-target)
 for supported pages and setup details.
 
@@ -164,9 +164,9 @@ Which target option should you use?
 
 - `--project PATH`: inspect the project's source and documentation to learn its public interface. A project alone can be enough: when startup details and the required runtime configuration are available, LLaDAR can start the service in an isolated project copy, test it, and stop only the service it started.
 - `--project PATH --service-url URL`: inspect the same project, but use an already running test service. The URL supplies its **base address**, not its startup command or API contract. LLaDAR still learns the HTTP method, route, payload, authentication requirements, and response format from the project; it does not start or stop that existing service.
-- `--page-url URL`: use a normal question webpage without providing project source. Sign in and submit a calibration question in LLaDAR's browser; LLaDAR records the request for replay and uses the model to extract answers from the captured responses.
+- `--page-url URL`: use a normal question webpage without providing project source. Sign in in LLaDAR's browser, handle any website dialogs, open the conversation page/window and keep the input box empty, then return to the terminal and press Enter. If several pages are open, select the conversation page by its displayed index. An Akasha Agent explores observed communication and page operations, qualifies a generated protocol/session programme, and a separate tool-free model faithfully extracts the captured answers.
 
-Native WebSocket supports sequential text/JSON question frames when the server normally closes the connection after each answer (code 1000). During calibration, a completed, correlated DOM interaction can provide a fallback for persistent or binary protocols. The selected route is frozen for verification and dataset trials; a failure stops later submissions. DOM support covers native Streamlit chat (validated with 1.65.0) and accessible form chats with a unique input placeholder, named submit button, named conversation log, user/assistant message roles and observed busy-to-idle completion, including named same-origin iframes. Other page structures require adaptation; unchanged text alone is never completion evidence.
+HTTP, persistent SSE, native text/binary WebSocket and DOM fallback use the same discovery tools and qualification contract. The Agent investigates actual session IDs, envelopes and terminal evidence instead of assuming a website schema. Local fixtures validate these transport paths; real-site acceptance is recorded separately.
 
 For an already running test service:
 
@@ -194,95 +194,42 @@ The two packaged run skills execute their bundled, fingerprinted strategy
 locally, so they do not require a model call merely to calculate the schedule.
 Custom local run skills are still interpreted by the configured skill Agent.
 
-When you only have an authenticated question page, you do not need to discover
-the API method, payload, or Cookie. Provision Playwright's matching Chromium once,
-then provide the question-page URL:
+When you only have an authenticated question page, provide `--page-url` and demonstrate one complete question and answer. You do not need to find API methods, cookies or selectors.
 
 ```bash
 python -m playwright install chromium
 lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl
 ```
 
-Browser mode always guides you through sign-in, calibration, consent and `MATCH`.
-Do not add `--interactive` or `--no-interactive`: these are project-only options
-and are rejected with `--page-url`. Run directly in a terminal with both stdin and
-stderr attached; piped input or redirected stderr stops the CLI before it opens
-the browser. The approval flags do not remove this terminal requirement.
+Run directly in an interactive terminal. Review the website, actual model destination, material scope and budgets, then type `YES`.
+In the visible browser, sign in, finish website verification, enter the service, open a new conversation, submit the full displayed demonstration question and wait for the complete answer. Return to the terminal and press Enter only when done.
+The program saves events, snapshots and necessary session state, then closes the recording browser.
 
-Each website request may wait up to 60 minutes by default (`--timeout 3600`).
-Browser startup, initial page navigation and reload separately allow 5 minutes
-(300 seconds); `--timeout` does not shorten or extend navigation waits.
-In browser mode, a tool-free model reads the approved complete response and
-reconstructs its original answer.
-The browser-only default is `gemini:gemini-3.8-flash`; override it with
-`--model gemini:MODEL`. Model availability depends on your provider account.
+The host builds a bounded recording index, then the material Agent selects useful events and explains why. The adapter Agent receives that material packet and can only submit complete `adapt(payload)` code or name a specific missing observation; it has no recording search or read tools. The host locally checks that a fresh question enters the send action, then immediately tests the candidate on the real website. A failed preflight or live trial returns the diagnostic and previous source to the adapter Agent for a new submission. Only a specific evidence gap returns work to the material Agent. Initial selection and submission each allow one model call; a missing submission stops with an error. Generation stops at the first accepted live test.
+The host executes the generated HTTP/SSE/WebSocket plans using its own connections. In the default independent mode, two fresh verification questions follow the accepted probe before formal dispatch.
+Formal execution does not depend on a visible or headless browser. Unsupported dependencies are reported instead of silently switching to DOM dispatch.
 
-LLaDAR opens its own visible Chromium profile. Sign in yourself, submit the exact
-calibration question, and wait until the answer is complete before pressing Enter.
-Optionally set `--calibration-question "What are your support hours?"` to use
-the same normal question for manual calibration and automatic verification,
-without appending an identifier. If omitted, the original random `LLaDAR`
-calibration and verification questions remain the default. This option requires
-`--page-url`; blank questions are rejected.
-Review the website requests, model destination and budgets together. One `YES`
-approves both one verification question plus the displayed dataset trials AND
-sending **real response content, including internal answers**, to
-`https://generativelanguage.googleapis.com`. Ensure this is permitted by your
-organization. `--confirm-browser-run` and
-`--allow-response-model-transfer` approve only their respective scopes for this run.
-Either flag alone still leaves the other scope unapproved; both skip the approval
-prompt, not review.
+Use `--demo-question TEXT` to customize the demonstration; copy the full displayed question including its unique marker.
+`--conversation-policy independent` starts a fresh conversation per formal trial by default; `continuous` accumulates formal history in a new conversation. Demonstration and verification history are excluded. `--conversation-policy demonstrated` explicitly continues the demonstrated conversation; its probe and formal answers are checked for substantive, on-topic reasonableness with `akasha.ask`, and may depend on demonstration and probe history. This mode does not establish new-conversation support.
+`--model` selects the exploration/repair model, default `gemini:gemini-3.8-flash`, separately from the tested website model. Token limits follow the model profile or explicit overrides.
+The discovery Agents do not read future dataset questions or expected answers, or rewrite target answers.
 
-The model needs `GEMINI_API_KEY` or `GOOGLE_API_KEY` from the environment or
-`--env-file`; credentials are loaded only after calibration and consent.
-For N scheduled trials (including repeats), at most **N+2 model calls** cover
-calibration, verification, and each trial. Each response gets at most one call
-and 8,192 output tokens; all calls and intervening verification share one
-60-minute deadline after approval. There are no automatic retries or redirect
-following. These token/call limits bound consumption, not a guaranteed price.
-Packaged scheduling stays local; custom run skills may use a separate model.
+Authorized raw recordings and scoped service state can include URLs, headers, Cookie/Authorization, bodies, client scripts, binary material and necessary storage items.
+Provider keys, `.env`, full browser profiles and unrelated website storage remain host-owned. Sign-in and MFA/CAPTCHA are manual; DOM password/OTP values are not recorded.
+Verbose Agent traces may contain authorized raw material; treat saved logs as private. `--no-verbose` retains necessary user instructions.
 
-Before dataset requests, compare the extracted verification answer with its new,
-complete recorded response directly in the terminal (stderr). Type `MATCH`
-only if faithful and complete. Approval flags cannot bypass this check.
-The CLI requires terminal input and review output before any browser work. No HTML review
-tab opens. Cyan marks source headings, magenta extracted-answer headings and yellow
-notices, not correctness. `NO_COLOR` or `TERM=dumb` selects plain text. Complete
-content is quoted without truncation; backslashes and terminal control/format
-characters are displayed escaped without changing saved answers. Terminal scrollback
-or recording may retain this private content. Browser sign-in/capture still require
-Chromium; terminal review does not add a browser-free mode or per-dataset-answer MATCH.
-A new request may return the same answer, but relabeling an old capture is not
-verification. A valid model envelope or one successful review does **not** prove
-every later answer is faithful, nor that the target answer is correct.
-Scoring remains a separate `lladar eval` step.
+Every turn checks source and completion. Without an independent full-answer reference, a temporary browser permits same-turn review: `MATCH` if identical, `MISMATCH` if different, `WAIT` if unfinished.
+After three distinct trusted turns qualify the same native JSON answer path, a separate host reader can automatically check formal answers while the path and correlated natural completion remain valid. Other sources may still require manual review.
+Review or sign-in browsers close afterwards; the adapter independently sends and collects formal questions.
 
-Text, JSON/+json, NDJSON and SSE bodies are supported as model input. The model
-must preserve original wording, numbers, negations, whitespace and Markdown;
-it must not answer the question itself, summarize or repair answers.
-The host checks request identity, completion, limits and the fixed result schema,
-not answer field names. Streams must close, or calibration must have an explicit
-local completion confirmation; an unclosed automatic replay times out rather than
-accepting a guessed final event or partial answer.
+Private recordings, state, adapter, ledger and verification evidence live in `OUTPUT.work/browser-discovery`.
+Reuse with `--adapter PATH/adapter/manifest.json`; normally no browser opens, but fresh verification remains required. Resume with `--resume OUTPUT.work`; submitted or uncertain turns are recovered, never blindly resent.
+The old `--probe-question` / `--browser-session-policy` flags and old adapter formats are unsupported.
 
-Capture is limited to 1 MiB of decoded bytes after HTTP decompression.
-The stricter model input limit is **120 KiB of UTF-8 JSON**, including framing;
-this reserves room under a local 128 KiB byte-based context budget for the fixed
-prompt (not a claim about a model's tokenizer or advertised context window).
-Oversize input is rejected without truncation, summarization or chunking.
-Known echoed request credentials and credential-like body fields block transfer;
-this conservative detector cannot certify that all sensitive content is absent.
-Cookies, headers, request payloads, profiles and expected answers are not sent.
-Raw responses, full prompts, model diagnostics and thoughts are not saved in normal
-artifacts. Final answer text is saved as `actual_response` in responses/trials;
-safe run metadata records status, model/prompt version, counts, duration and
-provider token usage when available (otherwise unknown).
-
-The local session is reused from `.lladar/browser-profiles`; use
-`--fresh-browser-profile` for a temporary signed-out profile. It never imports
-your ordinary Chrome/Edge profile. HTTP 401/403, extraction failure or size limits
-stop later dispatch; completed dataset answers remain. Sign in again and obtain
-new approval for another run; no hidden authentication retry is sent.
+Set workload budgets with `LLADAR_BROWSER_DISCOVERY_*`, `LLADAR_INDEPENDENT_*`, `LLADAR_PROTOCOL_*` and `LLADAR_MAX_*`.
+The two Agents repair failures in alternating material-selection and code/test rounds; changed candidates need a fresh probe. Independent mode then runs two verification questions. Exhausted budgets preserve progress and stop dispatch.
+See the [single-demonstration PRD](docs/PRD-browser-single-demonstration.zh-TW.md) and [validation record](docs/browser-single-demonstration-validation.zh-TW.md).
+Local real-model success does not establish live ChatGPT, Gemini, EIP or native Streamlit acceptance.
 
 Evaluate automatically:
 
@@ -431,10 +378,9 @@ ANSI color codes. `--no-verbose` suppresses detailed output in both the terminal
 and the log. Parent directories are created automatically; use a new filename
 for each run because existing logs are preserved.
 
-With `--page-url`, verbose output shows browser loading, calibration capture,
-request parsing, website response waits, and model answer extraction. Long waits
-show elapsed time every five seconds; completed responses show their byte count.
-These progress messages also reach `--log`; `--no-verbose` hides them.
+With `--page-url`, progress shows the current discovery stage, safe tool names and
+ledger counts, with periodic waiting messages. Tool arguments/results and model
+reasoning stay out of normal logs; `--no-verbose` hides detailed progress.
 Each LLaDAR progress message includes local time with milliseconds and a UTC
 offset, plus cumulative elapsed seconds (`[+12.345s]`). Browser waits also show
 the current stage's duration (`stage_elapsed`); the log retains the same markers.
@@ -492,7 +438,7 @@ string or `null`. There are no schema versions and unknown fields are rejected.
 - `eval`: evaluation plan, judgments, coverage, and aggregates in JSON
 - `report`: Markdown tables, interpretation, limitations, and audit appendix
 
-If browser calibration, confirmation, or verification stops before dataset
+If browser discovery, consent, or verification stops before dataset
 execution, LLaDAR writes only a redacted `<output>.run.json` blocker record; it
 does not create responses or trials files.
 
@@ -538,7 +484,12 @@ LLaDAR/
 │   ├── run_strategy.py         # Run scheduling and strategy validation
 │   ├── auto_adapter.py         # Discover, verify, and replay target-project adapters
 │   ├── project_profile.py      # Describe target projects from source evidence
-│   ├── browser_target.py       # Browser-target calibration and question replay
+│   ├── browser_target.py       # Discovery, qualification, ledger and formal dispatch
+│   ├── browser_discovery_driver.py # Generic browser/network observations and actions
+│   ├── browser_agent_loop.py   # Isolated Akasha process and owner-thread tool broker
+│   ├── browser_provenance.py   # Host turn/source and full-material validation
+│   ├── protocol_runtime.py    # Capability-free generated protocol programme VM
+│   ├── protocol_resources.py  # Public protocol documents and pinned schema assets
 │   ├── evaluation.py           # Answer judgments and deterministic aggregation
 │   ├── reporting.py            # Render saved evaluation facts and report narratives
 │   ├── semantic_graph.py       # Classify probe responses against source candidates
@@ -572,7 +523,7 @@ with `--skill` rather than editing the bundled assets.
 For target integration, also see `adapter_workspace.py`, `project_inventory.py`,
 `graph_discovery.py`, and `interfaces.py` for workspace inspection and discovery;
 `target_environment.py` and `service_runtime.py` for execution environments and
-managed services; and `playwright_driver.py`, `response_capture.py`, and
+managed services; and the discovery modules above, `response_capture.py`, and
 `answer_extraction.py` for browser operation and response extraction.
 
 ## Large inputs and model limits
@@ -582,26 +533,27 @@ language model's context limits. The current GitHub-generation budgets are:
 
 | Budget | Current maximum | Purpose |
 | --- | ---: | --- |
-| Ordinary text download | 2 MiB per response | Bound source downloads |
-| CSV/JSONL streaming download for sampling | 16 MiB per file | Bound downloaded source size |
-| Cumulative downloads | 20 MiB | Bound total transfer |
-| Sampling scan | 200,000 logical rows | Bound scanning work |
-| Retained sample | 100 rows | Bound subsequent generation work |
+| Ordinary text download | 16 MiB per response | Bound source downloads |
+| CSV/JSONL streaming download for sampling | 128 MiB per file | Bound downloaded source size |
+| Cumulative downloads | 128 MiB | Bound total transfer |
+| Sampling scan | 1,000,000 logical rows | Bound scanning work |
+| Retained sample | 1,000 rows | Bound subsequent generation work |
 
-A retained sample must also fit the selected-text and model budgets; 100 rows
+A retained sample must also fit the selected-text and model budgets; 1,000 rows
 does not guarantee that a sample fits. These limits apply to GitHub generation,
 not to every input or browser response in the pipeline.
 
 Model input/output token budgets are separate. Built-in generation assigns
-source batches of at most 24,000 characters, reduced when the configured model
-input budget is smaller. Characters, UTF-8 bytes and tokens are different units.
+source batches derived from the configured model input budget (one quarter
+of the input-token budget in characters). Characters, UTF-8 bytes and tokens are different units.
 The model receives selected or batched evidence, rather than an entire downloaded
 file in one request.
 
 Increasing `--max-input-tokens` or `--max-output-tokens` does not raise the
 download or sampling caps, or extend the provider's actual model capacity.
-Download caps are currently built-in safeguards, not dedicated CLI options.
-Raising them requires checking scanning, storage, batch merging, cross-batch
+Download and sampling budgets can be overridden with the `LLADAR_GITHUB_*`
+environment variables in `resource_limits.py`; token flags do not replace those
+byte/row budgets. When raising budgets, check scanning, storage, batch merging, cross-batch
 relationships and runtime cost.
 
 Offline tests cover a 100,000-row CSV larger than 2 MiB, CSV fields containing
@@ -650,3 +602,33 @@ candidate files. Large CSV/JSONL sources can be streamed and reproducibly sample
 sampling limits and original row IDs are included in the generation report. A
 sample is not a reproduction of the original benchmark. See the
 [implementation and validation record](docs/validation/recoverable-stages-2026-10-11.zh-TW.md).
+
+### Workload limits
+
+Model calls share the selected model profile. Browser extraction accepts both
+`--max-input-tokens` and `--max-output-tokens`; the default Gemini profile uses
+1,048,576 input and 65,536 output tokens. Unknown models use configurable fallback
+request budgets of 131,072 input and 65,536 output tokens; these are defaults,
+not a guarantee that an unknown provider supports them. Set explicit token flags
+for models with a different capacity.
+
+Memory, capture, download and waiting budgets are centralized in
+[`resource_limits.py`](src/lladar/resource_limits.py). Every entry can be overridden
+before starting LLaDAR with an environment variable named `LLADAR_` plus its key.
+Defaults include 16 MiB captured responses, 4 MiB model-input JSON, 4 MiB answer
+text, 32 MiB provider envelopes, 65,536 DOM nodes and 4,096 history snapshots per
+node. Browser demonstrations have a separate 500 MiB total recording budget
+(`LLADAR_MAX_RECORDING_BYTES`). The shared extraction deadline defaults to 3,600
+seconds. Overrides become part of the resume configuration, so keep them
+unchanged when resuming.
+
+```powershell
+$env:LLADAR_MAX_INPUT_BYTES = '8388608'
+$env:LLADAR_MAX_CAPTURE_BYTES = '33554432'
+$env:LLADAR_EXTRACTION_TIMEOUT_SECONDS = '7200'
+lladar run-agent DATASET.jsonl --page-url URL --max-output-tokens 65536
+```
+
+Pagination sizes do not truncate the corpus: follow the returned continuation.
+Schema validation, secret detection and authorized website-request counts remain
+enforced independently of workload budgets.

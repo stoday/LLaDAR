@@ -99,8 +99,8 @@ def test_unknown_model_uses_conservative_token_budget():
         temperature=0.0,
     )
 
-    assert captured["max_input_tokens"] == 16_384
-    assert captured["max_output_tokens"] == 8_192
+    assert captured["max_input_tokens"] == 131_072
+    assert captured["max_output_tokens"] == 65_536
 
 
 def test_akasha_provider_forwards_verbose_to_the_agent():

@@ -1,5 +1,8 @@
 import os
+import shutil
 from pathlib import Path
+
+import pytest
 
 from scripts import cleanup_generated
 
@@ -56,3 +59,68 @@ def test_clear_tmp_selects_directory_but_preserves_credentials(
     )
     secret.unlink()
     assert cleanup_generated.classify(temporary, set(), False, clear_tmp=True) is None
+
+
+def test_clean_root_selects_only_fixed_artifacts_and_requires_explicit_state_flag(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(cleanup_generated, "ROOT", tmp_path)
+    temporary = tmp_path / ".tmp"
+    temporary.mkdir()
+    (temporary / "auth-state.json").write_text("example")
+    work = tmp_path / "evaluation.json.work-1234abcd"
+    work.mkdir()
+    report = tmp_path / "responses.jsonl.operation-7.md"
+    report.write_text("example")
+    unrelated = tmp_path / "questions.jsonl.operation.md"
+    unrelated.write_text("keep")
+    source = tmp_path / "src"
+    source.mkdir()
+    (tmp_path / ".env").write_text("keep")
+    (tmp_path / "logs").mkdir()
+
+    assert cleanup_generated.candidates(clean_root=True) == sorted(
+        [temporary, work, report], key=str
+    )
+    assert cleanup_generated.classify(temporary, set(), False, clean_root=True) == (
+        "contains possible credentials or browser state"
+    )
+    assert cleanup_generated.classify(
+        temporary, set(), False, clean_root=True, include_captured_state=True
+    ) is None
+    assert cleanup_generated.classify(
+        work, {"evaluation.json.work-1234abcd/answer.json"}, False,
+        clean_root=True, include_captured_state=True,
+    ) == "contains tracked files"
+    assert cleanup_generated.classify(
+        source, set(), False, clean_root=True, include_captured_state=True
+    ) == "not a selected root artifact"
+    assert cleanup_generated.classify(
+        tmp_path / ".env", set(), False, clean_root=True,
+        include_captured_state=True,
+    ) == "not a selected root artifact"
+
+
+def test_linked_linux_venv_cleanup_does_not_follow_directory_link(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(cleanup_generated, "ROOT", tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "preserve.txt"
+    marker.write_text("keep")
+    venv = tmp_path / "linux-venv"
+    venv.mkdir()
+    try:
+        (venv / "external-link").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+
+    assert cleanup_generated.classify(venv, set(), False, clean_root=True) == (
+        "contains a link"
+    )
+    assert cleanup_generated.classify(
+        venv, set(), False, clean_root=True, include_captured_state=True
+    ) is None
+    shutil.rmtree(cleanup_generated.deletion_path(venv))
+    assert marker.read_text() == "keep"

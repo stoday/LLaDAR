@@ -108,6 +108,22 @@ def test_direct_adapter_limits_bound_host_tool_calls(tmp_path):
     ])
     agent = AkashaSkillAgent(skills=[str(skill)], tools={"record": lambda value: value}, model=model,
                              env_file="", temperature=0, max_input_tokens=100000,
-                             max_output_tokens=2000, verbose=False)
+                             max_output_tokens=2000, verbose=False, tool_call_limit=40)
     with pytest.raises(RuntimeError, match="tool call budget"):
         agent({"stage": "knowledge_points", "source_id": "source_001"})
+
+
+def test_default_skill_budget_allows_work_past_the_old_forty_call_limit(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+    skill = tmp_path / 'larger-budget'
+    skill.mkdir()
+    (skill / 'SKILL.md').write_text('---\nname: larger-budget\ndescription: Budget.\n---\nSubmit facts.', encoding='utf-8')
+    model = ToolScriptModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'record', 'args': {'value': str(i)}, 'id': f'call-{i}'} for i in range(41)]),
+        AIMessage(content='Done'),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={'record': lambda value: value}, model=model,
+                            env_file='', temperature=0, max_input_tokens=100000,
+                            max_output_tokens=2000, verbose=False)
+    agent({'stage': 'knowledge_points', 'source_id': 'source_001'})
+    assert agent.calls == 41

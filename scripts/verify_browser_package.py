@@ -1,4 +1,4 @@
-"""Check built archives for the direct-extraction migration; never import them."""
+"""Check built archives for autonomous browser discovery; never import them."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,9 +7,14 @@ import tarfile
 import zipfile
 
 
-REQUIRED = {"answer_extraction.py", "extraction_provider.py", "response_capture.py", "browser_target.py", "playwright_driver.py", "terminal_review.py"}
+REQUIRED = {"answer_extraction.py", "extraction_provider.py", "response_capture.py", "browser_target.py",
+            "recording_store.py", "demonstration_recorder.py", "independent_adapter.py", "independent_target.py", "independent_reference.py",
+            "browser_agent_loop.py", "browser_discovery_driver.py", "browser_provenance.py", "browser_inspection.py",
+            "browser_reference.py", "browser_materials.py", "browser_protocol_projection.py",
+            "protocol_runtime.py", "protocol_resources.py", "resource_limits.py", "terminal_review.py"}
 REMOVED = {"generated_parser.py", "parser_generation.py", "parser_runtime.py", "parser_recording.py",
-           "parser_cache.py", "parser_provider.py", "response_decoder.py"}
+           "parser_cache.py", "parser_provider.py", "response_decoder.py", "browser_operation.py",
+           "browser_adapter.py", "browser_repair.py", "dom_capture.py", "websocket_capture.py", "playwright_driver.py"}
 
 
 def verify(path: Path) -> None:
@@ -24,8 +29,8 @@ def verify(path: Path) -> None:
     sources = {Path(name).name for name in names if name.startswith("lladar/") or "/lladar/" in name}
     if not REQUIRED <= sources or REMOVED & sources:
         raise ValueError("Browser package contains missing or obsolete modules")
-    if not metadata or any("pydantic-monty" in item.lower() for item in metadata):
-        raise ValueError("Browser package metadata is missing or still requires Monty")
+    if not metadata or not all("requires-dist: pydantic-monty" in item.lower() for item in metadata):
+        raise ValueError("Browser package must declare its isolated protocol runtime dependency")
     if any(part in {".lladar", "browser-profiles", "parser-cache", ".env"} for name in names for part in Path(name).parts):
         raise ValueError("Private runtime material must not be packaged")
 
@@ -37,7 +42,7 @@ def main(argv=None) -> int:
         raise ValueError("Expected exactly one wheel and one sdist")
     for archive in archives:
         verify(archive)
-        print("Verified direct-extraction package: " + archive.name)
+        print("Verified browser-discovery package: " + archive.name)
     return 0
 
 

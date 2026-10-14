@@ -10,6 +10,7 @@ import subprocess
 
 from .interfaces import write_json
 from .project_inventory import inventory
+from .resource_limits import resource_limit
 
 
 WORKER = r'''
@@ -61,8 +62,8 @@ class CodeGraph:
             # symlinks cannot cause resolvers to read outside the managed corpus.
             excluded = {"graphify-out", "dist", "build"}
             candidates = [p for p in hashes if not set(Path(p).parts) & excluded]
-            if len(candidates) > 2000 or sum((workspace / p).stat().st_size for p in candidates) > 50_000_000:
-                raise ValueError("Graph corpus exceeds 2000 files / 50 MB; using source exploration")
+            if len(candidates) > resource_limit('GRAPH_FILES') or sum((workspace / p).stat().st_size for p in candidates) > resource_limit('GRAPH_TOTAL_BYTES'):
+                raise ValueError("Graph corpus exceeds configured file / byte budget; using source exploration")
             snapshot = evidence / "graph-source"
             snapshot.mkdir(exist_ok=True)
             for relative in candidates:

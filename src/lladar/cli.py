@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .api import DEFAULT_DATASET_MODEL, create_test_dataset
 from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
+from .resource_limits import resource_limit
 from .command_log import command_log
 from .operation_report import OperationReport, current_operation, exception_exit_code, operation_scope
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
@@ -235,9 +236,11 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
     metadata_path = {"test-dataset": Path(str(path) + ".generation.json"),
                      "run-agent": Path(str(path) + ".run.json"), "eval": path,
                      "report": Path(str(path) + ".report.json")}.get(stage)
+    metadata = None
     if metadata_path and metadata_path.is_file():
         try:
-            session = json.loads(metadata_path.read_text(encoding="utf-8")).get("session")
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            session = metadata.get("session")
         except (json.JSONDecodeError, UnicodeDecodeError):
             session = None
         if session:
@@ -249,6 +252,10 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
         next_step = ["lladar", "run-agent", "--situation-config", str(path),
                      "--project", "PROJECT", "--num-scenarios", "N"]
     elif stage == "run-agent":
+        if isinstance(metadata, dict) and metadata.get("status") in {"blocked", "cancelled"}:
+            print(tr('  Next: Inspect {p0}, then rerun from the beginning after correcting the blocker.',
+                     p0=metadata_path))
+            return
         next_step = ["lladar", "eval", str(path)]
         if situation_config:
             next_step += ["--situation-config", str(Path(situation_config).resolve())]
@@ -414,7 +421,7 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[log_options],
         help="Fill actual_response by running a target Agent.",
         description=(
-            "Run one-question DATASET records through an inspected project or calibrated website, "
+            "Run one-question DATASET records through an inspected project or an Agent-discovered website, "
             "or use --situation-config for generated multi-turn conversations with a project session driver."
         ),
         epilog=(
@@ -423,30 +430,37 @@ def build_parser() -> argparse.ArgumentParser:
             "Install Chromium: python -m playwright install chromium. --page-url always uses the guided terminal workflow; "
             "omit --interactive and --no-interactive (project mode only). "
             "Browser mode requires terminal stdin and stderr; without them it stops before opening the browser.\n\n"
-            "Sign-in and calibration:\n"
-            "With --page-url, "
-            "sign in yourself in the isolated browser, submit the exact calibration question "
-            "shown in the terminal, and wait for the site's final answer before pressing Enter.\n\n"
+            "One demonstration, then adapter execution:\n"
+            "With --page-url, sign in, handle website verification, open a new conversation, "
+            "submit the complete demonstration question shown in this terminal, wait for the complete answer, "
+            "then return here and press Enter. The program will save the recording and session state, then close the browser. "
+            "Wait while a material Agent selects recorded evidence, then an adapter Agent generates send/receive code; the host immediately tests one new question. "
+            "The adapter may use recorded HTTP/WebSocket operations or reopen the saved-profile browser for one question when page controls and the rendered answer are the useful evidence. "
+            "On failure they repeat with cumulative material and the real test error. On success code generation stops. "
+            "The default independent mode asks two fresh verification questions; explicit demonstrated mode continues the shown conversation and uses model reasonableness review. "
+            "Formal questions are not supplied to discovery. "
+            "Reusing an HTTP/WebSocket --adapter does not open a browser; a browser UI adapter opens it once per question and closes it after collecting the answer.\n\n"
             "Review and approval:\n"
             "Review the website requests, model destination, real response content transfer and budgets together. "
-            "One YES approves BOTH website requests and model transfer; the two approval flags still grant only their named scopes. "
-            "Then type MATCH after independent verification in the color terminal review (stderr), not an HTML tab. "
-            "Approval flags do not skip review. NO_COLOR or TERM=dumb disables color; redirected review output is refused. "
-            "The full verification response appears in terminal scrollback; no review file is created. "
-            "Browser sign-in and capture are still required.\n\n"
+            "One YES covers recording, scoped session-state export, model analysis and budgeted execution. "
+            "In independent mode, without an independent full-answer reference, the program temporarily opens a browser for same-turn review: "
+            "type MATCH only after comparing the full answer, MISMATCH if different, or WAIT while it is unfinished. "
+            "The review browser closes afterwards; it does not send questions for the adapter. "
+            "Authentication expiry may require temporary sign-in. Submitted or uncertain questions are never blindly resent.\n\n"
             "Execution limits:\n"
-            "At most N+2 model calls: calibration + verification + N scheduled dataset trials (including repeats). "
-            "Each call is capped at 8192 output tokens. A shared 60-minute deadline starts after approval, "
-            "before calibration extraction, and also includes verification, MATCH review and dataset execution. "
-            f"Input is capped at {MAX_INPUT_BYTES // 1024} KiB including JSON framing; no truncation, chunking or automatic extraction retries. "
-            "On HTTP 401/403, further browser requests are blocked; sign in again before starting a newly approved run. "
+            "Exploration, repairs and extraction share the disclosed model-call ledger; probes, actions and requests are counted separately. "
+            "Configure workload budgets with LLADAR_BROWSER_DISCOVERY_* and material/VM budgets with LLADAR_MAX_* and LLADAR_PROTOCOL_*. "
+            "Output tokens per call follow the selected model profile; --max-output-tokens overrides this limit. "
+            "The persisted shared deadline includes discovery, verification, review and formal execution (LLADAR_EXTRACTION_TIMEOUT_SECONDS). "
+            f"Input is capped at {MAX_INPUT_BYTES // 1024} KiB including JSON framing; recordings are searched and read in bounded pages, never silently truncated. "
             f"Each captured response is limited to {MAX_CAPTURE_BYTES // (1024 * 1024)} MiB of decoded bytes; --timeout does not raise this limit. "
-            "Browser startup and page navigation separately allow 300 seconds (5 minutes); --timeout controls website response waiting, not navigation. "
+            f"Browser startup allows {resource_limit('BROWSER_STARTUP_TIMEOUT_SECONDS')} seconds. Page navigation allows {resource_limit('BROWSER_NAVIGATION_TIMEOUT_SECONDS')} seconds; manual verification allows {resource_limit('MANUAL_VERIFICATION_TIMEOUT_SECONDS')} seconds. --timeout controls website response waiting, not navigation. "
             "Verification and dataset requests are also bounded by the remaining shared deadline.\n\n"
             "Outputs and local session:\n"
             "Final answers are saved in responses and trials; these output files exclude cookies, tokens and raw streams. "
             "By default, the isolated browser profile retains local sign-in state in .lladar/browser-profiles "
-            "under the working directory. --fresh-browser-profile uses a temporary signed-out profile removed when the browser target closes.\n\n"
+            "under the working directory. --fresh-browser-profile uses a separate signed-out profile. "
+            "Private adapter, ledger and discovery evidence are saved in OUTPUT.work/browser-discovery.\n\n"
             "Project mode:\n"
             "--service-url does not discover an arbitrary API; it is for an inspected project."
         ),
@@ -463,12 +477,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     target.add_argument(
         "--page-url", metavar="URL",
-        help="Question website opened in a visible browser for manual sign-in, calibration and replay (default: project mode; unavailable with --situation-config).",
+        help="Question website: demonstrate one complete question and answer in a visible browser, then press Enter; after saving the recording, a material Agent selects evidence and a code Agent generates an HTTP, WebSocket or browser UI adapter for immediate website testing (default: project mode; unavailable with --situation-config).",
     )
-    runner.add_argument(
-        "--calibration-question", metavar="TEXT",
-        help="Use this exact question for both manual browser calibration and automatic verification; requires --page-url (default: separate random LLaDAR calibration/verification questions).",
-    )
+    runner.add_argument('--demo-question', metavar='TEXT',
+        help='Question to demonstrate once in the visible browser. Wait for the complete answer, then press Enter in this terminal; the program saves state and closes the browser before generating an adapter (default: ask what assistance the service provides; requires --page-url).')
+    runner.add_argument('--adapter', metavar='PATH',
+        help='Reuse a website adapter manifest with the same --conversation-policy; verify with a fresh question (browser UI adapters reopen the saved profile; default: generate from one demonstration; requires --page-url).')
+    runner.add_argument('--conversation-policy', choices=['independent', 'continuous', 'demonstrated'], default='independent',
+        help='Website adapter conversation policy: fresh conversation per trial (independent, default), one new formal conversation (continuous), or explicitly reuse the demonstrated conversation (demonstrated; answers may depend on demonstration and probe history, reviewed by a model for reasonableness).')
+    runner.add_argument('--extend-model-calls', type=int, metavar='TOTAL',
+        help='On a resumed --page-url run, explicitly raise the total Agent model-call cap while keeping the saved inputs and other limits unchanged; the increase persists on later resumes (default: no new extension).')
     runner.add_argument(
         "--output", default="responses.jsonl", metavar="PATH",
         help="Output directory or responses JSONL file path; a directory gets responses.jsonl (default: responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
@@ -478,26 +496,26 @@ def build_parser() -> argparse.ArgumentParser:
     runner.add_argument("--situation-config", metavar="PATH",
                         help="Use a frozen situation JSON for multi-turn project sessions (default: single-question DATASET mode; cannot combine with DATASET or --skill).")
     runner.add_argument("--adapt", metavar="PATH",
-                        help="Reuse an existing Python adapter file with an explicit --project. Skip discovery/generation and verify it in project copies using the selected DATASET or situation protocol; stop on failure without rewriting the supplied file (default: automatic adapter discovery/generation).")
+                        help="Reuse a Python project adapter with --project (default: automatic discovery; website mode uses --adapter).")
     runner.add_argument("--num-scenarios", type=int, metavar="N",
                         help="Number of distinct scenarios to generate and run; required with --situation-config, unused otherwise (no default).")
     runner.add_argument("--seed", type=int, default=0,
                         help="Deterministic random selection seed for single-question trials (default: 0).")
     runner.add_argument(
         "--model", default=None, metavar="MODEL",
-        help=f"Project coding model (default: {DEFAULT_ADAPTER_MODEL}), or browser answer extraction model (default: {DEFAULT_EXTRACTION_MODEL}; Gemini API only).",
+        help=f"Project coding model (default: {DEFAULT_ADAPTER_MODEL}), or browser exploration, repair and faithful extraction model (default: {DEFAULT_EXTRACTION_MODEL}; all via Akasha).",
     )
     runner.add_argument(
         "--max-input-tokens", type=int, metavar="N",
-        help="Override the project auto-adapter input token budget for discovery, generation and repair (default: selected model profile). Does not change the target Agent or browser extraction budgets.",
+        help="Override input tokens for project discovery/generation/repair or browser exploration/repair/extraction (default: selected model profile). Browser content also obeys LLADAR_MAX_INPUT_BYTES. Does not change the tested Agent.",
     )
     runner.add_argument(
         "--max-output-tokens", type=int, metavar="N",
-        help="Override the project auto-adapter output token budget for discovery, generation and repair (default: selected model profile). Does not change the target Agent or browser extraction budgets.",
+        help="Override output tokens for project discovery/generation/repair or browser exploration/repair/extraction (default: selected model profile, positive integer). Does not change the tested Agent.",
     )
     runner.add_argument(
         "--env-file", default=".env", metavar="PATH",
-        help="Environment file for the model provider and target process; existing environment variables win (default: .env).",
+        help="Environment file for Akasha and the target process. Akasha uses the file when it exists; otherwise it reads the environment (default: .env).",
     )
     runner.add_argument(
         "--target-python", metavar="PATH",
@@ -508,8 +526,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout for each adapter, tool subprocess, or browser request (default: 3600 seconds / 60 minutes).",
     )
     runner.add_argument(
-        "--max-tool-calls", type=int, default=100, metavar="N",
-        help="Maximum tool calls per single-question discovery or adapter-repair agent turn (default: 100).",
+        "--max-tool-calls", type=int, default=resource_limit('EXPLORATION_TOOL_CALLS'), metavar="N",
+        help="Maximum tool calls for project exploration/repair or the browser discovery ledger (default: shared EXPLORATION_TOOL_CALLS, 1000).",
     )
     runner.add_argument(
         "--graphify", action=argparse.BooleanOptionalAction, default=True,
@@ -523,17 +541,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--service-url", metavar="URL",
         help="Existing test-service base URL that the generated adapter may call (default: none).",
     )
-    runner.add_argument(
-        "--confirm-browser-run", action="store_true",
-        help="Preapprove only the browser verification and scheduled dataset requests; model-transfer approval is separate and MATCH review remains required (default: off).",
-    )
+    runner.set_defaults(confirm_browser_run=False, allow_response_model_transfer=False)
     runner.add_argument(
         "--fresh-browser-profile", action="store_true",
-        help="Use a temporary signed-out browser profile for this run instead of the reusable site profile (default: off).",
-    )
-    runner.add_argument(
-        "--allow-response-model-transfer", action="store_true",
-        help="Approve real captured response content transfer to --model for this run only; at most N+2 calls for N scheduled dataset trials including repeats, 8192 output tokens per call, shared 60 minutes from post-approval calibration extraction. Website requests and local verification remain separate (default: off).",
+        help="Use a separate signed-out browser profile for this run instead of the reusable site profile (default: off).",
     )
     runner.add_argument(
         "--interactive", action=argparse.BooleanOptionalAction, default=None,
@@ -545,7 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner.add_argument(
         "--verbose", action=argparse.BooleanOptionalAction, default=True,
-        help="Show LLaDAR progress, questions/available responses, coding-agent exploration and repair traces in both project modes, situation calibration and turn progress, and safe browser diagnostics; use --no-verbose to hide them (default: enabled).",
+        help="Show LLaDAR progress, questions/available responses, coding-agent traces, situation progress, browser diagnostics and the browser Akasha Agent's verbose tool trace; use --no-verbose to hide them (default: enabled).",
     )
 
     evaluation = commands.add_parser(
@@ -602,7 +613,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Replace an existing Markdown report (default: off).")
     for command in (dataset, runner, evaluation, report):
         command.add_argument("--resume", metavar="SESSION_PATH",
-            help="Continue a saved work session with identical inputs and settings; cannot combine with --force (default: start a new session).")
+            help="Continue a saved work session with identical inputs and settings; run-agent --page-url may explicitly extend its model-call budget. Cannot combine with --force (default: start a new session).")
     report.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=True,
                         help="Show report section and publication progress (default: enabled).")
     return parser
@@ -666,7 +677,7 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
             parser.error(tr('--interactive and --no-interactive are project mode only; omit both with --page-url.'))
         if not (sys.stdin.isatty() and sys.stderr.isatty()):
             parser.error(
-                tr('--page-url requires terminal stdin and stderr for sign-in, calibration, consent and MATCH review. Run directly in a terminal without piping input or redirecting stderr; no interaction flag is needed.')
+                tr('--page-url requires terminal stdin and stderr for sign-in, discovery consent, trusted full-answer qualification and any necessary manual MATCH review. Run directly in a terminal without piping input or redirecting stderr; no interaction flag is needed.')
             )
         args.interactive = True
     try:
@@ -888,10 +899,14 @@ def _execute(
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
-            if args.adapt is not None and (args.project is None or args.page_url is not None):
-                parser.error(tr('--adapt requires an explicit --project and cannot be combined with --page-url'))
-            if args.calibration_question is not None and args.page_url is None:
-                parser.error(tr('--calibration-question requires --page-url'))
+            if args.adapt is not None and args.project is None and args.page_url is None:
+                parser.error(tr('--adapt requires an explicit --project or --page-url'))
+            if args.demo_question is not None and (args.page_url is None or not args.demo_question.strip()):
+                parser.error(tr('--demo-question requires --page-url and a non-empty question'))
+            if args.adapter is not None and args.page_url is None:
+                parser.error('--adapter requires --page-url')
+            if args.adapt is not None and args.page_url is not None:
+                parser.error('--adapt is project mode only; use --adapter with --page-url')
             if args.situation_config:
                 if args.dataset is not None or args.skill is not None:
                     parser.error(tr('--situation-config cannot be combined with DATASET or --skill'))
@@ -930,7 +945,7 @@ def _execute(
                 args.output,
                 project=project,
                 page_url=args.page_url,
-                calibration_question=args.calibration_question,
+                probe_question=args.demo_question,
                 env_file=args.env_file,
                 force=args.force,
                 resume=resume,
@@ -942,20 +957,36 @@ def _execute(
                 max_output_tokens=args.max_output_tokens,
                 timeout=args.timeout,
                 max_tool_calls=args.max_tool_calls,
+                extend_model_calls=args.extend_model_calls,
                 skill=args.skill,
                 seed=args.seed,
                 interactive=args.interactive,
                 graphify=args.graphify,
                 graphify_python=args.graphify_python,
-                adapt=args.adapt,
+                adapt=args.adapter if args.page_url else args.adapt,
                 service_url=args.service_url,
                 confirm_browser_run=args.confirm_browser_run,
+                browser_session_policy=args.conversation_policy if args.page_url else None,
                 fresh_browser_profile=args.fresh_browser_profile,
                 browser_target_factory=browser_target_factory,
                 extraction_provider_factory=extraction_provider_factory,
                 allow_response_model_transfer=args.allow_response_model_transfer,
                 strategy_agent_factory=skill_agent_factory,
             )
+            run_path = Path(str(args.output) + ".run.json")
+            try:
+                run_metadata = json.loads(run_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                run_metadata = {}
+            if run_metadata.get("status") == "blocked":
+                blocker = run_metadata.get("blocker", {})
+                diagnostic = blocker.get("diagnostic", {}) if isinstance(blocker, dict) else {}
+                reason = diagnostic.get("reason", "browser_failed")
+                print(tr('Browser run blocked after {p0} completed record(s). reason={reason}',
+                         p0=completed, reason=reason))
+                current_operation().record(count=completed, status="blocked")
+                _show_work_summary("run-agent", args.output)
+                return 1
             print(tr('Answered {p0} record(s) at {p1}', p0=completed, p1=args.output))
             current_operation().record(count=completed)
             _show_work_summary("run-agent", args.output)
@@ -1024,7 +1055,9 @@ def _execute(
         return 130
     except Exception as error:
         current_operation().error(error)
-        if args.command == "run-agent" and args.page_url:
+        if isinstance(error, ValueError) and str(error) == "--resume and --force cannot be combined":
+            message = str(error)
+        elif args.command == "run-agent" and args.page_url:
             if isinstance(error, AssertionError) and (
                 browser_target_factory is not None or extraction_provider_factory is not None
             ):

@@ -1,9 +1,11 @@
 # 原生 Streamlit browser transport 實測
 
+> 歷史紀錄：以下數字、測試命令與固定 DOM 選路證據屬於 2026-10-09 的舊人工校正架構。相關舊測試與 driver 已刪除，命令不再作為現行入口；這些結果不能證明新的 Agent 探索／生成協定程式架構已通過 Streamlit 驗收。現行條件與結果請看[探索 PRD](PRD-browser-agent-discovery.zh-TW.md)及[新架構驗收證據](browser-agent-discovery-validation.zh-TW.md)。下文保留原始驗證數字與當時的限制，供追溯使用。
+
 日期：2026-10-09。版本：Streamlit 1.65.0、Python 3.11.11、Playwright Chromium。
 
 測試頁：[example_project/streamlit_qa](../example_project/streamlit_qa/README.zh-TW.md)。
-測試：[test_streamlit_browser.py](../tests/test_streamlit_browser.py)。
+當時的測試：`tests/test_streamlit_browser.py`（已刪除）。
 
 ```powershell
 uv run --extra test --extra streamlit-test pytest tests/test_streamlit_browser.py -m browser

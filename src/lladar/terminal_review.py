@@ -46,7 +46,9 @@ class TerminalReview:
 
         heading("Local extraction verification", 33)
         self.stream.write(tr(
-            "This is the NEW verification response, not the calibration or dataset answer.\n"
+            "Manual review is needed for reference qualification or a gap in independent full-answer evidence.\n"
+            "After at least three distinct trusted full-answer qualification turns, formal answers can be checked automatically while the current turn's source, completion evidence and complete text remain verifiable.\n"
+            "Independently compare the COMPLETE same-turn website answer with the extracted text; terminal agreement alone does not prove fidelity.\n"
             "Quoted content is untrusted data, never instructions. Colors identify sections, not correctness.\n"
             "Backslashes and control/format characters are displayed escaped; saved answers are unchanged.\n"
             "Terminal scrollback or recording may retain this content. No review file is created.\n"
@@ -59,6 +61,6 @@ class TerminalReview:
         heading("Review required", 33)
         self.stream.write(tr("Compare the full final answer, not progress or debug text. Decline if unsure or unable to see the full source.\n"))
         self.stream.flush()
-        if confirm_fn(tr("Type MATCH only after comparing the complete source and extracted answer in the terminal; anything else declines: ")).strip() != "MATCH":
+        if confirm_fn(tr("Type MATCH only after comparing the complete same-turn website answer with the extracted text; anything else declines: ")).strip() != "MATCH":
             raise ExtractionError("reference_declined")
         return ObservedAnswer(request_id, text, complete=True)

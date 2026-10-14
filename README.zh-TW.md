@@ -136,9 +136,9 @@ lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 
 - `--project PATH`：從專案程式碼與文件理解對外入口。只有專案也可能足夠：啟動資訊與必要執行環境設定完整時，LLaDAR 可以在隔離的專案副本中啟動服務、測試，最後只關閉自己啟動的服務。
 - `--project PATH --service-url URL`：仍檢查專案，但改用已啟動的測試服務。URL 提供的是**服務基底位址**，不是啟動指令或 API 契約；HTTP 方法、路徑、Payload、驗證需求與回應格式仍從專案理解，不會啟動或關閉該既有服務。
-- `--page-url URL`：不必提供專案原始碼，改用正常問答網頁。在 LLaDAR 瀏覽器登入並送出校正題後，錄製請求供重播，再由模型從擷取的回應中抽取答案。
+- `--page-url URL`：不必提供專案原始碼，改用正常問答網頁。在 LLaDAR 瀏覽器登入後，由 Akasha Agent 探索實際通訊與頁面操作、資格化協定／會話適配程式，再由無工具模型忠實抽取擷取的回答。
 
-原生 WebSocket 支援文字／JSON 問句 frame，但伺服器須在每題回答後正常關閉連線（code 1000）。校正時，持續開啟或二進位協定可退回同次互動的 DOM 路徑，但必須確認本題答案及完成狀態。選定路徑後，驗證與資料集測試固定使用；失敗停止後續派送。DOM 支援原生 Streamlit chat（已驗證 1.65.0），以及具有唯一輸入 placeholder、具名送出按鈕、具名對話 log、user／assistant 訊息角色及 busy→idle 完成狀態的表單式聊天頁，包含具名同源 iframe。其他頁面結構須另行適配；文字不再變動不代表完成。
+HTTP、持續開啟的 SSE、原生文字／二進位 WebSocket 與 DOM 收取後援共用探索工具及資格化條件。Agent 調查實際 session ID、封包結構與完成證據，不預設網站 schema 或固定 selector。本機 fixture 驗證這些通訊路徑；各真實網站的驗收證據另外記錄。
 
 已啟動測試服務的範例：
 
@@ -162,70 +162,43 @@ skill 只會取得唯讀 cases，透過 host callback 排定執行；它不會�
 兩個隨套件提供的 run skill 會直接在本機執行已封裝並留有雜湊證據的確定性
 `strategy.py`，不會只為了計算排程而呼叫模型；自訂 run skill 仍由設定的 skill Agent 解讀。
 
-若只有已登入的問答網頁，不必找 API method、payload 或 Cookie。先安裝與目前
-Playwright 版本相符的 Chromium，然後提供「問答頁面 URL」：
+若只有已登入的問答網頁，提供 `--page-url` 即可開始一次完整示範，不必自行找 API、Cookie 或 selector。
 
 ```bash
 python -m playwright install chromium
-lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl
+lladar run-agent dataset.jsonl --page-url https://example.test/chat --output responses.jsonl --lang zh-TW
 ```
 
-可加上 `--calibration-question "你們的客服服務時間是什麼？"`，讓手動校準與自動驗證
-原樣使用同一句正常問句，不附加識別碼。未指定時保留原有隨機 `LLaDAR` 校準與驗證
-問句。此引數僅適用於 `--page-url`，不可為空或全空白。
+請直接在互動終端執行。程式先揭露網站、實際模型目的地、資料範圍與額度；輸入 `YES` 後開啟可見瀏覽器。
+在這個瀏覽器連續完成登入、網站驗證、進入服務、開新對話、送出終端顯示的完整示範題並等待完整回答，最後才回終端按 Enter。
+不用分三段操作，也不用開 F12。程式保存事件、快照與必要登入／會話狀態後，會關閉錄製瀏覽器。
 
-網站模式固定引導你完成登入、校正、授權與 `MATCH`，不必選擇互動模式。
-不要加 `--interactive` 或 `--no-interactive`：這兩個旗標僅供專案模式使用，
-與 `--page-url` 合用會被拒絕。請直接在 stdin、stderr 都連接終端的環境執行；
-若以管線提供輸入或重新導向 stderr，CLI 會在開瀏覽器前停止，核准旗標也不會略過此要求。
+宿主先建立有界的錄製索引，材料 Agent 一次選出可能有用的事件與理由。adapter Agent 收到所選材料包後，只能提交完整 `adapt(payload)` 程式，或具體指出缺少哪項觀測；它沒有錄製搜尋或分頁讀取工具。宿主取得程式便先在本機檢查新題是否進入送題動作，通過後立即用真站試跑。失敗診斷與前版程式交回 adapter Agent 再提交；只有明確缺材料才回材料 Agent。初次選材與提交各限一次模型呼叫，未提交就停止並回報，不會在同一階段反覆分析。第一次真站試跑通過就停止生成。
+宿主經 Monty VM 執行受控的 HTTP／SSE／WebSocket 操作計畫。預設獨立對話模式在試跑通過後另送兩個全新驗證題，才送正式問題。
+正式執行不依賴可見或 headless 瀏覽器。協定能力不足時列出缺口，不自動改成 DOM 派送。
 
-每次網站請求預設最多等待 60 分鐘（`--timeout 3600`）。
-瀏覽器啟動、首次導頁與重新導頁各自最多等 5 分鐘（300 秒）；
-`--timeout` 不會縮短或延長導頁等待時間。
-瀏覽器模式由沒有工具權限的模型讀取經同意的完整回應，還原原本的答案。
-僅瀏覽器模式預設使用 `gemini:gemini-3.8-flash`，可用 `--model gemini:MODEL` 指定；
-模型是否可用仍取決於供應商帳號。
+`--demo-question "這項服務能提供哪些協助？"` 可自訂示範題，請複製含唯一標記的整題。
+`--conversation-policy independent` 預設每個正式試次建立新對話；`continuous` 在新的正式對話累積歷史，兩者均排除示範及驗證歷史。`--conversation-policy demonstrated` 明示沿用示範對話，以 `akasha.ask` 判斷試跑和正式回答是否具體、切題且合理；回答可能受示範與試跑歷史影響，不能宣稱支援建立新對話。
+`--model` 選擇探索／修復模型，預設 `gemini:gemini-3.8-flash`，與受測網站模型分開；`--max-input-tokens`／`--max-output-tokens` 覆寫模型 profile。
+探索 Agents 不讀取未來正式題目或預期答案，也不代答、摘要或改寫網站答案。
 
-LLaDAR 開啟專用 Chromium 視窗，由你自行登入、原樣送出校正題，等答案完成才按 Enter。
-一次看完網站請求、模型目的地及預算後，輸入一次 `YES`，同時核准一次驗證題、
-畫面列出的資料集請求，以及將**真實回應內容（包含內部答案）**傳到
-`https://generativelanguage.googleapis.com`。請先確認組織允許這些內容外傳。
-`--confirm-browser-run` 與 `--allow-response-model-transfer` 各自核准網站請求與回應傳送；
-只有一個旗標時仍缺另一項授權，兩者都提供才免授權提示，但不能跳過核對。
+已授權的網站原文與選定服務必要狀態，包括 headers、Cookie／Authorization、body、客戶端 JavaScript、binary 及需要的 storage 項目，可供模型查閱。
+原文與狀態放在本機私有工作產物；`.env`、provider key、完整瀏覽器設定檔及其他網站 storage 不交給 Agent。登入、MFA／CAPTCHA 由你處理，DOM 密碼／OTP 值不錄製。
+`--verbose` 顯示 Agent 工具 trace，可能包含已授權原文，保存的日誌應視為私有資料；`--no-verbose` 仍保留必須操作的提示。
 
-模型從環境或 `--env-file` 讀取 `GEMINI_API_KEY`／`GOOGLE_API_KEY`，
-取得校正及同意後才初始化。若排程共有 N 次試跑（重複題也計次），模型最多呼叫 **N+2 次**：
-校正、驗證，以及每次試跑各一次；每個回應不重試，每次最多 8,192 輸出 tokens，
-所有呼叫及中間驗證共用同意後的 60 分鐘期限，不自動跟隨重新導向。
-這些限制約束用量，不保證固定金額。內建排程仍在本機執行；自訂 run skill 可能另用模型。
+每題都檢查來源與完成。若無獨立全文基準，程式會暫時開網站供你核對同回合原文：符合輸入 `MATCH`，不符輸入 `MISMATCH`，未完成輸入 `WAIT`。
+三個不同可信回合確認同一個原生 JSON 完整答案位置後，該位置及本題自然傳輸完成證據仍有效時，可由獨立宿主 reader 自動核對正式答案；其他來源仍可能需要人工核對。
+核對或重新登入後即關閉瀏覽器；adapter 的正式送題與收取仍獨立執行。
 
-送出資料集前，直接在 terminal（stderr）比較新驗證題的抽取全文與完整錄製回應，
-忠實且完整才輸入 `MATCH`，不再開 HTML 核對頁。核准旗標不能跳過此步驟；
-CLI 在任何瀏覽器操作前就會確認輸入與核對輸出都連接終端。
-青色標題表示原始回應、紫色表示抽取答案、黃色表示提醒；顏色不代表正確性。
-`NO_COLOR` 或 `TERM=dumb` 改用純文字。完整內容不截斷，逐行引用，反斜線及控制／格式字元
-以可見轉義呈現，不改動保存的答案。終端捲動紀錄或錄影可能保留私密內容。
-登入與擷取仍需要 Chromium；此調整不是無瀏覽器模式，也不新增正式題目的逐題 MATCH。
-新請求可以回答相同文字，但把舊錄製改名不算獨立驗證。
-模型回傳合法格式、或一次核對通過，**都不保證後續每題忠實，也不代表目標答案正確**。
-評分仍另外執行 `lladar eval`。
+私人 adapter、記錄索引、狀態、帳本與資格證據位於 `OUTPUT.work/browser-discovery`。
+用 `--adapter PATH/adapter/manifest.json` 重用，預設不開瀏覽器，但仍需新題驗證；登入失效且無法更新才要求暫時登入。
+用 `--resume OUTPUT.work` 續作；已提交或結果未知的題目先恢復原回合，不盲目重送。
+舊瀏覽器旗標 `--probe-question`／`--browser-session-policy` 與舊 adapter 格式不相容。
 
-支援文字、JSON／+json、NDJSON 與 SSE 作為模型輸入。模型不得自行回答問題、摘要、
-修正答案或改動數字、否定詞、空白與 Markdown；宿主只檢查來源、完成狀態、容量及固定輸出格式，
-不綁定答案欄位名稱。串流需實際關閉，或校正時有本次回覆的人工完成確認；
-自動重播若一直不關閉，會逾時停止，不靠終止事件名稱猜答案。
-
-擷取上限為 HTTP 解壓後的 1 MiB；模型輸入另有較嚴格的 **120 KiB UTF-8 JSON**
-上限（含封裝），在本機 128 KiB 位元組預算內為固定 prompt 保留空間。
-這不是對供應商 tokenizer 或宣告 context window 的保證。超限不截斷、不摘要、不自動分段。
-回應若疑似含憑證，或回顯已知 request 憑證，會整筆阻擋傳輸；保守偵測不能保證找出所有敏感內容。
-不傳 Cookie、headers、request payload、profile 或標準答案；一般產物不保存原始回應、
-完整 prompt、模型診斷或思考內容。最終答案仍以 `actual_response` 存入 responses／trials；
-run sidecar 只記錄安全狀態、模型與 prompt 版本、次數、時間及供應商提供的 token 用量，缺值為未知。
-
-登入狀態沿用 `.lladar/browser-profiles`；`--fresh-browser-profile` 改用暫時的未登入 profile，
-不複製日常 Chrome／Edge。401/403、抽取失敗或超限會停止後續送題並保留已完成答案；
-需要重新登入、取得新同意再執行，不暗中重送。
+工作量由 `LLADAR_BROWSER_DISCOVERY_*`、`LLADAR_INDEPENDENT_*`、`LLADAR_PROTOCOL_*`、`LLADAR_MAX_*` 集中設定。
+失敗證據交回同一 Agent 修復，候選改版後重做試跑及兩題驗證；額度耗盡就保存進度並停止。
+新版規格見[一次示範 PRD](docs/PRD-browser-single-demonstration.zh-TW.md)；驗證範圍見[新版驗證紀錄](docs/browser-single-demonstration-validation.zh-TW.md)。
+本機真模型成功不能代替 ChatGPT、Gemini、EIP 與原生 Streamlit 的實際網站驗收。
 
 自動評估：
 
@@ -348,8 +321,10 @@ log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控�
 `--no-verbose` 會同時減少終端和 log 的詳細訊息。自動建立上層目錄；既有 log
 會保留，每次執行請指定新檔名。
 
-`--page-url` 的 verbose 輸出會顯示瀏覽器載入、校準擷取、請求解析、等待網站回應與
-模型答案擷取。長時間等待每 5 秒顯示已等待時間，收到完整回應時顯示位元組數。
+`--page-url` 的 verbose 輸出會顯示目前探索階段、安全的工具名稱與帳本用量，
+等待期間定期顯示進度。工具參數、工具回傳內容與模型推理全文不進入一般日誌。
+等待使用者按 Enter、輸入 YES 或 MATCH 時，暫停背景進度輸出。
+模型擷取顯示輸入檢查、等待模型與結果驗證；正式回合僅在獨立全文證據不足時要求人工核對。
 這些進度也會寫入 `--log`；`--no-verbose` 會隱藏。
 每則 LLaDAR 進度附上含毫秒與 UTC 時差的本地日期時間，以及累計耗時（`[+12.345s]`）。
 瀏覽器等待訊息另以 `stage_elapsed` 顯示當前階段耗時；log 保留相同時間標示。
@@ -457,7 +432,8 @@ skill 載入實作在 `skill_agent.py`，方法指令則在 `skill_assets/*/SKIL
 若要了解受測專案整合，可接著查看 `adapter_workspace.py`、`project_inventory.py`、
 `graph_discovery.py` 與 `interfaces.py` 的工作目錄檢視及探索流程；
 `target_environment.py` 與 `service_runtime.py` 的執行環境及服務管理；以及
-`playwright_driver.py`、`response_capture.py` 與 `answer_extraction.py` 的瀏覽器操作與回答擷取。
+`browser_discovery_driver.py`、`browser_agent_loop.py`、`browser_provenance.py`、
+`protocol_runtime.py`、`response_capture.py` 與 `answer_extraction.py` 的探索、來源核對及回答抽取。
 
 ## 大資料與模型限制
 
@@ -466,16 +442,16 @@ LLaDAR 的下載與抽樣上限是程式設定的保護額度，並非大語言�
 
 | 額度 | 目前上限 | 用途 |
 | --- | ---: | --- |
-| 一般文字下載 | 每次回應 2 MiB | 控制來源下載量 |
+| 一般文字下載 | 每次回應 16 MiB | 控制來源下載量 |
 | CSV／JSONL 串流抽樣下載 | 單檔 16 MiB | 控制來源檔案大小 |
-| 累計下載 | 20 MiB | 控制總傳輸量 |
-| 抽樣掃描 | 20 萬個邏輯資料列 | 控制掃描工作量 |
+| 累計下載 | 128 MiB | 控制總傳輸量 |
+| 抽樣掃描 | 100 萬個邏輯資料列 | 控制掃描工作量 |
 | 抽樣保留 | 100 列 | 控制後續生成工作量 |
 
 抽樣仍須符合選取文字與模型額度；100 列不代表一定放得進模型。
 上述限制適用於 GitHub 生成，不是四階段所有輸入或瀏覽器回答的共用上限。
 
-模型的輸入／輸出 token 額度另外控制。內建生成由程式分配每批最多 24000 字元的
+模型的輸入／輸出 token 額度另外控制。內建生成由程式分配按模型輸入 token 預算四分之一計算字元額度的
 來源範圍，模型輸入額度較小時會縮小批次。字元、UTF-8 位元組與 token 是不同單位；
 下載大檔案不等於把整份檔案一次交給模型。
 
@@ -511,3 +487,28 @@ Python API 接受 `resume=Path(...)`。一般執行仍可使用 `--force`；只�
 
 內建生成支援分批；GitHub CSV／JSONL 支援串流抽樣，但有下載、掃描與模型額度限制。
 抽樣不等於完整 benchmark 重現。實際範圍见[實作與驗收紀錄](docs/validation/recoverable-stages-2026-10-11.zh-TW.md)。
+
+### 工作量額度設定
+
+各模型呼叫共用所選模型 profile。瀏覽器抽取支援 `--max-input-tokens` 與
+`--max-output-tokens`；預設 Gemini 為 1,048,576 輸入與 65,536 輸出 tokens。
+未知模型的可設定備用請求額度為 131,072／65,536，這不代表該 provider 保證支援；
+實際能力不同時請明確指定 token 參數。
+
+內容大小、下載、DOM 與等待額度集中於
+[`resource_limits.py`](src/lladar/resource_limits.py)。每個項目皆可在啟動前以
+`LLADAR_` 加上項目名稱的環境變數覆寫，不必再改程式。預設擷取 16 MiB、
+模型輸入 JSON 4 MiB、回答文字 4 MiB、provider 回傳封裝 32 MiB、DOM 65,536 節點、
+每節點 4,096 次歷史快照、抽取共用期限 3,600 秒。明確覆寫會納入續跑設定，續跑時需保持相同值。
+
+```powershell
+$env:LLADAR_MAX_INPUT_BYTES = '8388608'
+$env:LLADAR_MAX_CAPTURE_BYTES = '33554432'
+$env:LLADAR_EXTRACTION_TIMEOUT_SECONDS = '7200'
+lladar run-agent DATASET.jsonl --page-url URL --max-output-tokens 65536
+```
+
+瀏覽器示範錄製另有獨立的 500 MiB 總額度（`LLADAR_MAX_RECORDING_BYTES`）；單次回應擷取上限仍為 16 MiB。
+
+工具分頁不會截掉整份內容，可用回傳的下一頁位置繼續讀取。資料格式檢查、
+憑證偵測與已授權網站請求次數，仍獨立於工作量額度執行。
