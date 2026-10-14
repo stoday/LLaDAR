@@ -582,7 +582,8 @@ def test_sensitive_dom_attribute_name_blocks_entire_inspection_before_pager_can_
             name="data-private-cookie-key-material" if attribute=="known-cookie" else "data-eyJsynthetic.eyJsynthetic.signature"
             driver.page.evaluate("name=>document.querySelector('#open').setAttribute(name,'public value')",name)
             snapshot = driver.inspect()
-            assert name in json.dumps(snapshot)
+            # HTML normalizes attribute names to lowercase.
+            assert name.lower() in json.dumps(snapshot)
             assert BrowserInspectionPager(4096).capture(snapshot)
         finally:
             driver.close()

@@ -73,7 +73,9 @@ def cleanup_saved_service(workspace: Path, request_id: str | None = None, *,
                     pass
             except ConnectionRefusedError:
                 break
-            except TimeoutError:
+            except (TimeoutError, ConnectionResetError):
+                # Teardown may reset an in-flight probe before the listener
+                # refuses connections. Confirm closure on a subsequent probe.
                 pass
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Service on port {state['port']} did not stop")

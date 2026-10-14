@@ -12,6 +12,29 @@ import pytest
 from lladar import service_runtime
 
 
+def test_saved_service_cleanup_retries_reset_before_confirming_shutdown(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    state = dict(pid=12345, port=43210, stopped=False, request_id='current')
+    path = tmp_path / 'lladar-service.json'
+    path.write_text(json.dumps(state), encoding='utf-8')
+    attempts = []
+
+    def connect(address, timeout):
+        assert json.loads(path.read_text(encoding='utf-8')) == state
+        attempts.append(address)
+        if len(attempts) == 1:
+            raise ConnectionResetError('listener is still closing')
+        raise ConnectionRefusedError('listener closed')
+
+    monkeypatch.setattr(service_runtime, 'os', SimpleNamespace(name='posix', killpg=lambda *_: None))
+    monkeypatch.setattr(service_runtime, 'signal', SimpleNamespace(SIGKILL=9))
+    monkeypatch.setattr(service_runtime.socket, 'create_connection', connect)
+    monkeypatch.setattr(service_runtime.time, 'sleep', lambda _: None)
+    service_runtime.cleanup_saved_service(tmp_path, request_id='current')
+    assert attempts == [('127.0.0.1', 43210)] * 2
+    assert json.loads(path.read_text(encoding='utf-8'))['stopped'] is True
+
+
 @pytest.mark.skipif(os.name == 'nt', reason='POSIX signal-delivery regression')
 def test_saved_service_cleanup_waits_for_socket_close(tmp_path, monkeypatch):
     process = subprocess.Popen(

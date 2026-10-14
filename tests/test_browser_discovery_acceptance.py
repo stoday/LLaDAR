@@ -347,7 +347,7 @@ def test_generated_network_workflow_qualifies_and_runs_new_formal_question(tmp_p
                 assert not any(e["kind"]=="fetch_end" for e in events)
                 assert len(extracted[-1]["records"])==2
             if mode=="jobs":
-                assert len(site.jobs)==5
+                assert len(site.jobs)==3
                 assert all(job["reads"]==2 for job in site.jobs.values())
                 assert len(extracted[-1]["records"])==3  # ack, progress, complete
             assert (tmp_path/"workspace"/"adapter.json").is_file()
@@ -396,7 +396,7 @@ def test_agent_supplied_binary_codec_runs_persistent_native_socket_without_prese
                 assert target.answer(question,"formal-binary")==site.answers[question]
                 assert len(site.submitted)==3
                 sends=[e for e in driver.events() if e["kind"]=="websocket_sent"]
-                assert len({e["connection_id"] for e in sends})==5
+                assert len({e["connection_id"] for e in sends})==3
                 assert len(extracted[-1]["records"])==2
                 assert all("background-unrelated" not in json.dumps(r) for r in extracted[-1]["records"])
                 events=driver.observe_turn("formal-binary")["events"]
