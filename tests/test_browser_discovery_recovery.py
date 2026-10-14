@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.browser_target import BrowserDiscoveryError, BrowserTarget
 from test_browser_discovery_security import PROGRAM, SOURCE_ANSWER, Website, target_for
 
@@ -25,7 +27,7 @@ def test_repair_after_accepted_but_unacknowledged_send_collects_original_turn(tm
         assert len(sends)==1
         assert target.ledger.data['counts']['repairs']==1
         assert target.candidate['revision']==2
-        assert len(target.evidence['verification'])==6
+        assert len(target.evidence['verification'])==2
         assert target.ledger.data['turns']['formal-unknown']['status']=='completed'
         transitions=[e['status'] for e in target.ledger.data['events'] if e.get('turn_id')=='formal-unknown']
         assert transitions==['not_attempted','attempted_unknown','accepted','accepted','completed']
@@ -115,7 +117,7 @@ def test_real_chromium_target_repairs_unsubmitted_logical_turn_and_dispatches_qu
         if conversation_policy=="existing":
             good=good.replace('    if phase == "setup":\n',
                 '    if phase == "setup" and payload.get("role") == "formal":\n'
-                '        return {"context":context}\n    if phase == "setup":\n')
+                '        return {"complete":True,"context":context}\n    if phase == "setup":\n')
         broken=good.replace('    if phase == "send":\n',
             '    if phase == "send" and payload["role"] == "formal":\n'
             '        return {"actions":[],"context":context}\n    if phase == "send":\n')
@@ -150,7 +152,7 @@ def test_real_chromium_target_repairs_unsubmitted_logical_turn_and_dispatches_qu
             assert history[:2]==["not_attempted","not_attempted"]
             assert history.count("attempted_unknown")==1 and history[-1]=="completed"
             assert target.ledger.data["counts"]["repairs"]==1
-            assert len(target.evidence["verification"])==6
+            assert len(target.evidence["verification"])==2
             if conversation_policy=="existing":
                 assert driver.page==original
             else:

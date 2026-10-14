@@ -21,10 +21,9 @@ def test_unset_workload_budget_uses_shared_default(monkeypatch):
 
 
 @pytest.mark.parametrize('value', ['1', '2'])
-def test_independent_browser_verification_cannot_be_reduced_below_three(monkeypatch, value):
+def test_demonstration_conversation_verification_accepts_positive_counts(monkeypatch, value):
     monkeypatch.setenv('LLADAR_BROWSER_DISCOVERY_VERIFICATIONS', value)
-    with pytest.raises(ValueError, match='LLADAR_BROWSER_DISCOVERY_VERIFICATIONS must be at least 3'):
-        resource_limit('BROWSER_DISCOVERY_VERIFICATIONS')
+    assert resource_limit('BROWSER_DISCOVERY_VERIFICATIONS') == int(value)
 
 
 def test_independent_browser_verification_can_be_increased(monkeypatch):

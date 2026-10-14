@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import json
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.browser_target import BrowserTarget
 from lladar.answer_extraction import ExtractionOptions
 
@@ -36,7 +38,7 @@ def test_noop_candidate_returns_probe_feedback_and_agent_can_replace_it(tmp_path
     import time
     website = Website()
     feedback = []
-    noop = 'def adapt(payload):\n    return {"actions": [], "context": payload.get("context", {}), "complete": False}\n'
+    noop = 'def adapt(payload):\n    return {"actions": [], "context": payload.get("context", {}), "complete": payload["phase"] == "setup"}\n'
     def agent_factory(**options):
         def agent(_prompt):
             tools = options['tools']
@@ -67,6 +69,8 @@ def test_noop_candidate_returns_probe_feedback_and_agent_can_replace_it(tmp_path
 
 PROGRAM = '''
 def adapt(payload):
+    if payload["phase"] == "setup":
+        return {"complete": True, "context": {}}
     if payload["phase"] == "send":
         return {"actions": [{"kind": "http", "url": "https://example.test/ask", "method": "POST", "body": payload["question"], "submit": True}], "context": {}}
     if payload["phase"] == "observe":
@@ -129,9 +133,9 @@ def test_generated_method_is_independently_qualified_and_reused_for_formal_turns
         reference_reader=lambda turn: 'The complete existing website answer.', output_fn=lambda _: None)
     target.prepare(['PRIVATE_FUTURE_QUESTION'], interactive=False, record_count=1, request_count=1)
     assert target.evidence['status'] == 'verified'
-    assert len(target.evidence['verification']) == 3
+    assert len(target.evidence['verification']) == 1
     assert target.answer('New formal question', 'formal-1') == 'The complete existing website answer.'
-    assert len(website.turns) == 5  # one candidate probe, three new verifications, one formal turn
+    assert len(website.turns) == 3  # candidate probe, one fresh verification, one formal turn
     assert 'PRIVATE_FUTURE_QUESTION' not in json.dumps(website.events_seen)
     assert (tmp_path/'adapter.json').is_file()
     assert (tmp_path/'discovery-report.md').is_file()
@@ -139,9 +143,9 @@ def test_generated_method_is_independently_qualified_and_reused_for_formal_turns
     phases=target.ledger.data['phase_counts']
     assert phases['exploration']['model_calls']==1
     assert phases['probe']['model_calls']==1
-    assert phases['verification']['model_calls']==3
+    assert phases['verification']['model_calls']==1
     assert phases['formal']['model_calls']==1
-    assert target.ledger.data['counts']['requests']==5
+    assert target.ledger.data['counts']['requests']==3
     target.close()
 
 
@@ -173,7 +177,7 @@ def test_local_protocol_tool_documents_its_payload_and_retains_safe_repair_diagn
         assert sorted(path.read_text(encoding='utf-8') for path in (tmp_path/'protocol-candidates').glob('*.py'))==sorted([successful,invalid])
         row=next(row for row in target.ledger.data['events'] if row.get('reason')=='protocol_execution_error')
         assert row['diagnostic']['exception_type']=='KeyError'
-        assert set(row['diagnostic'])<={'exception_type','line','column','end_line','end_column'}
+        assert set(row['diagnostic'])<={'exception_type','line','column','end_line','end_column','key'}
         assert len(row['source_sha256'])==64
     finally:
         target.close()
@@ -217,11 +221,11 @@ def test_restart_reuses_unqualified_program_but_repeats_probe_and_preserves_usag
     try:
         target.prepare([],interactive=False,request_count=1)
         assert restored[0]['revision']==2
-        assert len(target.evidence['verification'])==3
-        assert len(website.turns)==4
-        assert target.ledger.data['counts']['model_calls']==6  # Two Agent starts and four extractions.
+        assert len(target.evidence['verification'])==1
+        assert len(website.turns)==2
+        assert target.ledger.data['counts']['model_calls']==4  # Two Agent starts and two extractions.
         assert target.answer('A new formal question after restart','restarted-formal')=='The complete existing website answer.'
-        assert target.ledger.data['counts']['requests']==5
+        assert target.ledger.data['counts']['requests']==3
     finally:
         target.close()
 

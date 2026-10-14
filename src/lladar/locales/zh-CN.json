@@ -595,5 +595,18 @@
   "--demo-question requires --page-url and a non-empty question": "--demo-question 需要 --page-url，示范题不能为空",
   "Authentication expired. Dispatch is paused; a temporary browser is open.": "登录已失效，派送已暂停；已暂时开启浏览器。",
   "Sign in again and return to the service. Press Enter when ready; the program saves updated state and closes the browser. Do not send the question again: ": "请重新登录并回到目标服务。准备好后按 Enter，程序保存更新状态后会关闭浏览器；请勿再次发送原题：",
-  "Updated login state saved; browser closed. Independent verification resumes.": "已保存更新的登录状态并关闭浏览器，将继续独立验证。"
+  "Updated login state saved; browser closed. Independent verification resumes.": "已保存更新的登录状态并关闭浏览器，将继续独立验证。",
+  "Automatic limits: {limits}": "自动执行额度：{limits}",
+  "Recording workspace: {path}": "录制工作目录：{path}",
+  "Complete demonstration question (use it after the browser opens):": "完整示范题（浏览器打开后使用）：",
+  "Browser closed. Please wait: the material Agent will select evidence, then the adapter Agent will generate code and test it.": "浏览器已关闭。请稍候：材料 Agent 将选取证据，随后 adapter Agent 会生成代码并测试。",
+  "Formal dispatch paused. The material and adapter Agents will examine failure evidence and repair the adapter. Submitted questions will not be sent again.": "正式派送已暂停。材料与 adapter Agent 将检查失败证据并修复 adapter；已提交的问题不会重发。",
+  "Live probe passed in the demonstrated conversation. Formal execution starts; no action is needed from you.": "示范对话中的真实网站试跑已通过。正式执行开始，你不需要操作。",
+  "Please wait: two fresh verification questions are being sent using the saved browser profile. They do not count as formal results.": "请稍候：正在使用保存的浏览器配置文件提交两个全新验证题，不计入正式结果。",
+  "Saved state loaded. No browser is opened; a fresh question will verify the adapter under the selected conversation policy.": "已加载保存状态，不打开浏览器；将以全新问题依所选对话策略验证 adapter。",
+  "The submitted turn timed out; continuing observation without resending it.": "已提交的回合超时；持续观察，不重发。",
+  "Verification passed: fresh questions work through the saved-profile browser. Formal execution starts; no action is needed from you.": "验证通过：全新问题可通过保存配置文件的浏览器执行。正式执行开始，你不需要操作。",
+  "Website {role} request {request_id}": "网站 {role} 请求 {request_id}",
+  "No recorded submission matches the complete demonstration question. The recording browser remains open; no Agent or automatic question has started.": "没有录制的提交符合完整示范题。录制浏览器保持打开；Agent 与自动提交尚未开始。",
+  "Check that the conversation is in this recording browser and that the complete question including its marker was sent. Press Enter to check again, or Ctrl+C to cancel.": "请确认对话位于这个录制浏览器，且已提交包含标记的完整问题。按 Enter 重新检查，或按 Ctrl+C 取消。"
 }

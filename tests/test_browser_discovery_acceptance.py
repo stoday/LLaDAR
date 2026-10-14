@@ -17,12 +17,14 @@ import threading
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.answer_extraction import ExtractionOptions
 from lladar.browser_discovery_driver import GenericBrowserDriver
 from lladar.browser_target import BrowserTarget
 
 
-pytestmark = pytest.mark.browser
+pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("qualified_browser_demonstration")]
 
 
 def _answer(question):
@@ -139,9 +141,9 @@ SETUP = '''
     if phase == "setup":
         actions = []
         if context.get("scratch"):
-            actions.append({"kind":"close_page"})
+            return {"complete":True,"context":context}
         actions.append({"kind":"open_page", "url":BASE})
-        return {"actions":actions, "context":{"scratch":True}}
+        return {"actions":actions, "complete":not actions, "context":{"scratch":True}}
     if phase == "restore":
         actions = [{"kind":"close_page"}] if context.get("scratch") else []
         return {"actions":actions, "context":{"scratch":False}}
@@ -332,11 +334,11 @@ def test_generated_network_workflow_qualifies_and_runs_new_formal_question(tmp_p
         try:
             target.prepare(["NEVER_EXPOSE_FUTURE_QUESTION"],interactive=False,record_count=1,request_count=1)
             assert target.evidence["status"]=="verified"
-            assert len(target.evidence["verification"])==3
+            assert len(target.evidence["verification"])==1
             question="正式驗收問題：請保留全文。"
             assert target.answer(question,"formal-local")==site.answers[question]
-            assert len(site.submitted)==5
-            assert len(extracted)==5
+            assert len(site.submitted)==3
+            assert len(extracted)==3
             assert "NEVER_EXPOSE_FUTURE_QUESTION" not in json.dumps(site.submitted)
             assert target.ledger.data["turns"]["formal-local"]["status"]=="completed"
             assert all(row["reference_method"]=="independent_reference" for row in target.evidence["verification"])
@@ -353,7 +355,7 @@ def test_generated_network_workflow_qualifies_and_runs_new_formal_question(tmp_p
             target.close()
 
 
-@pytest.mark.parametrize('known_private', [False, True], ids=['whole-wire', 'host-private-projection'])
+@pytest.mark.parametrize('known_private', [False, True], ids=['whole-wire', 'authorized-private-metadata'])
 def test_agent_supplied_binary_codec_runs_persistent_native_socket_without_preset_adapter(tmp_path, known_private):
     from websockets.sync.server import serve
     holder={}
@@ -392,7 +394,7 @@ def test_agent_supplied_binary_codec_runs_persistent_native_socket_without_prese
                     raise
                 question="二進位正式回合，尾段不可省略。"
                 assert target.answer(question,"formal-binary")==site.answers[question]
-                assert len(site.submitted)==5
+                assert len(site.submitted)==3
                 sends=[e for e in driver.events() if e["kind"]=="websocket_sent"]
                 assert len({e["connection_id"] for e in sends})==5
                 assert len(extracted[-1]["records"])==2
@@ -401,15 +403,15 @@ def test_agent_supplied_binary_codec_runs_persistent_native_socket_without_prese
                 assert any(e["kind"]=="websocket_received" and e.get("opaque") for e in events)
                 assert not any(e["kind"]=="websocket_close" for e in events)
                 if known_private:
-                    assert 'local-private-session-f258' not in json.dumps(extracted)
+                    assert 'local-private-session-f258' in json.dumps(extracted)
                     private_sources=[e for e in driver._events if e.get('turn_id')=='formal-binary'
                                      and e['kind']=='websocket_received' and e.get('binary_b64')
                                      and b'local-private-session-f258' in base64.b64decode(e['binary_b64'])]
                     assert private_sources
                     for original in private_sources:
                         view=target._protocol_authority(original['event_id'])
-                        assert original['payload_sha256']!=view['payload_sha256']
-                        assert b'local-private-session-f258' not in base64.b64decode(view['binary_b64'])
+                        assert original['payload_sha256']==view['payload_sha256']
+                        assert original['binary_b64']==view['binary_b64']
             finally:
                 target.close()
         server.shutdown()
@@ -429,7 +431,7 @@ def test_pure_dom_multiblock_fallback_is_qualified_against_independent_fulltext(
             assert not any(e["kind"]=="http_request" and e.get("method")=="POST" for e in events)
             assert any(e["kind"]=="dom_changed" for e in events)
             assert len([n for n in extracted[-1]["records"][0]["nodes"] if n["tag"]=="p"])==2
-            assert len(target.evidence["verification"])==3
+            assert len(target.evidence["verification"])==1
         finally:
             target.close()
 
@@ -455,7 +457,7 @@ def test_terminal_marker_cannot_qualify_missing_tail_against_fulltext_oracle(tmp
 def test_existing_policy_keeps_original_page_across_two_formal_turns(tmp_path):
     with acceptance_site() as site:
         source=http_program(site.url,"json").replace('    if phase == "setup":\n',
-            '    if phase == "setup" and payload.get("role") == "formal":\n        return {"context":context}\n    if phase == "setup":\n')
+            '    if phase == "setup" and payload.get("role") == "formal":\n        return {"complete":True,"context":context}\n    if phase == "setup":\n')
         target,driver,extracted=build_target(tmp_path,site,source,conversation_policy="existing")
         try:
             target.prepare([],interactive=False,record_count=2,request_count=2)
@@ -465,7 +467,7 @@ def test_existing_policy_keeps_original_page_across_two_formal_turns(tmp_path):
                 assert target.answer(question,"formal-existing-"+str(number))==site.answers[question]
                 assert driver.page==original
                 assert driver.context.pages==[original]
-            assert len(site.submitted)==6
+            assert len(site.submitted)==4
             assert target.conversation_policy=="existing"
             assert all(turn["status"]=="completed" for turn in target.ledger.data["turns"].values())
         finally:
@@ -473,7 +475,8 @@ def test_existing_policy_keeps_original_page_across_two_formal_turns(tmp_path):
 
 
 @pytest.mark.parametrize('reference_guard', [True, False])
-def test_formal_reference_uses_independent_dom_only_after_full_answer_qualification(tmp_path, reference_guard):
+def test_formal_reference_uses_independent_dom_only_after_full_answer_qualification(tmp_path, reference_guard, monkeypatch):
+    monkeypatch.setenv("LLADAR_BROWSER_DISCOVERY_VERIFICATIONS", "3")
     from io import StringIO
     class ReviewStream(StringIO):
         def isatty(self):

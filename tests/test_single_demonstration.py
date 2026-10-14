@@ -140,6 +140,8 @@ def adapt(payload):
         return {'actions': [{'kind': 'http', 'url': payload['state']['endpoint'],
             'method': 'POST', 'headers': {'Content-Type': 'application/json'},
             'body': json.dumps({'question': payload['question']}), 'submit': True}]}
+    if payload['phase'] != 'receive':
+        return {'complete': False}
     events = payload['events']
     parts = [e for e in events if e['kind'] == 'http_body']
     ends = [e for e in events if e['kind'] == 'http_end']
@@ -575,7 +577,7 @@ def test_large_recorded_script_does_not_prevent_completed_demonstration(tmp_path
 
 @pytest.mark.browser
 def test_one_demonstration_closes_browser_before_agent_and_formal_questions(tmp_path, chat_service, monkeypatch):
-    monkeypatch.setenv('LLADAR_BROWSER_DISCOVERY_REPAIRS', '1')
+    monkeypatch.setenv('LLADAR_BROWSER_DISCOVERY_REPAIRS', '2')
     from lladar.demonstration_recorder import DemonstrationRecorder
     from lladar.independent_target import IndependentTarget
     origin, received = chat_service
@@ -587,28 +589,10 @@ def test_one_demonstration_closes_browser_before_agent_and_formal_questions(tmp_
         recorder.browser.page.locator('#send').click()
         recorder.browser.page.wait_for_function("document.querySelector('#answer').textContent.startsWith('Exact reply:')")
         return ''
-    def model(**options):
-        def execute(_):
-            assert recorder.closed
-            tools = options['tools']
-            found = json.loads(tools['query_recording'](query='DEMO-'))
-            assert found['events']
-            request = next(item for item in found['events'] if item['kind'] == 'http_request')
-            material = json.loads(json.loads(tools['read_material'](request['event_id']))['text'])
-            generated = HTTP_ADAPTER.replace("payload['state']['endpoint']", repr(material['url']))
-            incomplete = generated.replace("if not ends:", "if payload['phase'] == 'collect':")
-            tools['submit_adapter'](incomplete, 'Candidate needs collection repair')
-            rejected = json.loads(tools['test_live']())
-            assert rejected['status'] == 'rejected'
-            failed = json.loads(tools['read_test_result'](rejected['request_id']))
-            body = next(e for e in failed['events'] if e['kind'] == 'http_body')
-            assert json.loads(tools['read_material'](body['event_id']))['complete']
-            tools['submit_adapter'](generated, 'Observed HTTP request and complete reply')
-            assert json.loads(tools['test_live']())['status'] == 'accepted'
-        return execute
+    model = http_evidence_agent(recorder, incomplete_first=True)
     target = IndependentTarget(page_url=origin, workspace=tmp_path, recorder=recorder,
         agent_factory=model, input_fn=human, output_fn=lambda _: None,
-        reference_reader=lambda turn: 'Exact reply: ' + turn['question'] if turn['role'] != 'formal' else None)
+        reference_reader=lambda turn: 'Exact reply: ' + turn['question'])
     target.prepare(interactive=True, request_count=2)
     assert target.evidence['browser_closed'] is True
     assert len(target.evidence['verification']) == 2
@@ -637,15 +621,7 @@ def test_cli_writes_formal_answers_after_one_demonstration(tmp_path, chat_servic
         recorder.browser.page.locator('#send').click()
         recorder.browser.page.wait_for_function("document.querySelector('#answer').textContent.startsWith('Exact reply:')")
         return ''
-    def model(**options):
-        def execute(_):
-            tools=options['tools']
-            found=json.loads(tools['query_recording'](query='DEMO-',kind='http_request'))
-            event=json.loads(json.loads(tools['read_material'](found['events'][0]['event_id']))['text'])
-            tools['submit_adapter'](HTTP_ADAPTER.replace("payload['state']['endpoint']",repr(event['url'])), 'Observed actual request')
-            result=json.loads(tools['test_live']())
-            assert result['status']=='accepted', result
-        return execute
+    model = http_evidence_agent(recorder)
     def target_factory(**options):
         return IndependentTarget(**options, workspace=tmp_path / 'website', recorder=recorder,
             input_fn=human, agent_factory=model, output_fn=lambda _:None,
@@ -671,18 +647,7 @@ def test_same_agent_repairs_formal_collection_without_sending_question_twice(tmp
         recorder.browser.page.locator('#send').click()
         recorder.browser.page.wait_for_function("document.querySelector('#answer').textContent.startsWith('Exact reply:')")
         return ''
-    def model(**options):
-        def execute(_):
-            attempts.append('same role')
-            tools=options['tools']
-            event=json.loads(json.loads(tools['read_material'](json.loads(
-                tools['query_recording'](query='DEMO-',kind='http_request'))['events'][0]['event_id']))['text'])
-            source=HTTP_ADAPTER.replace("payload['state']['endpoint']",repr(event['url']))
-            if len(attempts)>1:
-                source=source.replace("json.loads(parts[0]['text'])['answer']", "json.loads(parts[0]['text']).get('final_answer',json.loads(parts[0]['text'])['answer'])")
-            tools['submit_adapter'](source,'Recorded transport and repair evidence')
-            assert json.loads(tools['test_live']())['status']=='accepted'
-        return execute
+    model = http_evidence_agent(recorder, repair_collection=True, attempts=attempts)
     target=IndependentTarget(page_url=endpoint,workspace=tmp_path,recorder=recorder,
         input_fn=human,output_fn=lambda _:None,agent_factory=model,
         reference_reader=lambda turn:'Exact reply: '+turn['question'])
@@ -799,3 +764,33 @@ def test_real_agent_generates_adapter_for_randomized_service_after_browser_shutd
         target.close()
         server.shutdown()
         server.server_close()
+
+
+def http_evidence_agent(recorder, *, incomplete_first=False, repair_collection=False, attempts=None):
+    """Fixture model follows separate material/code calls; the host runs trials."""
+    code_calls = []
+    def model(**options):
+        def execute(prompt):
+            prompt = options['system_prompt']
+            assert recorder.closed
+            tools = options['tools']
+            if 'select_material' in tools:
+                catalog = json.loads(prompt.split('Indexed recording: ', 1)[1].split('\nPreviously selected: ', 1)[0])
+                refs = [item['event_id'] for item in catalog if item['kind'] in {'http_request', 'http_body'}]
+                assert json.loads(tools['select_material'](refs, 'Observed request and complete reply'))['status'] == 'selected'
+                return
+            packet = json.loads(prompt.split('Selected evidence packet: ', 1)[1].split('\nLast trial: ', 1)[0])
+            requests = [json.loads(item['preview']['text']) for item in packet
+                        if item['kind'] == 'http_request' and item['preview']['complete']]
+            request = next(item for item in requests if item.get('method') == 'POST')
+            source = HTTP_ADAPTER.replace("payload['state']['endpoint']", repr(request['url']))
+            code_calls.append(True)
+            if attempts is not None:
+                attempts.append('code role')
+            if incomplete_first and len(code_calls) == 1:
+                source = source.replace("if not ends:", "if payload['phase'] == 'receive':")
+            if repair_collection and len(code_calls) > 1:
+                source = source.replace("json.loads(parts[0]['text'])['answer']", "json.loads(parts[0]['text']).get('final_answer') or json.loads(parts[0]['text'])['answer']")
+            tools['submit_adapter'](source, 'Selected HTTP request and response evidence')
+        return execute
+    return model

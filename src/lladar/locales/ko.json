@@ -595,5 +595,18 @@
   "--demo-question requires --page-url and a non-empty question": "--demo-question에는 --page-url과 비어 있지 않은 시연 질문이 필요합니다",
   "Authentication expired. Dispatch is paused; a temporary browser is open.": "로그인이 만료되어 전송을 일시 중지하고 브라우저를 잠시 열었습니다.",
   "Sign in again and return to the service. Press Enter when ready; the program saves updated state and closes the browser. Do not send the question again: ": "다시 로그인하여 대상 서비스로 돌아온 뒤 준비되면 Enter를 누르세요. 갱신 상태를 저장한 뒤 브라우저를 닫습니다. 원래 질문을 다시 전송하지 마세요: ",
-  "Updated login state saved; browser closed. Independent verification resumes.": "갱신된 로그인 상태를 저장하고 브라우저를 닫았습니다. 독립 동작 검증을 재개합니다."
+  "Updated login state saved; browser closed. Independent verification resumes.": "갱신된 로그인 상태를 저장하고 브라우저를 닫았습니다. 독립 동작 검증을 재개합니다.",
+  "Automatic limits: {limits}": "자동 실행 한도: {limits}",
+  "Recording workspace: {path}": "기록 작업 디렉터리: {path}",
+  "Complete demonstration question (use it after the browser opens):": "전체 시연 질문(브라우저가 열린 후 사용):",
+  "Browser closed. Please wait: the material Agent will select evidence, then the adapter Agent will generate code and test it.": "브라우저를 닫았습니다. 자료 Agent가 근거를 선택한 뒤 adapter Agent가 코드를 생성하고 테스트합니다. 기다려 주세요.",
+  "Formal dispatch paused. The material and adapter Agents will examine failure evidence and repair the adapter. Submitted questions will not be sent again.": "정식 전송을 일시 중지했습니다. 자료 및 adapter Agent가 실패 근거를 확인하고 adapter를 복구합니다. 이미 전송한 질문은 다시 보내지 않습니다.",
+  "Live probe passed in the demonstrated conversation. Formal execution starts; no action is needed from you.": "시연 대화에서 실제 사이트 시험 실행을 통과했습니다. 정식 실행을 시작합니다. 조작할 필요가 없습니다.",
+  "Please wait: two fresh verification questions are being sent using the saved browser profile. They do not count as formal results.": "저장한 브라우저 프로필로 새로운 검증 질문 두 개를 전송하고 있습니다. 정식 결과에는 포함되지 않습니다. 기다려 주세요.",
+  "Saved state loaded. No browser is opened; a fresh question will verify the adapter under the selected conversation policy.": "저장한 상태를 불러왔습니다. 브라우저를 열지 않고 선택한 대화 정책에 따라 새 질문으로 adapter를 검증합니다.",
+  "The submitted turn timed out; continuing observation without resending it.": "전송한 회차의 시간이 초과되었습니다. 다시 보내지 않고 관찰을 계속합니다.",
+  "Verification passed: fresh questions work through the saved-profile browser. Formal execution starts; no action is needed from you.": "검증을 통과했습니다. 저장한 프로필의 브라우저로 새 질문을 실행할 수 있습니다. 정식 실행을 시작합니다. 조작할 필요가 없습니다.",
+  "Website {role} request {request_id}": "웹사이트 {role} 요청 {request_id}",
+  "No recorded submission matches the complete demonstration question. The recording browser remains open; no Agent or automatic question has started.": "전체 시연 질문과 일치하는 전송 기록이 없습니다. 기록 브라우저는 열린 상태이며 Agent와 자동 질문 전송은 아직 시작하지 않았습니다.",
+  "Check that the conversation is in this recording browser and that the complete question including its marker was sent. Press Enter to check again, or Ctrl+C to cancel.": "이 기록 브라우저에 대화가 있고 표시를 포함한 전체 질문을 전송했는지 확인하세요. Enter로 다시 확인하거나 Ctrl+C로 취소하세요."
 }

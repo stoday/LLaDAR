@@ -1,6 +1,8 @@
 """One durable budget covers service traffic and protocol research."""
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.browser_target import BrowserDiscoveryError, DiscoveryLedger
 
 
@@ -32,13 +34,17 @@ def test_tampered_phase_usage_cannot_be_used_for_resume(tmp_path):
         DiscoveryLedger(tmp_path,deadline_seconds=60)
 
 
-def test_a_failed_full_answer_reference_is_not_recorded_as_completed(tmp_path):
+def test_a_failed_full_answer_reference_is_not_recorded_as_completed(tmp_path, monkeypatch):
     from test_browser_discovery_security import PROGRAM, SOURCE_ANSWER, target_for
     target,_site=target_for(tmp_path,PROGRAM.replace('SUBMIT_FLAG','True'),[])
+    # Inspect the first failed reference before the separate recovery workflow.
+    def stop_after_reference_failure(question, request_id, error):
+        raise error
+    monkeypatch.setattr(target, '_repair', stop_after_reference_failure)
     try:
         target.reference_reader=lambda turn: SOURCE_ANSWER if turn['role']!='formal' else 'A different complete source answer.'
         target.prepare([],interactive=False,request_count=1)
-        with pytest.raises(BrowserDiscoveryError,match='reference_mismatch'):
+        with pytest.raises(BrowserDiscoveryError, match='reference_mismatch'):
             target.answer('A formal question requiring full source verification','unverified-formal')
         state=target.ledger.data['turns']['unverified-formal']
         assert state['status']=='accepted'

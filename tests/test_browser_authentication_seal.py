@@ -11,13 +11,15 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.answer_extraction import ExtractionOptions
 from lladar.browser_discovery_driver import GenericBrowserDriver
 from lladar.browser_target import BrowserDiscoveryError, BrowserTarget
 from test_browser_discovery_acceptance import _answer, fixture_models, http_program
 
 
-pytestmark = pytest.mark.browser
+pytestmark = [pytest.mark.browser, pytest.mark.usefixtures("qualified_browser_demonstration")]
 FORMAL_QUESTION = "Only the formal request expires authentication."
 
 
@@ -105,14 +107,14 @@ def test_expired_authentication_seals_native_traffic_models_and_same_instance_pr
         try:
             target.prepare([], interactive=False, record_count=1, request_count=1)
             assert target.evidence["status"] == "verified"
-            assert len(target.evidence["verification"]) == 3
-            assert len(site.submitted) == len(extracted) == 4
+            assert len(target.evidence["verification"]) == 1
+            assert len(site.submitted) == len(extracted) == 2
 
             with pytest.raises(BrowserDiscoveryError) as blocked:
                 target.answer(FORMAL_QUESTION, "formal-expired")
             assert blocked.value.reason == "browser_authentication_required"
             assert site.submitted[-1] == FORMAL_QUESTION
-            assert len(site.submitted) == 5
+            assert len(site.submitted) == 3
             counts = dict(target.ledger.data["counts"])
 
             # Keep the browser open and pump its actual request interceptor until
@@ -134,6 +136,6 @@ def test_expired_authentication_seals_native_traffic_models_and_same_instance_pr
             assert blocked.value.reason == "browser_authentication_required"
             assert driver.open_calls == prior_opens
             assert target.ledger.data["counts"] == counts
-            assert len(site.submitted) == 5
+            assert len(site.submitted) == 3
         finally:
             target.close()

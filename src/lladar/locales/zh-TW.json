@@ -599,5 +599,14 @@
   "No recorded submission matches the complete demonstration question. The recording browser remains open; no Agent or automatic question has started.": "尚未錄到符合完整示範題的送出事件。錄製瀏覽器會保持開啟；尚未啟動 Agent 或自動送題。",
   "Check that the conversation is in this recording browser and that the complete question including its marker was sent. Press Enter to check again, or Ctrl+C to cancel.": "請確認對話位於本次錄製瀏覽器，且已送出含識別碼的完整題目。按 Enter 再檢查，或按 Ctrl+C 取消。",
   "Recording workspace: {path}": "錄製工作目錄：{path}",
-  "Automatic limits: {limits}": "自動執行額度：{limits}"
+  "Automatic limits: {limits}": "自動執行額度：{limits}",
+  "Complete demonstration question (use it after the browser opens):": "完整示範題（瀏覽器開啟後使用）：",
+  "Browser closed. Please wait: the material Agent will select evidence, then the adapter Agent will generate code and test it.": "瀏覽器已關閉。請稍候：材料 Agent 將選取證據，接著 adapter Agent 會產生程式並測試。",
+  "Formal dispatch paused. The material and adapter Agents will examine failure evidence and repair the adapter. Submitted questions will not be sent again.": "正式派送已暫停。材料與 adapter Agent 將檢查失敗證據並修復 adapter；已送出的問題不會重送。",
+  "Live probe passed in the demonstrated conversation. Formal execution starts; no action is needed from you.": "示範對話中的真站試跑已通過。正式執行開始，你不需要操作。",
+  "Please wait: two fresh verification questions are being sent using the saved browser profile. They do not count as formal results.": "請稍候：正在使用保存的瀏覽器設定檔送出兩個全新驗證題，不計入正式結果。",
+  "Saved state loaded. No browser is opened; a fresh question will verify the adapter under the selected conversation policy.": "已載入保存狀態，不開啟瀏覽器；將以全新問題依所選對話政策驗證 adapter。",
+  "The submitted turn timed out; continuing observation without resending it.": "已送出的回合逾時；持續觀察，不重送。",
+  "Verification passed: fresh questions work through the saved-profile browser. Formal execution starts; no action is needed from you.": "驗證通過：全新問題可透過保存設定檔的瀏覽器執行。正式執行開始，你不需要操作。",
+  "Website {role} request {request_id}": "網站 {role} 請求 {request_id}"
 }

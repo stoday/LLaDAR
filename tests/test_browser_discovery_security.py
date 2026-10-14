@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.answer_extraction import ExtractionOptions
 from lladar.browser_target import BrowserDiscoveryError, BrowserTarget
 
@@ -13,6 +15,8 @@ from lladar.browser_target import BrowserDiscoveryError, BrowserTarget
 SOURCE_ANSWER = "The independently observed complete source answer."
 PROGRAM = '''
 def adapt(payload):
+    if payload["phase"] == "setup":
+        return {"complete": True, "context": {}}
     if payload["phase"] == "send":
         return {"actions": [{"kind": "http", "url": "https://example.test/ask", "method": "POST", "body": payload["question"], "submit": SUBMIT_FLAG}], "context": {}}
     if payload["phase"] == "observe":

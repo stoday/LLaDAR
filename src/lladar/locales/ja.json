@@ -595,5 +595,18 @@
   "--demo-question requires --page-url and a non-empty question": "--demo-question には --page-url と空でないデモ質問が必要です",
   "Authentication expired. Dispatch is paused; a temporary browser is open.": "ログインが失効しました。送信を停止し、ブラウザーを一時的に開きました。",
   "Sign in again and return to the service. Press Enter when ready; the program saves updated state and closes the browser. Do not send the question again: ": "再度ログインして対象サービスに戻り、準備ができたら Enter を押してください。更新状態の保存後にブラウザーを閉じます。元の質問は再送しないでください：",
-  "Updated login state saved; browser closed. Independent verification resumes.": "更新したログイン状態を保存し、ブラウザーを閉じました。独立動作の検証を再開します。"
+  "Updated login state saved; browser closed. Independent verification resumes.": "更新したログイン状態を保存し、ブラウザーを閉じました。独立動作の検証を再開します。",
+  "Automatic limits: {limits}": "自動実行の上限：{limits}",
+  "Recording workspace: {path}": "記録作業ディレクトリ：{path}",
+  "Complete demonstration question (use it after the browser opens):": "完全な実演用の質問（ブラウザーを開いた後に使用）：",
+  "Browser closed. Please wait: the material Agent will select evidence, then the adapter Agent will generate code and test it.": "ブラウザーを閉じました。資料 Agent が証拠を選び、続いて adapter Agent がコードを生成してテストします。お待ちください。",
+  "Formal dispatch paused. The material and adapter Agents will examine failure evidence and repair the adapter. Submitted questions will not be sent again.": "正式な送信を一時停止しました。資料 Agent と adapter Agent が失敗の証拠を確認して修復します。送信済みの質問は再送しません。",
+  "Live probe passed in the demonstrated conversation. Formal execution starts; no action is needed from you.": "実演した会話での実サイト試行に合格しました。正式な実行を開始します。操作は不要です。",
+  "Please wait: two fresh verification questions are being sent using the saved browser profile. They do not count as formal results.": "保存したブラウザープロファイルで新しい検証質問を二つ送信しています。正式な結果には含まれません。お待ちください。",
+  "Saved state loaded. No browser is opened; a fresh question will verify the adapter under the selected conversation policy.": "保存した状態を読み込みました。ブラウザーは開かず、選択した会話方針に従って新しい質問で adapter を検証します。",
+  "The submitted turn timed out; continuing observation without resending it.": "送信済みのターンがタイムアウトしました。再送せずに観察を続けます。",
+  "Verification passed: fresh questions work through the saved-profile browser. Formal execution starts; no action is needed from you.": "検証に合格しました。保存したプロファイルのブラウザーで新しい質問を実行できます。正式な実行を開始します。操作は不要です。",
+  "Website {role} request {request_id}": "ウェブサイト {role} リクエスト {request_id}",
+  "No recorded submission matches the complete demonstration question. The recording browser remains open; no Agent or automatic question has started.": "完全な実演用の質問に一致する送信記録がありません。記録用ブラウザーは開いたままで、Agent と自動送信はまだ開始していません。",
+  "Check that the conversation is in this recording browser and that the complete question including its marker was sent. Press Enter to check again, or Ctrl+C to cancel.": "会話がこの記録用ブラウザーにあり、マーカーを含む質問全文を送信したことを確認してください。Enter で再確認、Ctrl+C でキャンセルします。"
 }

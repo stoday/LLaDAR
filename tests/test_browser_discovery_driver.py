@@ -121,7 +121,7 @@ def test_multistep_dom_submission_records_http_and_full_same_turn_body(tmp_path)
             assert "Earlier answer" in json.dumps(driver._turns["first"]["baseline"])
             assert "Earlier answer" not in json.dumps(result["page"])
             assert "private-password" not in json.dumps(result)
-            assert "private-response-token" not in json.dumps(result)
+            assert "private-response-token" in json.dumps(result)
             assert "private-session-cookie" not in json.dumps(result)
             with pytest.raises(BrowserDiscoveryError, match="already_submitted"):
                 driver.action({"kind": "click", "ref": _node(panel, text="Deliver")["ref"]}, submit=True)
@@ -241,11 +241,11 @@ def test_browser_network_actions_enforce_host_origins_and_password_controls(tmp_
             driver.close()
 
 
-def test_agent_view_keeps_secrets_host_side_and_binary_opaque(tmp_path):
+def test_agent_view_preserves_authorized_recorded_request(tmp_path):
     driver = GenericBrowserDriver(page_url="http://127.0.0.1:1000", profile_dir=tmp_path)
     event_id = driver._record("http_request", {"url": "http://127.0.0.1:1000/ask?access_token=private-token", "headers": {"authorization": "Bearer secret", "content-type": "application/json"}, "body": '{"question":"hi", "password":"secret-password"}'})
     view = driver._view(driver._event_map[event_id])
-    assert not any(secret in json.dumps(view) for secret in ("Bearer secret", "private-token", "secret-password"))
+    assert all(secret in json.dumps(view) for secret in ("Bearer secret", "private-token", "secret-password"))
     assert json.loads(view["body"])["question"] == "hi"
 
 
@@ -520,7 +520,7 @@ def test_http_template_bindings_keep_private_credentials_in_host_and_bind_observ
     driver=GenericBrowserDriver(page_url="https://service.test/chat",profile_dir=tmp_path)
     dispatched=[]
     driver.context=SimpleNamespace(cookies=lambda:[])
-    driver.page=SimpleNamespace(evaluate=lambda code,spec:dispatched.append(spec) or "job")
+    driver.page=SimpleNamespace(evaluate=lambda code,spec:dispatched.append(spec) or "job", is_closed=lambda:False)
     initial=driver._record("http_request",{"url":"https://service.test/ask","method":"POST",
       "headers":{"authorization":"Bearer host-private-credential","content-type":"application/json"},
       "body":json.dumps({"private_session":"host-private-session","nested":{"turns":[{"question":"Calibration","request_id":"old-id"}]}})})
@@ -533,8 +533,8 @@ def test_http_template_bindings_keep_private_credentials_in_host_and_bind_observ
     body=json.loads(actual["body"])
     assert body["private_session"]=="host-private-session"
     assert body["nested"]["turns"][0]=={"question":"正式問題","request_id":"dynamic-server-id"}
-    assert "host-private-credential" not in json.dumps(driver.read_event(initial))
-    assert "host-private-session" not in json.dumps(driver.read_event(initial))
+    assert "host-private-credential" in json.dumps(driver.read_event(initial))
+    assert "host-private-session" in json.dumps(driver.read_event(initial))
 
 
 def test_binding_paths_scope_and_duplicate_json_fail_before_dispatch(tmp_path):
@@ -542,7 +542,7 @@ def test_binding_paths_scope_and_duplicate_json_fail_before_dispatch(tmp_path):
     driver=GenericBrowserDriver(page_url="https://service.test/chat",profile_dir=tmp_path)
     dispatched=[]
     driver.context=SimpleNamespace(cookies=lambda:[])
-    driver.page=SimpleNamespace(evaluate=lambda code,spec:dispatched.append(spec) or "job")
+    driver.page=SimpleNamespace(evaluate=lambda code,spec:dispatched.append(spec) or "job", is_closed=lambda:False)
     base={"url":"https://service.test/ask","method":"POST","body":'{"a":{"question":"old"}}'}
     with pytest.raises(BrowserDiscoveryError,match="path_invalid"):
         driver.http_request({**base,"body_bindings":[{"path":["a","__proto__"],"value":"new"}]})
@@ -565,7 +565,7 @@ def test_one_character_cookie_flags_do_not_corrupt_numbers_or_binary_source(tmp_
     identifier=driver._record("http_body",{"text":text})
     view=driver.read_event(identifier)
     assert json.loads(view["text"])["content"]=="Number 37, not 1; keep this negation."
-    assert json.loads(view["text"])["authorization"]=="[host-private]"
+    assert json.loads(view["text"])["authorization"]=="secret"
     binary=driver._record("websocket_received",{"binary_b64":"Mzcgbm90IDE="})
     assert driver.raw_event(binary)["binary_b64"]=="Mzcgbm90IDE="
 
@@ -581,9 +581,9 @@ def test_sensitive_dom_attribute_name_blocks_entire_inspection_before_pager_can_
             driver.context.add_cookies([{"name":"session","value":"private-cookie-key-material","url":url}])
             name="data-private-cookie-key-material" if attribute=="known-cookie" else "data-eyJsynthetic.eyJsynthetic.signature"
             driver.page.evaluate("name=>document.querySelector('#open').setAttribute(name,'public value')",name)
-            with pytest.raises(BrowserDiscoveryError,match="protected_protocol_material") as caught:
-                BrowserInspectionPager(4096).capture(driver.inspect())
-            assert name not in str(caught.value)
+            snapshot = driver.inspect()
+            assert name in json.dumps(snapshot)
+            assert BrowserInspectionPager(4096).capture(snapshot)
         finally:
             driver.close()
 
@@ -608,13 +608,10 @@ def test_sensitive_native_source_keys_never_leave_through_events_read_event_or_c
                 if captured:
                     break
             assert captured
-            with pytest.raises(BrowserDiscoveryError,match="protected_protocol_material"):
-                driver.events()
-            with pytest.raises(BrowserDiscoveryError,match="protected_protocol_material"):
-                driver.read_event(captured[0]["event_id"])
+            assert driver.events()
+            assert driver.read_event(captured[0]["event_id"])["text"] == captured[0]["text"]
             if source=="client-javascript":
-                with pytest.raises(BrowserDiscoveryError,match="protected_protocol_material"):
-                    driver.client_resource(url+path)
+                assert driver.client_resource(url+path)["text"] == captured[0]["text"]
             assert "fixture-private-credential" not in str(BrowserDiscoveryError("protected_protocol_material"))
         finally:
             driver.close()

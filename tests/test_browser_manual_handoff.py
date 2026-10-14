@@ -6,6 +6,8 @@ import threading
 from types import SimpleNamespace
 import pytest
 
+pytestmark = pytest.mark.usefixtures("qualified_browser_demonstration")
+
 from lladar.answer_extraction import ExtractionOptions
 from lladar.browser_discovery_driver import GenericBrowserDriver
 from lladar.browser_discovery_driver import BrowserDiscoveryError as DriverError
