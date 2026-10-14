@@ -16,8 +16,10 @@ import akasha
 from .exceptions import DatasetValidationError, EvaluationError, LladarError, ProviderError
 
 
-MAX_TOOL_CALLS = 40
-MAX_ROUNDS = 30
+from .resource_limits import resource_limit
+
+MAX_TOOL_CALLS = resource_limit('SKILL_TOOL_CALLS')
+MAX_ROUNDS = resource_limit('SKILL_ROUNDS')
 SYSTEM_PROMPT = """Generate the requested LLaDAR dataset using the selected skill.
 First call load_skill and follow that skill's active method. Choose direct QA or
 an evidence graph according to the skill, source content, and requested options.
@@ -100,7 +102,7 @@ class AkashaSkillAgent:
             "submit_semantic_graph": "Submit {nodes, edges, facts}. Nodes: {id, type: entity|attribute|concept, label, origin: source|inferred, evidence_refs: [knowledge point IDs]}; concepts also need member_ids. Edges: {from, relation, to, origin, evidence_refs}. Facts: {entity_id, label, value, unit, evidence_ref}, all strings; label must exactly match the entity node label, not the attribute name. One fact per entity; evidence_ref must be in that entity's evidence_refs. Nodes and facts must be non-empty; edges may be [].",
             "read_semantic_graph": "Read the verified semantic graph for test planning.",
             "submit_test_plans": "Submit a list of graph question plans. Direct fact: {type: direct_fact, entity_id, question, expected_answer}; expected_answer is the fact value plus unit. Concept mapping: {type: concept_mapping, concept_id, question, expected_answer}; answer lists the complete candidate set. For controlled_invariance follow AUTHORING.md. Use read_semantic_graph first.",
-            "sample_dataset_rows": "Stream and reproducibly sample complete CSV/JSONL rows: path, sample_size 1..100, seed, max_rows 1..200000. Returns original row IDs, scope and total/scanned rows. Use this for sources beyond the normal download budget.",
+            "sample_dataset_rows": f"Stream and reproducibly sample complete CSV/JSONL rows: path, sample_size 1..{resource_limit('GITHUB_SAMPLE_SIZE')}, seed, max_rows 1..{resource_limit('GITHUB_SAMPLE_ROWS')}. Returns original row IDs, scope and total/scanned rows. Use this for sources beyond the normal download budget.",
             "revise_plan": "Repair an unfrozen plan using item_id, request_id, revision and plan.",
             "get_plan": "Query the current evaluation plan status and revision.",
             "revise_judgment": "Repair the assigned judgment using item_id, request_id, revision and judgment.",

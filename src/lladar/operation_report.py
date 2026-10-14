@@ -11,6 +11,7 @@ import sys
 import time
 
 from .language import Language, language_scope, tr
+from .resource_limits import resource_limit
 
 _CURRENT = ContextVar("lladar_operation", default=None)
 _STAGES = {"test-dataset", "situation", "run-agent", "eval", "report"}
@@ -150,7 +151,7 @@ class OperationReport:
         path = Path(str(self.output) + ".run.json")
         # Ignore old metadata on failed invocations and bound this optional read.
         try:
-            if (code != 0 and _stamp(path) == self.before.get(path)) or not path.is_file() or path.stat().st_size > 2_000_000:
+            if (code != 0 and _stamp(path) == self.before.get(path)) or not path.is_file() or path.stat().st_size > resource_limit('REPORT_METADATA_BYTES'):
                 return
             data = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(data, dict):

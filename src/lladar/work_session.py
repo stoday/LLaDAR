@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from uuid import uuid4
 
 _ACTIVE = ContextVar("lladar_work_session", default=None)
@@ -30,7 +31,16 @@ def atomic_json(path, value):
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        from .resource_limits import resource_limit
+        deadline = time.monotonic() + resource_limit('CHECKPOINT_REPLACE_TIMEOUT_SECONDS')
+        while True:
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as error:
+                if os.name != 'nt' or getattr(error, 'winerror', None) not in {5, 32, 33} or time.monotonic() >= deadline:
+                    raise
+                time.sleep(min(0.05, max(0, deadline - time.monotonic())))
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -170,11 +180,15 @@ def stage_session(stage):
                     raise ValueError("resume requires an output")
                 return function(*args, **kwargs)
             output = Path(output).resolve()
-            configuration = {"output": str(output), "stage_contract_version": 2 if stage == "run-agent" else 1}
+            configuration = {"output": str(output), "stage_contract_version": 4 if stage == 'run-agent' and values.get('page_url') else 2 if stage == 'run-agent' else 1}
+            from .resource_limits import configured_resource_limits
+            resource_overrides = configured_resource_limits()
+            if resource_overrides:
+                configuration['resource_limits'] = resource_overrides
             ignored = {"output", "resume", "force", "verbose", "env_file", "github_client",
                 "skill_agent_factory", "review_agent_factory", "strategy_agent_factory", "browser_target_factory",
                 "extraction_provider_factory", "interface_selector", "controlled_variant_selector",
-                "interactive", "confirm_browser_run", "runs_root"}
+                "interactive", "confirm_browser_run", "runs_root", "extend_model_calls"}
             for key, value in values.items():
                 if key in ignored:
                     continue

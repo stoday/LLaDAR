@@ -1073,7 +1073,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
         session = current_session()
         generation_work = session.data["state"].get("generation_work") if session else None
         if generation_work is None:
-            batch_chars = min(24000, max(1, profile.max_input_tokens // 4))
+            batch_chars = max(1, profile.max_input_tokens // 4)
             total_chars = sum(len(source["text"]) for source in workspace.sources.values())
             assignments = []
             if allow_candidate_files or total_chars <= batch_chars:

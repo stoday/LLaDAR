@@ -5,7 +5,7 @@ import sys
 import time
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
-from threading import Event, Thread
+from threading import Event, Thread, RLock
 from typing import Any, TextIO
 
 from tqdm import tqdm
@@ -45,6 +45,8 @@ class ProgressReporter:
         self.terminal = getattr(self.stream, "terminal", self.stream)
         self.bars: dict[str, tqdm] = {}
         self.last_progress: dict[str, float] = {}
+        self._output_lock = RLock()
+        self._input_depth = 0
         from .work_session import current_session
         session = current_session()
         if session is not None:
@@ -63,6 +65,23 @@ class ProgressReporter:
             self.emit("CONFIG", f"{key:<20} {_display(value)}")
 
     def emit(self, label: str, message: str) -> None:
+        with self._output_lock:
+            if self._input_depth:
+                return
+            self._emit(label, message)
+
+    @contextmanager
+    def user_input(self):
+        """Silence background events until the nested input prompt has returned."""
+        with self._output_lock:
+            self._input_depth += 1
+        try:
+            yield
+        finally:
+            with self._output_lock:
+                self._input_depth -= 1
+
+    def _emit(self, label: str, message: str) -> None:
         if not self.enabled:
             return
         now = datetime.now().astimezone()
@@ -94,7 +113,7 @@ class ProgressReporter:
         self.emit(label, value)
 
     @contextmanager
-    def waiting(self, message: str, *, interval: float = 5.0, label: str = "BROWSER"):
+    def waiting(self, message: str, *, interval: float = 5.0, label: str = "BROWSER", heartbeat: bool = True):
         """Report synchronous work without moving operations off-thread."""
         if not self.enabled:
             yield
@@ -103,12 +122,13 @@ class ProgressReporter:
         started = time.perf_counter()
         self.emit(label, f"{message} {tr('started', language=self.language)}")
 
-        def heartbeat() -> None:
+        def report_heartbeat() -> None:
             while not stopped.wait(interval):
                 self.emit(label, f"{message} {tr('still working', language=self.language)} {tr('stage_elapsed', language=self.language)}={_duration(time.perf_counter() - started)}")
 
-        thread = Thread(target=heartbeat, name="lladar-progress", daemon=True)
-        thread.start()
+        thread = Thread(target=report_heartbeat, name="lladar-progress", daemon=True) if heartbeat else None
+        if thread is not None:
+            thread.start()
         status = "finished"
         try:
             yield
@@ -117,7 +137,8 @@ class ProgressReporter:
             raise
         finally:
             stopped.set()
-            thread.join()
+            if thread is not None:
+                thread.join()
             self.emit(label, f"{message} {tr(status, language=self.language)} {tr('stage_elapsed', language=self.language)}={_duration(time.perf_counter() - started)}")
 
     def session(self, completed: int, total: int, message: str) -> None:

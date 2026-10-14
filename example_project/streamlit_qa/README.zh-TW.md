@@ -10,25 +10,32 @@ uv run --extra test --extra streamlit-test streamlit run example_project/streaml
 
 開啟 http://127.0.0.1:8501，在下方輸入問題。Ctrl+C 停止測試頁。
 
-執行真瀏覽器相容性測試：
+使用 LLaDAR 瀏覽器模式前，先安裝 Playwright Chromium：
 
 ```powershell
-uv run --extra test --extra streamlit-test pytest tests/test_streamlit_browser.py -m browser
+uv run python -m playwright install chromium
 ```
 
-需要已安裝 Playwright Chromium。測試自行啟動 loopback Streamlit、使用獨立瀏覽器 profile，結束時關閉自己啟動的服務。
+目前的 `--page-url` 流程由 Akasha Agent 探索實際頁面操作與通訊，產生協定／會話程式，再經獨立探測題與新驗證回合資格化。通用工具會觀察原生 Streamlit 的二進位 WebSocket；核心不固定選擇 Streamlit DOM 路徑，也不預裝專用 Streamlit codec。生成的解碼仍須通過宿主來源檢查及獨立完整回答核對。
 
-以 Streamlit 1.65.0 實測：原生二進位、持續開啟的 WebSocket 仍無法走 transport-only 重播。Browser mode 現在可在校正階段選擇 DOM 路徑，觀察本題 running→idle 完成，再用原生聊天元件執行驗證及資料集問答。測試同時保留通訊擷取的負向案例，以及 BrowserTarget／CLI 成功案例與安全 evidence；選定路徑後固定使用，失敗停止後續派送。
-
-使用自己的資料集（需 Gemini 抽取憑證及互動式 YES／MATCH 確認）：
+保持啟動 Streamlit 的終端開啟，再用另一個終端執行資料集：
 
 ```powershell
-uv run lladar run-agent path/to/dataset.jsonl --page-url http://127.0.0.1:8501
+uv run lladar run-agent path/to/dataset.jsonl --page-url http://127.0.0.1:8501 --output streamlit.responses.jsonl
 ```
 
-整合測試使用固定抽取 provider，驗證瀏覽器流程與產物，未驗證真模型的抽取忠實度。
+在本機設定選定的 Akasha 模型；`--model PROVIDER:MODEL` 選擇探索、修復與無工具抽取所用的模型。測試網頁本身不呼叫模型，但 LLaDAR 的探索與抽取可能產生付費模型呼叫。依終端提示同意網站操作／模型傳輸，再完成全文核對。
 
-`agent.py` 提供獨立 `ask_agent(question)`，讓日後專案模式適配可直接使用；一般測試驗證網頁、browser transport 邊界與 DOM 完整流程；未執行自動 adapter。
+正式回答的自動核對，需要至少三個不同回合經可信的全文資格化，且當回合的來源結構、完成證據與完整 DOM 仍有效。目前的獨立 reader 要求觀測到 `aria-busy` true→false，並逐字符合完整 subtree。若此頁無法提供這些證據，或原始格式無法逐字還原，受影響的回答仍須人工 `MATCH`；模型彼此同意不能代替這項核對。
 
+[原生 Streamlit harness](../../scripts/verify_streamlit_discovery_live.py) 提供不呼叫模型的乾跑模式：
 
-真 Gemini 的 opt-in CLI 測試已用 `gemini-3.8-flash` 驗證四次抽取及兩題中文答案逐字一致，詳見 [真模型驗收紀錄](../../docs/streamlit-browser-validation.zh-TW.md)。需明確設定 `LLADAR_LIVE_GEMINI=1` 並選擇 `-m live_gemini`；一般測試會跳過此付費 API 案例。
+```powershell
+uv run python scripts/verify_streamlit_discovery_live.py --timeout 30 --output-root .tmp/streamlit-discovery-dry
+```
+
+預設連接已啟動的原生頁面 `http://127.0.0.1:8517`；上方範例使用 8501，請加上 `--page-url http://127.0.0.1:8501`。乾跑只驗證原生 UI 回答、對話歷史與持續二進位 WebSocket 觀察，不能證明 Agent 已生成可用的二進位解碼。加上 `--paid` 才明確啟用真 Akasha 探索／抽取及通訊解碼驗收。結果以[探索 PRD](../../docs/PRD-browser-agent-discovery.zh-TW.md)及[現行驗收證據](../../docs/browser-agent-discovery-validation.zh-TW.md)為準；有付費 harness 不等於已通過驗收。
+
+[2026-10-09 驗收紀錄](../../docs/streamlit-browser-validation.zh-TW.md)保留的是已退役的人工校正／固定選路實作，不能證明目前 Streamlit 探索通過。一般回歸測試不授權付費模型呼叫。
+
+`agent.py` 另提供 `ask_agent(question)`，可供專案模式適配；這份文件示範正常的 Streamlit 問答網頁。

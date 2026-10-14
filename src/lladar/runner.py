@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .progress import ProgressReporter
+from .resource_limits import resource_limit
 from .model_profiles import resolve_model_profile
 from .records import read_records, write_records
 from .method_skill import SkillAgentFactory, resolve_skill
@@ -131,7 +132,8 @@ def run_agent(
     max_output_tokens: int | None = None,
     target_python: str | Path | None = None,
     timeout: float = 3600,
-    max_tool_calls: int = 100,
+    max_tool_calls: int = 1000,
+    extend_model_calls: int | None = None,
     skill: str | Path | None = None,
     seed: int = 0,
     interactive: bool | None = None,
@@ -142,7 +144,8 @@ def run_agent(
     interface_selector: Callable[[dict], str] | None = None,
     strategy_agent_factory: SkillAgentFactory | None = None,
     page_url: str | None = None,
-    calibration_question: str | None = None,
+    probe_question: str | None = None,
+    browser_session_policy: str | None = None,
     browser_target_factory: Callable[..., Any] | None = None,
     confirm_browser_run: bool = False,
     fresh_browser_profile: bool = False,
@@ -153,8 +156,8 @@ def run_agent(
     """Fill actual_response in a new JSONL file without evaluating it."""
     if sum(value is not None for value in (answer, project, page_url)) != 1:
         raise ValueError("provide exactly one of answer, project, or page_url")
-    if adapt is not None and project is None:
-        raise ValueError("--adapt requires --project")
+    if adapt is not None and project is None and page_url is None:
+        raise ValueError("--adapt requires --project or --page-url")
     if page_url is not None and service_url is not None:
         raise ValueError("--service-url applies only to a project target")
     if project is None and interface_selector is not None:
@@ -163,18 +166,25 @@ def run_agent(
         raise ValueError("--confirm-browser-run requires --page-url")
     if page_url is None and fresh_browser_profile:
         raise ValueError("--fresh-browser-profile requires --page-url")
-    if calibration_question is not None:
+    if probe_question is not None:
         if page_url is None:
-            raise ValueError("--calibration-question requires --page-url")
-        if not isinstance(calibration_question, str) or not calibration_question.strip():
-            raise ValueError("--calibration-question must be a non-empty question")
+            raise ValueError("--probe-question requires --page-url")
+        if not isinstance(probe_question, str) or not probe_question.strip():
+            raise ValueError("--probe-question must be a non-empty question")
+    if browser_session_policy is not None and (page_url is None or browser_session_policy not in {'independent','continuous','demonstrated'}):
+        raise ValueError('--conversation-policy requires --page-url and independent, continuous or demonstrated')
     if page_url is None and (extraction_provider_factory is not None or allow_response_model_transfer):
         raise ValueError("response extraction options require --page-url")
     from .answer_extraction import DEFAULT_EXTRACTION_MODEL
     extraction_model = model or DEFAULT_EXTRACTION_MODEL
     model = model or DEFAULT_ADAPTER_MODEL
-    if project is None and (max_input_tokens is not None or max_output_tokens is not None):
+    if project is None and page_url is None and (max_input_tokens is not None or max_output_tokens is not None):
         raise ValueError("max_input_tokens and max_output_tokens apply only to a project target")
+    if page_url is not None:
+        from .answer_extraction import ExtractionOptions
+        browser_limits = ExtractionOptions(model_destination=extraction_model, max_output_tokens=max_output_tokens, max_input_tokens=max_input_tokens)
+        browser_limits.output_token_limit
+        browser_limits.input_byte_limit
     adapter_profile = resolve_model_profile(
         model, max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens,
     ) if project is not None else None
@@ -186,6 +196,10 @@ def run_agent(
         page_origin = f"{browser_page.scheme}://{browser_page.netloc}"
     if timeout <= 0 or max_tool_calls <= 0:
         raise ValueError("timeout and max_tool_calls must be positive")
+    if extend_model_calls is not None and (page_url is None or resume is None
+            or type(extend_model_calls) is not int
+            or extend_model_calls <= resource_limit('BROWSER_DISCOVERY_MODEL_CALLS')):
+        raise ValueError('--extend-model-calls requires resumed --page-url and a total greater than the original model-call limit')
     selected_skill = resolve_skill(skill, BUILTIN_RUN_SKILL_DIR)
 
     records = read_records(dataset)
@@ -196,9 +210,22 @@ def run_agent(
     output_path = Path(output)
     run_path = output_path.with_name(output_path.name + ".run.json")
     trials_path = output_path.with_name(output_path.name + ".trials.jsonl")
+    session = current_session()
+    blocked_artifact = session.data["state"].get("run_blocker_artifact") if session and resume else None
+    archive_blocked = False
     for candidate in (output_path, run_path, trials_path):
         if candidate.exists() and not force:
+            if (candidate == run_path and blocked_artifact
+                    and blocked_artifact.get("path") == str(run_path.resolve())
+                    and blocked_artifact.get("sha256") == file_sha(run_path)):
+                archive_blocked = True
+                continue
             raise FileExistsError(f"output already exists: {candidate}")
+    if archive_blocked:
+        archive = session.directory / ("blocked-run-" + blocked_artifact["sha256"] + ".json")
+        if archive.exists():
+            raise FileExistsError(f"output already exists: {archive}")
+        run_path.rename(archive)
 
     strategy = SkillStrategy(records, skill=selected_skill, seed=seed, model=model,
                              env_file=env_file or ".env", runs_root=runs_root,
@@ -235,6 +262,8 @@ def run_agent(
     )
     completed = 0
     browser_cancelled = False
+    browser_blocker = None
+    last_schedule_index = 0
     errors: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
     target_evidence: dict[str, Any] = {
@@ -282,30 +311,38 @@ def run_agent(
             elif page_url is not None and schedule:
                 from functools import partial
                 from .answer_extraction import ExtractionOptions
-                from .extraction_provider import GeminiExtractionProvider
+                from .extraction_provider import AkashaExtractionProvider
 
                 extraction_options = ExtractionOptions(
                     model_destination=extraction_model,
-                    provider_factory=extraction_provider_factory or partial(GeminiExtractionProvider, env_file=env_file or ".env"),
+                    max_output_tokens=max_output_tokens,
+                    max_input_tokens=max_input_tokens,
+                    provider_factory=extraction_provider_factory or partial(AkashaExtractionProvider, env_file=env_file or ".env"),
                     transfer_approved=allow_response_model_transfer,
                 )
                 if browser_target_factory is None:
-                    from .browser_target import BrowserTarget
+                    from .independent_target import IndependentTarget
 
-                    browser_target_factory = BrowserTarget
-                browser_target = browser_target_factory(
+                    browser_target_factory = partial(IndependentTarget,
+                        env_file=env_file or '.env',
+                        workspace=session.directory/'browser-discovery', adapter_path=adapt,
+                        max_tool_calls=max_tool_calls,conversation_policy=browser_session_policy or 'independent')
+                browser_target_kwargs = dict(
                     page_url=page_url,
                     timeout=timeout,
                     runs_root=runs_root,
                     verbose=verbose,
                     confirmed=confirm_browser_run,
                     fresh_profile=fresh_browser_profile,
-                    calibration_question=calibration_question,
+                    probe_question=probe_question,
                     extraction_options=extraction_options,
                 )
+                if extend_model_calls is not None:
+                    browser_target_kwargs['model_call_limit'] = extend_model_calls
+                browser_target = browser_target_factory(**browser_target_kwargs)
                 try:
                     browser_target.prepare(
-                        probes,
+                        [],
                         interactive=interactive,
                         record_count=len(schedule),
                         request_count=sum(item.repeats for item in schedule),
@@ -340,11 +377,15 @@ def run_agent(
                         json.dumps(blocked_run, ensure_ascii=False, indent=2) + "\n",
                         encoding="utf-8",
                     )
+                    session.put("run_blocker_artifact", {
+                        "path": str(run_path.resolve()), "sha256": file_sha(run_path),
+                    })
                     raise
                 target_evidence = dict(browser_target.evidence)
 
             trials: list[dict[str, Any]] = []
             for schedule_index, item in enumerate(schedule, 1):
+                last_schedule_index = schedule_index
                 record = records[item.case.record_index - 1]
                 result = dict(record)
                 result["actual_response"] = None
@@ -424,6 +465,9 @@ def run_agent(
                                 f"{key}={str(value).lower() if isinstance(value, bool) else value}"
                                 for key, value in diagnostic.items()
                             )
+                            if not isinstance(error,KeyboardInterrupt):
+                                browser_blocker={"stage":"dataset_request","line":item.case.record_index,
+                                    "trial":trial,"diagnostic":diagnostic}
                         errors.append(error_record)
                         reporter.emit(
                             "WARN", detail
@@ -435,12 +479,24 @@ def run_agent(
                     trials.append({key: value for key, value in trial_result.items() if key != "actual_response"})
                     json.dump(trial_result, trial_stream, ensure_ascii=False)
                     trial_stream.write("\n")
+                    if browser_cancelled or browser_blocker is not None:
+                        break
                 status = "ok" if result["actual_response"] is not None else "execution_error"
                 if status == "ok":
                     completed += 1
                 json.dump(result, response_stream, ensure_ascii=False)
                 response_stream.write("\n")
                 reporter.emit("SESSION", tr('record={p0} status={p1}', p0=item.case.record_index, p1=status))
+                if browser_cancelled or browser_blocker is not None:
+                    break
+            if browser_blocker is not None:
+                reporter.emit('WARN',tr('The adapter could not be repaired and requalified; stopping the remaining browser trials. reason={reason}',
+                    reason=browser_blocker['diagnostic']['reason']))
+                for remaining in schedule[last_schedule_index:]:
+                    skipped=dict(records[remaining.case.record_index-1])
+                    skipped['actual_response']=None
+                    json.dump(skipped,response_stream,ensure_ascii=False)
+                    response_stream.write('\n')
         finally:
             if browser_target is not None:
                 target_evidence = dict(browser_target.evidence)
@@ -467,6 +523,11 @@ def run_agent(
         run_record["probe_contract"] = probe_contract
     if browser_cancelled:
         run_record["status"] = "cancelled"
+    elif browser_blocker is not None:
+        run_record["status"] = "blocked"
+        run_record["blocker"] = browser_blocker
+    else:
+        run_record["status"] = "ok" if not errors else "completed_with_errors"
     run_path.parent.mkdir(parents=True, exist_ok=True)
     run_record["session"] = publication_metadata()
     publish_bundle({output_path: responses_spool, trials_path: trials_spool,

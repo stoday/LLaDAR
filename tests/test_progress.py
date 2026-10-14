@@ -90,6 +90,27 @@ def test_disabled_waiting_runs_without_messages_or_background_thread():
     assert stream.getvalue() == ""
 
 
+def test_user_input_suspends_all_background_progress_and_resumes():
+    stream = io.StringIO()
+    reporter = ProgressReporter(stream=stream)
+    with reporter.user_input():
+        with reporter.user_input():
+            reporter.emit('BROWSER', 'background while typing')
+        reporter.emit('BROWSER', 'still typing')
+    reporter.emit('BROWSER', 'resumed')
+    assert 'typing' not in stream.getvalue()
+    assert 'resumed' in stream.getvalue()
+
+
+def test_event_driven_wait_does_not_start_heartbeat_thread():
+    stream = io.StringIO()
+    with ProgressReporter(stream=stream).waiting('Agent repairing', heartbeat=False):
+        assert not any(thread.name == 'lladar-progress' for thread in threads())
+    assert 'started' in stream.getvalue()
+    assert 'finished' in stream.getvalue()
+    assert 'still working' not in stream.getvalue()
+
+
 def test_all_progress_events_keep_timestamp_and_monotonic_elapsed_in_log(tmp_path, monkeypatch):
     clock = [100.0]
     monkeypatch.setattr("lladar.progress.time.perf_counter", lambda: clock[0])

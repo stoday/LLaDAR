@@ -9,6 +9,7 @@ import pytest
 from lladar.api import create_test_dataset
 from lladar.cli import build_parser
 from lladar.cli import main
+from lladar.github_dataset import LIMITS
 
 
 def test_cli_accepts_github_as_the_only_source_and_rejects_mixed_sources():
@@ -478,7 +479,7 @@ def test_redirect_to_private_network_is_rejected_before_fetching_the_destination
 
 
 @pytest.mark.parametrize("content,reason", [
-    (b"x" * (2 * 1024 * 1024 + 1), "size limit"),
+    (b"x" * (LIMITS['file_bytes'] + 1), "size limit"),
     (b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 100\n", "Git LFS"),
 ], ids=["size-limit", "lfs-pointer"])
 def test_unavailable_large_or_lfs_data_never_publishes_as_valid_qa(tmp_path, github_http, content, reason):

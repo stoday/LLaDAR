@@ -10,6 +10,7 @@ from functools import wraps
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from .resource_limits import resource_limit
 
 
 def recoverable_exploration(function):
@@ -28,8 +29,8 @@ IGNORED_DIRECTORIES = {".git", ".venv", "venv", "node_modules", "__pycache__"}
 
 @dataclass(slots=True)
 class ExplorationBudget:
-    max_tool_calls: int = 200
-    max_read_characters: int = 120_000
+    max_tool_calls: int = resource_limit('EXPLORATION_TOOL_CALLS')
+    max_read_characters: int = resource_limit('EXPLORATION_READ_CHARACTERS')
     command_timeout_seconds: float = 20.0
 
 
@@ -131,7 +132,7 @@ class WorkspaceExplorer:
                 and not any(part.startswith(".env") for part in path.relative_to(self.root).parts)
                 and not bool(set(path.relative_to(self.root).parts) & IGNORED_DIRECTORIES))
 
-    def list_files(self, pattern: str = "**/*", limit: int = 500) -> list[str]:
+    def list_files(self, pattern: str = "**/*", limit: int = resource_limit('PROJECT_LIST_FILES')) -> list[str]:
         self._check_budget()
         if Path(pattern).is_absolute() or ".." in Path(pattern).parts:
             raise ValueError("Glob must stay inside workspace")
@@ -181,7 +182,7 @@ class WorkspaceExplorer:
                         {
                             "path": path.relative_to(self.root).as_posix(),
                             "line": line_number,
-                            "text": line[:500],
+                            "text": line[:resource_limit('PROJECT_SEARCH_SNIPPET_CHARS')],
                         }
                     )
                     if len(matches) >= limit:
@@ -197,19 +198,19 @@ class WorkspaceExplorer:
         """Find bounded source excerpts around a method or scoring term."""
         self._check_budget()
         if (not query or Path(pattern).is_absolute() or ".." in Path(pattern).parts
-                or not 1 <= limit <= 20 or not 0 <= before <= 20
-                or not 0 <= after <= 30):
+                or not 1 <= limit <= resource_limit('PROJECT_SEARCH_RESULTS') or not 0 <= before <= resource_limit('PROJECT_SEARCH_CONTEXT_LINES')
+                or not 0 <= after <= resource_limit('PROJECT_SEARCH_CONTEXT_LINES')):
             raise ValueError("Invalid contextual source search")
         matches: list[dict[str, Any]] = []
         for path in sorted(self.root.glob(pattern)):
             if (not path.is_file() or not self._visible(path)
-                    or path.stat().st_size > 2_000_000):
+                    or path.stat().st_size > resource_limit('PROJECT_READ_BYTES')):
                 continue
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
             for index, line in enumerate(lines):
                 if query.casefold() not in line.casefold():
                     continue
-                snippet = "\n".join(lines[max(0, index - before):index + after + 1])[:4000]
+                snippet = "\n".join(lines[max(0, index - before):index + after + 1])[:resource_limit('PROJECT_SEARCH_SNIPPET_CHARS')]
                 if self._read_characters + len(snippet) > self.budget.max_read_characters:
                     raise RuntimeError("Exploration source-reading budget exhausted")
                 self._read_characters += len(snippet)
@@ -223,11 +224,11 @@ class WorkspaceExplorer:
                                         "limit": limit, "before": before, "after": after},
                      f"{len(matches)} contextual matches")
         return matches
-    def preview_file(self, path: str, limit: int = 8000) -> str:
+    def preview_file(self, path: str, limit: int = resource_limit('PROJECT_PREVIEW_CHARS')) -> str:
         """Read a bounded prefix, or notebook cell sources without saved outputs."""
         self._check_budget()
-        if not 1 <= limit <= 10000:
-            raise ValueError("Preview limit must be between 1 and 10000")
+        if not 1 <= limit <= resource_limit('PROJECT_PREVIEW_CHARS'):
+            raise ValueError(f"Preview limit must be between 1 and {resource_limit('PROJECT_PREVIEW_CHARS')}")
         target = self._resolve(path)
         if not target.is_file() or not self._visible(target):
             raise ValueError(f"Not a readable workspace file: {path}")
@@ -247,10 +248,10 @@ class WorkspaceExplorer:
         return content
 
     def read_notebook_code(self, path: str, offset: int = 0,
-                           limit: int = 20000) -> dict[str, Any]:
+                           limit: int = resource_limit('PROJECT_NOTEBOOK_PAGE_CHARS')) -> dict[str, Any]:
         """Read a bounded page of notebook code and commented markdown."""
         self._check_budget()
-        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 20000:
+        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= resource_limit('PROJECT_NOTEBOOK_PAGE_CHARS'):
             raise ValueError("Notebook offset or limit is invalid")
         target = self._resolve(path)
         if target.suffix.casefold() != ".ipynb" or not target.is_file() or not self._visible(target):

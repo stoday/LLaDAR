@@ -185,7 +185,8 @@ def test_provider_interruption_prints_resume_without_force_and_reuses_original_o
 
 
 def test_browser_interruption_resume_hint_keeps_private_url_out_of_output(tmp_path,capsys):
-    from test_simple_pipeline import make_dataset, browser_cli_terminal
+    from test_simple_pipeline import make_dataset
+    from fixture_extraction import browser_cli_terminal
     source=tmp_path/'dataset.jsonl'
     make_dataset(source,count=1)
     def interrupted(**options):
