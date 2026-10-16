@@ -51,7 +51,7 @@ def test_output_reaches_each_workflow_as_a_file(tmp_path, monkeypatch, capsys, a
     if destination == "nested/custom.jsonl":
         assert output == Path(destination)
     else:
-        directory = Path(".") if destination is None else Path(destination)
+        directory = Path("runs") if destination is None else Path(destination)
         assert output.parent == directory
         if filename is None:
             assert output.name.startswith("test-dataset-") and output.suffix == ".jsonl"
@@ -91,7 +91,7 @@ def test_situation_writes_default_file_and_preserves_overwrite_guard(tmp_path, m
     argv = ["create", "situation", "--instructions", "Observe", "--stop-criteria", "Done", "--max-turns", "1"]
     if destination is not None:
         argv += ["--output", destination]
-    output = Path(destination or ".") / "situation.json"
+    output = Path(destination or "runs") / "situation.json"
     assert cli.main(argv, skill_agent_factory=AuthoringAgent) == 0
     original = output.read_bytes()
     assert json.loads(original)["stop"]["max_turns"] == 1
@@ -180,6 +180,10 @@ def test_provider_interruption_prints_resume_without_force_and_reuses_original_o
     session=Path(tokens[tokens.index('--resume')+1])
     assert session.name.startswith('evaluation.json.work-')
     assert output.read_text(encoding='utf-8')=='previous result'
+    # An omitted output must restore the checkpoint's location, even when it
+    # predates the CLI default changing to runs/.
+    index=tokens.index('--output')
+    del tokens[index:index+2]
     assert cli.main(tokens[1:],skill_agent_factory=EvaluationSkillAgent)==0
     assert json.loads(output.read_text(encoding='utf-8'))['summary']['evaluated']==2
 

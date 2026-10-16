@@ -130,7 +130,7 @@ def test_completion_with_execution_errors_not_wrong_answers(tmp_path, monkeypatc
     assert "Completed with issues" in reports(tmp_path)[0].read_text(encoding="utf-8")
     monkeypatch.setattr(cli, "evaluate", lambda *args, **kwargs: {"summary": {"evaluated": 2, "incorrect": 2}})
     assert cli.main(["eval", "input"]) == 0
-    assert "Status: Completed\n" in (tmp_path / "evaluation.json.operation-2.md").read_text(encoding="utf-8")
+    assert "Status: Completed\n" in (tmp_path / "runs/evaluation.json.operation-2.md").read_text(encoding="utf-8")
 
 
 def test_run_metadata_issues_and_raw_errors_are_not_copied(tmp_path, monkeypatch):
@@ -139,7 +139,7 @@ def test_run_metadata_issues_and_raw_errors_are_not_copied(tmp_path, monkeypatch
         Path(str(args[1]) + ".run.json").write_text(json.dumps({"failed": 1, "errors": ["secret target answer"]}))
         return 0
     monkeypatch.setattr(cli, "run_agent", run)
-    assert cli.main(["run-agent", "input"]) == 0
+    assert cli.main(["run-agent", "input", "--output", "responses.jsonl"]) == 0
     text = reports(tmp_path)[0].read_text(encoding="utf-8")
     assert "Completed with issues" in text
     assert "`failed`: 1" in text
@@ -187,7 +187,7 @@ def test_situation_errors_are_counted_without_copying_details(tmp_path, monkeypa
         Path(str(args[1]) + ".run.json").write_text(json.dumps({"completed": 1, "errors": [{"error": "secret error"}]}))
         return 1
     monkeypatch.setattr(cli, "run_situation", run)
-    assert cli.main(["run-agent", "--situation-config", "situation.json", "--num-scenarios", "2"]) == 0
+    assert cli.main(["run-agent", "--situation-config", "situation.json", "--num-scenarios", "2", "--output", "responses.jsonl"]) == 0
     text = reports(tmp_path)[0].read_text(encoding="utf-8")
     assert "Completed with issues" in text and "`failed`: 1" in text
     assert "secret error" not in text
@@ -199,7 +199,7 @@ def test_failed_run_does_not_reuse_old_metadata_errors(tmp_path, monkeypatch):
     def fail(*args, **kwargs):
         raise ProviderError("private")
     monkeypatch.setattr(cli, "run_agent", fail)
-    assert cli.main(["run-agent", "input"]) == 2
+    assert cli.main(["run-agent", "input", "--output", "responses.jsonl"]) == 2
     text = reports(tmp_path)[0].read_text(encoding="utf-8")
     assert "`failed`: 99" not in text and "— Existing" in text
 
@@ -211,7 +211,7 @@ def test_overwritten_output_is_marked_modified(tmp_path, monkeypatch):
         Path(kwargs["output"]).write_text("updated output")
         return {"summary": {"evaluated": 1}}
     monkeypatch.setattr(cli, "evaluate", evaluate)
-    assert cli.main(["eval", "input", "--force"]) == 0
+    assert cli.main(["eval", "input", "--output", "evaluation.json", "--force"]) == 0
     assert "— Modified" in reports(tmp_path)[0].read_text(encoding="utf-8")
 
 

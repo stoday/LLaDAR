@@ -78,12 +78,29 @@ lladar report evaluation-missing-info.json --output report-missing-info.md
 ## 使用選項
 
 所有主要階段都可省略 `--output`，也可指定資料夾或完整檔案路徑。
-省略時輸出到目前工作目錄：資料集使用 `test-dataset-YYYYMMDD-HHMMSS.jsonl`，
+省略時輸出到目前工作目錄下的 `runs/`：資料集使用 `test-dataset-YYYYMMDD-HHMMSS.jsonl`，
 其他階段依序使用 `situation.json`、`responses.jsonl`、`evaluation.json`、`report.md`。
 指定 `--output ./artifacts` 時，預設檔名與附屬檔都放進 `./artifacts/`。
 既有資料夾、結尾分隔符號或沒有副檔名的新路徑視為資料夾；
 既有檔案或有副檔名的新路徑視為檔案。含點號的新資料夾可寫成 `./results.v1/`。
 既有輸出仍需 `--force`。
+
+回答、附屬檔、續跑工作目錄與匯出的 adapter 都會跟隨主輸出放在 `runs/`；
+明確指定 `--output` 或 `--export-adapter` 時，則使用指定路徑。
+專案測試的暫存集中到 `.tmp/pytest/`，測試快取放在 `.tmp/pytest-cache/`；
+手動指定 pytest 的 `--basetemp` 仍可覆寫位置。
+一次清理測試／建置暫存、`runs/`，以及舊的根目錄
+`responses.jsonl`／`response.jsonl` 與評估附屬檔，可執行：
+
+```powershell
+python scripts/cleanup_generated.py --all-generated
+python scripts/cleanup_generated.py --all-generated --apply
+```
+
+第一行只預覽；第二行列出清單後，輸入 `DELETE` 才刪除。
+刪除執行產物會失去其中的回答、續跑狀態、adapter 與擷取資料。
+受版本控制的檔案、根目錄 `.env`／`.venv`、`.lladar` 登入設定仍會保留。
+既有產物不會自動搬移。
 
 每個階段成功後都會顯示工作摘要，列出輸出的絕對目錄、各檔案位置與內容簡述，
 以及下一步命令或閱讀提示。`--no-verbose` 仍會顯示摘要，`--log` 也會同步保存。

@@ -89,13 +89,30 @@ For a complete walkthrough with custom methods, see the
 ## Workflow options
 
 All main workflow commands accept an optional `--output` directory or file path.
-Omitting it writes into the current directory: a timestamped
+Omitting it writes into `runs/` under the current directory: a timestamped
 `test-dataset-YYYYMMDD-HHMMSS.jsonl`, `situation.json`, `responses.jsonl`,
 `evaluation.json`, or `report.md`. With `--output ./artifacts`, the same names
 and their sidecars go into `./artifacts/`. Existing directories, trailing
 separators, and new paths without a suffix are directories; existing files and
 new paths with a suffix are filenames. For a new directory containing a dot,
 use `./results.v1/`. Existing outputs still require `--force`.
+
+Generated answers, sidecars, resume workspaces and exported adapters stay beside
+their main output in `runs/` unless you set `--output` or `--export-adapter`.
+Repository tests keep temporary files in `.tmp/pytest/` and their cache in
+`.tmp/pytest-cache/`; an explicit pytest `--basetemp` overrides that location.
+To preview cleanup of test/build caches, `runs/`, and legacy root-level
+`responses.jsonl` / `response.jsonl` and evaluation artifacts, run:
+
+```bash
+python scripts/cleanup_generated.py --all-generated
+python scripts/cleanup_generated.py --all-generated --apply
+```
+
+The second command lists the candidates and asks you to type `DELETE`. Deleting
+run artifacts loses saved answers, resume checkpoints, exported adapters and
+captured state inside them. Tracked files, root `.env` / `.venv`, and `.lladar`
+login profiles are preserved. Existing artifacts are not moved automatically.
 
 After each successful stage, a work summary lists the absolute output directory,
 each generated file and its purpose, and the next command or reading step.

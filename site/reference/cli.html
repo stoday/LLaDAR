@@ -25,7 +25,7 @@ lladar create report-skill --lang zh-CN</code></pre>
       <p>Next-step commands carry the setting. A new stage without it uses <code>en</code>; <code>--resume</code> restores the saved language unless an identical value is supplied. Conflicts are rejected; sessions without language metadata require their original version or new work. Python stage APIs accept <code>lang="ja"</code>. Metadata distinguishes <code>lang</code> from <code>ui_lang</code>; templates include <code>language.json</code> with <code>template_lang</code>.</p>
     </section>
 <section id="output-paths"><h2>Output paths</h2><p>All main workflow commands accept an optional <code>--output</code> directory or file path.
-Omitting it writes into the current directory: a timestamped
+Omitting it writes into <code>runs/</code> under the current directory: a timestamped
 <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>, <code>situation.json</code>, <code>responses.jsonl</code>,
 <code>evaluation.json</code>, or <code>report.md</code>. With <code>--output ./artifacts</code>, the same names
 and their sidecars go into <code>./artifacts/</code>. Existing directories, trailing

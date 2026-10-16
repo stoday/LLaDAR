@@ -150,7 +150,7 @@ class _SingleSkill(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
-_DEFAULT_DATASET_OUTPUT_DISPLAY = "."
+_DEFAULT_DATASET_OUTPUT_DISPLAY = "runs/"
 _DATASET_FILENAME_DISPLAY = "test-dataset-YYYYMMDD-HHMMSS.jsonl"
 
 
@@ -351,7 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Public GitHub repository: discover actual datasets and generate QA with an evidence report (required unless --knowledge is supplied; no default).")
     dataset.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                          help="Local method directory containing SKILL.md; selects direct QA or optional graph generation. Only one is supported (default: bundled knowledge-point-qa for --knowledge, github-dataset for --from-github).")
-    dataset.add_argument("--output", default=".", metavar="PATH",
+    dataset.add_argument("--output", default="runs/", metavar="PATH",
                          help=f"Output directory or file path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file; new paths without a suffix are directories (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
     dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
@@ -402,8 +402,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Maximum target Agent turns per scenario; must be positive (required; no default).")
     situation.add_argument("--knowledge", action="append", default=[], metavar="PATH",
                            help="Optional .md or .txt knowledge file; repeat for multiple files (default: no knowledge files).")
-    situation.add_argument("--output", default="situation.json", metavar="PATH",
-                           help="Output directory or situation JSON file path; a directory gets situation.json (default: situation.json; existing file requires --force).")
+    situation.add_argument("--output", default="runs/situation.json", metavar="PATH",
+                           help="Output directory or situation JSON file path; a directory gets situation.json (default: runs/situation.json; existing file requires --force).")
     situation.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                            help="Local situation-authoring skill directory containing SKILL.md (default: bundled create-situation).")
     situation.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
@@ -489,8 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
     runner.add_argument('--extend-model-calls', type=int, metavar='TOTAL',
         help='On a resumed --page-url run, explicitly raise the total Agent model-call cap while keeping the saved inputs and other limits unchanged; the increase persists on later resumes (default: no new extension).')
     runner.add_argument(
-        "--output", default="responses.jsonl", metavar="PATH",
-        help="Output directory or responses JSONL file path; a directory gets responses.jsonl (default: responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
+        "--output", default="runs/responses.jsonl", metavar="PATH",
+        help="Output directory or responses JSONL file path; a directory gets responses.jsonl (default: runs/responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
     )
     runner.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                         help="Use a local method directory containing SKILL.md for single-question runs (default: bundled run-agent-stability; unavailable with --situation-config).")
@@ -570,8 +570,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluation.add_argument("responses", metavar="RESPONSES",
                             help="Responses JSONL from run-agent (required; no default).")
-    evaluation.add_argument("--output", default="evaluation.json", metavar="PATH",
-                            help="Output directory or evaluation JSON file path; a directory gets evaluation.json (default: evaluation.json).")
+    evaluation.add_argument("--output", default="runs/evaluation.json", metavar="PATH",
+                            help="Output directory or evaluation JSON file path; a directory gets evaluation.json (default: runs/evaluation.json).")
     evaluation_method = evaluation.add_mutually_exclusive_group()
     evaluation_method.add_argument("--criteria", metavar="TEXT",
                                    help="Evaluation requirements for the built-in method; mutually exclusive with --skill (default: saved situation rubric or answer correctness).")
@@ -602,8 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument("eval_output", metavar="EVALUATION",
                         help="Evaluation JSON produced by eval (required; no default).")
-    report.add_argument("--output", default="report.md", metavar="PATH",
-                        help="Output directory or Markdown file path; a directory gets report.md (default: report.md).")
+    report.add_argument("--output", default="runs/report.md", metavar="PATH",
+                        help="Output directory or Markdown file path; a directory gets report.md (default: runs/report.md).")
     report.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                         help="Local report-writing skill directory containing SKILL.md (default: bundled report-evidence-summary for single-question reports; situation reports use built-in rendering unless a skill is supplied).")
     report.add_argument("--model", default=DEFAULT_REPORT_MODEL, metavar="MODEL",
@@ -794,8 +794,8 @@ def _execute(
             from .work_session import digest
             if digest(saved["data"]) != saved["sha256"]:
                 raise ValueError("checkpoint integrity check failed")
-            default_output = {"create": ".", "run-agent": "responses.jsonl",
-                              "eval": "evaluation.json", "report": "report.md"}[args.command]
+            default_output = {"create": "runs/", "run-agent": "runs/responses.jsonl",
+                              "eval": "runs/evaluation.json", "report": "runs/report.md"}[args.command]
             if args.output == default_output:
                 args.output = saved["data"]["configuration"]["output"]
         filenames = {"run-agent": "responses.jsonl", "eval": "evaluation.json", "report": "report.md"}

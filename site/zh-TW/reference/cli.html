@@ -24,7 +24,7 @@ lladar create report-skill --lang zh-CN</code></pre>
       <p>下一步命令帶上語言。新階段省略時使用 <code>en</code>；<code>--resume</code> 省略語言時恢復保存值，明確指定時須相同。衝突會被拒絕；舊工作沒有語言紀錄時請使用原版本或建立新工作。Python 階段 API 接受 <code>lang="ja"</code>。紀錄區分 <code>lang</code> 與 <code>ui_lang</code>；範本的 <code>language.json</code> 另記錄 <code>template_lang</code>。</p>
     </section>
 <section id="output-paths"><h2>輸出路徑</h2><p>所有主要階段都可省略 <code>--output</code>，也可指定資料夾或完整檔案路徑。
-省略時輸出到目前工作目錄：資料集使用 <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>，
+省略時輸出到目前工作目錄下的 <code>runs/</code>：資料集使用 <code>test-dataset-YYYYMMDD-HHMMSS.jsonl</code>，
 其他階段依序使用 <code>situation.json</code>、<code>responses.jsonl</code>、<code>evaluation.json</code>、<code>report.md</code>。
 指定 <code>--output ./artifacts</code> 時，預設檔名與附屬檔都放進 <code>./artifacts/</code>。
 既有資料夾、結尾分隔符號或沒有副檔名的新路徑視為資料夾；

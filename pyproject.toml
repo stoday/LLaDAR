@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lladar"
-version = "0.11.0"
+version = "0.12.0"
 description = "Create questions, run an Agent, evaluate responses, and render reports"
 readme = "README.md"
 license = "MIT"
@@ -41,7 +41,8 @@ where = ["src"]
 lladar = ["skill_assets/*/SKILL.md", "skill_assets/*/AUTHORING.md", "skill_assets/*/strategy.py", "template_assets/*.md", "locales/*.json", "localized_templates/*/*/*.md"]
 
 [tool.pytest.ini_options]
-addopts = "-q -m 'not browser'"
+addopts = "-q -m 'not browser' --basetemp=.tmp/pytest"
+cache_dir = ".tmp/pytest-cache"
 testpaths = ["tests"]
 markers = [
   "browser: tests that launch the explicitly provisioned Playwright Chromium browser",

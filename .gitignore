@@ -49,6 +49,7 @@ akasha-repo
 # for testing
 .pytest-*
 .tmp
+/runs/
 
 
 # Recoverable stage workspaces (source snapshots and captured answers)
