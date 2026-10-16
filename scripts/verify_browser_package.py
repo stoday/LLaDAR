@@ -11,7 +11,8 @@ REQUIRED = {"answer_extraction.py", "extraction_provider.py", "response_capture.
             "recording_store.py", "demonstration_recorder.py", "independent_adapter.py", "independent_target.py", "independent_reference.py",
             "browser_agent_loop.py", "browser_discovery_driver.py", "browser_provenance.py", "browser_inspection.py",
             "browser_reference.py", "browser_materials.py", "browser_protocol_projection.py",
-            "protocol_runtime.py", "protocol_resources.py", "resource_limits.py", "terminal_review.py"}
+            "protocol_runtime.py", "protocol_resources.py", "resource_limits.py", "terminal_review.py",
+            "live_status.py", "adapter_documentation.py", "portable_api.py", "api_runtime.py"}
 REMOVED = {"generated_parser.py", "parser_generation.py", "parser_runtime.py", "parser_recording.py",
            "parser_cache.py", "parser_provider.py", "response_decoder.py", "browser_operation.py",
            "browser_adapter.py", "browser_repair.py", "dom_capture.py", "websocket_capture.py", "playwright_driver.py"}
@@ -26,6 +27,9 @@ def verify(path: Path) -> None:
         with tarfile.open(path, "r:gz") as archive:
             names = archive.getnames()
             metadata = [archive.extractfile(name).read().decode("utf-8") for name in names if name.endswith("/PKG-INFO")]
+        for required in ("scripts/cleanup_generated.py", "tests/conftest.py"):
+            if not any(name.endswith("/" + required) for name in names):
+                raise ValueError("Source archive is missing " + required)
     sources = {Path(name).name for name in names if name.startswith("lladar/") or "/lladar/" in name}
     if not REQUIRED <= sources or REMOVED & sources:
         raise ValueError("Browser package contains missing or obsolete modules")

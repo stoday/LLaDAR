@@ -8,11 +8,13 @@ from typing import Any, Callable
 from .exceptions import LladarError, ProviderError
 from .model_profiles import resolve_model_profile
 from .language import language_prompt
+from .live_status import status_activity
 
 
 SkillAgentFactory = Callable[..., Any]
 
 
+@status_activity("Loading workflow skill")
 def resolve_skill(skill: str | Path | None, builtin: Path) -> Path:
     """Return one validated local skill directory, never a prompt fallback."""
     path = Path(skill) if skill is not None else builtin
@@ -58,6 +60,7 @@ def _invoke_skill(
     return evidence
 
 
+@status_activity("Running workflow model and tools")
 def invoke_skill(**options) -> dict[str, Any]:
     """Bound provider retries without retrying target-Agent requests."""
     for attempt in range(1, 4):

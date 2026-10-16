@@ -78,12 +78,29 @@ lladar report evaluation-missing-info.json --output report-missing-info.md
 ## 使用選項
 
 所有主要階段都可省略 `--output`，也可指定資料夾或完整檔案路徑。
-省略時輸出到目前工作目錄：資料集使用 `test-dataset-YYYYMMDD-HHMMSS.jsonl`，
+省略時輸出到目前工作目錄下的 `runs/`：資料集使用 `test-dataset-YYYYMMDD-HHMMSS.jsonl`，
 其他階段依序使用 `situation.json`、`responses.jsonl`、`evaluation.json`、`report.md`。
 指定 `--output ./artifacts` 時，預設檔名與附屬檔都放進 `./artifacts/`。
 既有資料夾、結尾分隔符號或沒有副檔名的新路徑視為資料夾；
 既有檔案或有副檔名的新路徑視為檔案。含點號的新資料夾可寫成 `./results.v1/`。
 既有輸出仍需 `--force`。
+
+回答、附屬檔、續跑工作目錄與匯出的 adapter 都會跟隨主輸出放在 `runs/`；
+明確指定 `--output` 或 `--export-adapter` 時，則使用指定路徑。
+專案測試的暫存集中到 `.tmp/pytest/`，測試快取放在 `.tmp/pytest-cache/`；
+手動指定 pytest 的 `--basetemp` 仍可覆寫位置。
+一次清理測試／建置暫存、`runs/`，以及舊的根目錄
+`responses.jsonl`／`response.jsonl` 與評估附屬檔，可執行：
+
+```powershell
+python scripts/cleanup_generated.py --all-generated
+python scripts/cleanup_generated.py --all-generated --apply
+```
+
+第一行只預覽；第二行列出清單後，輸入 `DELETE` 才刪除。
+刪除執行產物會失去其中的回答、續跑狀態、adapter 與擷取資料。
+受版本控制的檔案、根目錄 `.env`／`.venv`、`.lladar` 登入設定仍會保留。
+既有產物不會自動搬移。
 
 每個階段成功後都會顯示工作摘要，列出輸出的絕對目錄、各檔案位置與內容簡述，
 以及下一步命令或閱讀提示。`--no-verbose` 仍會顯示摘要，`--log` 也會同步保存。
@@ -147,6 +164,28 @@ lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.
 ```
 
 `--service-url` 是專案模式的選用參數，不是任意 API 的自動探索功能。
+
+使用 `--project --service-url` 生成單題 HTTP adapter 時，會自動產生**可交給別人使用的 API adapter 執行包**，預設存入 `OUTPUT.api-adapter`，不需要額外的匯出參數：
+
+```powershell
+lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.0.1:8000 --output responses.jsonl
+```
+
+生成時仍需專案來確認 HTTP 路徑、Payload、認證與答案格式；只有選定既有公開 HTTP 介面、且 adapter 在空目錄與隔離的 Python 中通過呼叫驗證，才會保存交付包。`responses.jsonl.api-adapter` 包含可獨立執行的 `adapter.py`、跨平台 `README.md`，以及附說明的 `.env.example`，列出服務網址、逾時設定與必要憑證名稱；憑證值保持空白。adapter 讀取程序環境變數，不會自動載入 `.env`。指定 `--lang` 時，非英文文件與設定註解會透過 `akasha.ask` 使用 adapter 模型自動翻譯，程式碼、指令及設定名稱保持不變；翻譯會快取供接續執行重用，英文則不需翻譯呼叫。接收者只需 Python 3.11+、該 Python 檔、自己的憑證與能連到 API 的網路，不需要原專案或安裝 LLaDAR。可選用 `--export-adapter api-client` 自訂目錄名稱。
+
+```powershell
+$env:LLADAR_SERVICE_URL = 'https://your-api.example.com'
+# 依 README 或 adapter.py 的 REQUIRED_ENV 設定自己的憑證環境變數。
+python responses.jsonl.api-adapter/adapter.py --message '請問這個服務可以協助什麼？'
+```
+
+也可用 `--service-url URL` 覆寫位址。認證方式從專案探索，沿用 Bearer、API key、自訂 header、Cookie 或可獨立重建的登入流程，憑證從執行時環境變數取得。HTTP helper、必要變數宣告、啟動與驗證流程整合在 `adapter.py`，不複製 `.env`、專案、瀏覽器登入狀態或執行證據。`LLADAR_API_TIMEOUT` 設定 HTTP 逾時秒數，預設 60 秒。程式介接可省略 `--message`，由 stdin 傳入 `{"request_id":"q1","message":"問題"}`，stdout 回傳含相同 `request_id`、`output`、`observation` 的 JSON。
+
+認證資料不等於資料存取權限：API 伺服器仍須檢查接收者的帳號、角色、租戶與資源權限，並負責金鑰發放、撤銷與到期。缺少必要變數會在送出請求前停止，401/403 不會繞過；HTTP 重新導向會被拒絕，請指定最終服務位址。跨電腦使用時，`localhost` 要換成可連到的伺服器位址，服務監聽與網路設定需另行準備；攜帶憑證的遠端服務應使用 HTTPS。瀏覽器登入、MFA 或跨站認證若無法獨立重建，需先補足認證契約。
+
+交付包的 README 包含 Windows PowerShell 與 Linux／macOS bash/zsh 的 Python 版本檢查、建立本機虛擬環境、設定這份 adapter 所需憑證變數與啟動步驟。目前只需 Python 3.11+ 標準函式庫，不另附 `requirements.txt`，也不需執行 pip 安裝或複製生成者的 `.venv`。可選擇加上 `-I -S`，使用與生成時驗證相同的 Python 隔離模式。生成時的驗證只涵蓋當時執行的系統，不表示已在所有作業系統實測。
+
+目前交付包限單題 `DATASET` 模式搭配 `--project` 與 `--service-url`。目的目錄必須不存在；`--resume` 只接受內容完全相同的既有交付包，不覆寫修改。重用舊 adapter 時，可加上 `--export-adapter` 將其驗證並保存為可攜版本；舊 adapter 也必須符合可攜契約。未要求匯出的 `--adapt --project` 流程仍支援一般專案 adapter。生成程式以使用者權限執行；空目錄與 Python 隔離驗證不是作業系統沙箱。
 缺少啟動、驗證或請求／回應資訊時仍需補充，不能只靠 URL 補齊。
 `--page-url` 不能與 `--project` 或 `--service-url` 合用；詳見[目標選擇指南](site/zh-TW/guides/run-agent.html#choose-target)。
 
@@ -324,6 +363,14 @@ log 包含已輸出的進度、Agent trace、摘要與錯誤，移除顏色控�
 `--page-url` 的 verbose 輸出會顯示目前探索階段、安全的工具名稱與帳本用量，
 等待期間定期顯示進度。工具參數、工具回傳內容與模型推理全文不進入一般日誌。
 等待使用者按 Enter、輸入 YES 或 MATCH 時，暫停背景進度輸出。
+
+在 Windows、Linux 或 macOS 互動式終端啟用 `--verbose`（預設開啟）時，執行期間可隨時按 Enter，立即顯示目前階段、
+該階段耗時，以及距上次進度訊息的時間，不必等操作完成。適用於檔案檢查、圖譜建立、
+adapter 生成／修復、模型等待與受測子程序執行。狀態寫入 stderr，使用 `--log` 時也會同步保存。
+遇到登入、選項或 YES／MATCH 等人工輸入提示時，鍵盤監聽會暫停，Enter 維持原本的確認用途。
+管線輸入、stderr 重新導向或 `--no-verbose` 不會啟動鍵盤監聽。
+Linux／macOS 保留終端原本的行輸入與 Ctrl+C 行為，提早輸入的文字會交給下一個人工提示。
+Ubuntu／macOS CI 會使用原生 PTY 測試狀態查詢與人工輸入交接。
 模型擷取顯示輸入檢查、等待模型與結果驗證；正式回合僅在獨立全文證據不足時要求人工核對。
 這些進度也會寫入 `--log`；`--no-verbose` 會隱藏。
 每則 LLaDAR 進度附上含毫秒與 UTC 時差的本地日期時間，以及累計耗時（`[+12.345s]`）。

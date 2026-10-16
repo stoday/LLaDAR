@@ -15,6 +15,7 @@ from urllib.parse import parse_qsl, unquote
 
 from .answer_extraction import ExtractionError, ExtractionOptions, ResponseExtractor
 from .language import tr
+from .live_status import read_user_input, status_user_input
 from .resource_limits import resource_limit
 from .work_session import atomic_json, current_session, digest
 from .response_capture import ResponseObservationSource
@@ -287,7 +288,8 @@ class BrowserTarget:
                 self.driver.open()
                 if interactive:
                     self.evidence['stage']='awaiting_login'
-                    self.input_fn(tr('A visible browser is ready. Complete sign-in and handle any website dialogs. Open the conversation page/window where you can enter questions and keep the input box empty. Then return to this terminal and press Enter: '))
+                    with status_user_input():
+                        read_user_input(tr('A visible browser is ready. Complete sign-in and handle any website dialogs. Open the conversation page/window where you can enter questions and keep the input box empty. Then return to this terminal and press Enter: '), input_fn=self.input_fn)
                 self.evidence['stage']='checking_browser_connection'
                 if self.verbose:
                     self.output_fn(tr('Checking the browser connection after sign-in.'))
@@ -539,10 +541,11 @@ class BrowserTarget:
             count=len(observation.get('events',[])),materials=len(material_events),
             completion='manual_same_turn_complete_answer_review'))
 
+    @status_user_input()
     def _human_input(self, prompt):
         handoff=self.driver.manual_interaction() if hasattr(self.driver,'manual_interaction') else nullcontext()
         with handoff:
-            return self.input_fn(prompt)
+            return read_user_input(prompt, input_fn=self.input_fn)
 
     def _manual_page(self, page):
         return (page is not None and (page is self._formal_page or page is self._active_formal_page

@@ -18,6 +18,7 @@ from .api import DEFAULT_DATASET_MODEL, create_test_dataset
 from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
 from .resource_limits import resource_limit
 from .command_log import command_log
+from .live_status import status_queries
 from .operation_report import OperationReport, current_operation, exception_exit_code, operation_scope
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
@@ -149,7 +150,7 @@ class _SingleSkill(argparse.Action):
         setattr(namespace, self.dest, values)
 
 
-_DEFAULT_DATASET_OUTPUT_DISPLAY = "."
+_DEFAULT_DATASET_OUTPUT_DISPLAY = "runs/"
 _DATASET_FILENAME_DISPLAY = "test-dataset-YYYYMMDD-HHMMSS.jsonl"
 
 
@@ -350,7 +351,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="Public GitHub repository: discover actual datasets and generate QA with an evidence report (required unless --knowledge is supplied; no default).")
     dataset.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                          help="Local method directory containing SKILL.md; selects direct QA or optional graph generation. Only one is supported (default: bundled knowledge-point-qa for --knowledge, github-dataset for --from-github).")
-    dataset.add_argument("--output", default=".", metavar="PATH",
+    dataset.add_argument("--output", default="runs/", metavar="PATH",
                          help=f"Output directory or file path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file; new paths without a suffix are directories (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
     dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
@@ -401,8 +402,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Maximum target Agent turns per scenario; must be positive (required; no default).")
     situation.add_argument("--knowledge", action="append", default=[], metavar="PATH",
                            help="Optional .md or .txt knowledge file; repeat for multiple files (default: no knowledge files).")
-    situation.add_argument("--output", default="situation.json", metavar="PATH",
-                           help="Output directory or situation JSON file path; a directory gets situation.json (default: situation.json; existing file requires --force).")
+    situation.add_argument("--output", default="runs/situation.json", metavar="PATH",
+                           help="Output directory or situation JSON file path; a directory gets situation.json (default: runs/situation.json; existing file requires --force).")
     situation.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                            help="Local situation-authoring skill directory containing SKILL.md (default: bundled create-situation).")
     situation.add_argument("--model", default=DEFAULT_DATASET_MODEL, metavar="MODEL",
@@ -488,8 +489,8 @@ def build_parser() -> argparse.ArgumentParser:
     runner.add_argument('--extend-model-calls', type=int, metavar='TOTAL',
         help='On a resumed --page-url run, explicitly raise the total Agent model-call cap while keeping the saved inputs and other limits unchanged; the increase persists on later resumes (default: no new extension).')
     runner.add_argument(
-        "--output", default="responses.jsonl", metavar="PATH",
-        help="Output directory or responses JSONL file path; a directory gets responses.jsonl (default: responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
+        "--output", default="runs/responses.jsonl", metavar="PATH",
+        help="Output directory or responses JSONL file path; a directory gets responses.jsonl (default: runs/responses.jsonl). Single-question mode also writes PATH.trials.jsonl and PATH.run.json; situation mode writes PATH.turns.jsonl, PATH.scenarios.jsonl, PATH.calibration.json and PATH.run.json.",
     )
     runner.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                         help="Use a local method directory containing SKILL.md for single-question runs (default: bundled run-agent-stability; unavailable with --situation-config).")
@@ -541,6 +542,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--service-url", metavar="URL",
         help="Existing test-service base URL that the generated adapter may call (default: none).",
     )
+    runner.add_argument("--export-adapter", metavar="DIRECTORY",
+                        help="Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).")
     runner.set_defaults(confirm_browser_run=False, allow_response_model_transfer=False)
     runner.add_argument(
         "--fresh-browser-profile", action="store_true",
@@ -567,8 +570,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluation.add_argument("responses", metavar="RESPONSES",
                             help="Responses JSONL from run-agent (required; no default).")
-    evaluation.add_argument("--output", default="evaluation.json", metavar="PATH",
-                            help="Output directory or evaluation JSON file path; a directory gets evaluation.json (default: evaluation.json).")
+    evaluation.add_argument("--output", default="runs/evaluation.json", metavar="PATH",
+                            help="Output directory or evaluation JSON file path; a directory gets evaluation.json (default: runs/evaluation.json).")
     evaluation_method = evaluation.add_mutually_exclusive_group()
     evaluation_method.add_argument("--criteria", metavar="TEXT",
                                    help="Evaluation requirements for the built-in method; mutually exclusive with --skill (default: saved situation rubric or answer correctness).")
@@ -599,8 +602,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report.add_argument("eval_output", metavar="EVALUATION",
                         help="Evaluation JSON produced by eval (required; no default).")
-    report.add_argument("--output", default="report.md", metavar="PATH",
-                        help="Output directory or Markdown file path; a directory gets report.md (default: report.md).")
+    report.add_argument("--output", default="runs/report.md", metavar="PATH",
+                        help="Output directory or Markdown file path; a directory gets report.md (default: runs/report.md).")
     report.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
                         help="Local report-writing skill directory containing SKILL.md (default: bundled report-evidence-summary for single-question reports; situation reports use built-in rendering unless a skill is supplied).")
     report.add_argument("--model", default=DEFAULT_REPORT_MODEL, metavar="MODEL",
@@ -681,7 +684,11 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
             )
         args.interactive = True
     try:
-        with language_scope(Language(args.lang)), command_log(getattr(args, "log", None)):
+        with (
+            language_scope(Language(args.lang)),
+            command_log(getattr(args, "log", None)),
+            status_queries(getattr(args, "verbose", False)),
+        ):
             # Announce after the log is installed; nested stage calls share this context.
             if args.lang not in {"en", "zh-TW", "ja", "ko", "zh-CN"}:
                 print(tr('Language {p0}: model-generated content uses this code; interface, fixed headings and offline templates use English.', p0=args.lang), file=sys.stderr)
@@ -787,8 +794,8 @@ def _execute(
             from .work_session import digest
             if digest(saved["data"]) != saved["sha256"]:
                 raise ValueError("checkpoint integrity check failed")
-            default_output = {"create": ".", "run-agent": "responses.jsonl",
-                              "eval": "evaluation.json", "report": "report.md"}[args.command]
+            default_output = {"create": "runs/", "run-agent": "runs/responses.jsonl",
+                              "eval": "runs/evaluation.json", "report": "runs/report.md"}[args.command]
             if args.output == default_output:
                 args.output = saved["data"]["configuration"]["output"]
         filenames = {"run-agent": "responses.jsonl", "eval": "evaluation.json", "report": "report.md"}
@@ -899,6 +906,9 @@ def _execute(
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
+            if args.export_adapter is not None and (args.project is None or not args.service_url
+                    or args.page_url is not None or args.situation_config is not None):
+                parser.error(tr('--export-adapter requires explicit --project and --service-url in single-question mode'))
             if args.adapt is not None and args.project is None and args.page_url is None:
                 parser.error(tr('--adapt requires an explicit --project or --page-url'))
             if args.demo_question is not None and (args.page_url is None or not args.demo_question.strip()):
@@ -965,6 +975,7 @@ def _execute(
                 graphify_python=args.graphify_python,
                 adapt=args.adapter if args.page_url else args.adapt,
                 service_url=args.service_url,
+                export_adapter=args.export_adapter,
                 confirm_browser_run=args.confirm_browser_run,
                 browser_session_policy=args.conversation_policy if args.page_url else None,
                 fresh_browser_profile=args.fresh_browser_profile,
@@ -988,6 +999,9 @@ def _execute(
                 _show_work_summary("run-agent", args.output)
                 return 1
             print(tr('Answered {p0} record(s) at {p1}', p0=completed, p1=args.output))
+            exported = run_metadata.get("target", {}).get("portable_export") or args.export_adapter
+            if exported is not None:
+                print(tr('API adapter bundle: {p0}', p0=Path(exported).resolve()))
             current_operation().record(count=completed)
             _show_work_summary("run-agent", args.output)
             return 0

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from .live_status import status_activity
 
 
 SUPPORTED_SUFFIXES = {".md", ".txt"}
 KnowledgeInput = str | Path | Sequence[str | Path]
 
 
+@status_activity("Reading knowledge sources")
 def load_knowledge(knowledge: KnowledgeInput) -> list[tuple[Path, str]]:
     roots = [knowledge] if isinstance(knowledge, (str, Path)) else list(knowledge)
     paths: list[Path] = []

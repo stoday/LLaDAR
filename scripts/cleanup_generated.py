@@ -1,5 +1,11 @@
 """Review and remove generated LLaDAR test and build directories.
 
+Use ``--all-generated`` to select test/build caches, runs/, and legacy
+root response/evaluation artifacts together. This includes saved answers,
+resume checkpoints, exported adapters and captured state in those artifacts.
+It does not select .lladar login profiles or root .env/.venv. Preview first;
+add ``--apply`` and type DELETE to remove the displayed items.
+
 Run ``python scripts/cleanup_generated.py`` to preview. Add
 ``--include-pytest-state`` to include generated pytest trees that contain
 browser profiles or .env files. Use ``--clear-lladar`` to preview removal of
@@ -19,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -51,13 +58,29 @@ EVALUATION_WORKSPACE = re.compile(r"evaluation\.json\.work(?:-[0-9a-f]{8})?\Z")
 OPERATION_REPORT = re.compile(
     r"(?:evaluation\.json|responses\.jsonl)\.operation(?:-\d+)?\.md\Z"
 )
+RUN_ARTIFACT = re.compile(
+    r"(?:responses?\.jsonl(?:\.(?:run\.json|trials\.jsonl|turns\.jsonl|"
+    r"scenarios\.jsonl|calibration\.json|operation(?:-\d+)?\.md|"
+    r"work(?:-[0-9a-f]{8})?|api-adapter))?|"
+    r"evaluation\.json(?:\.(?:work(?:-[0-9a-f]{8})?|operation(?:-\d+)?\.md))?)\Z"
+)
+
+
+def run_artifact(path: Path) -> bool:
+    return path.parent == ROOT and (path.name == "runs" or bool(RUN_ARTIFACT.fullmatch(path.name)))
 
 
 def candidates(
     clear_lladar: bool = False,
     clear_tmp: bool = False,
     clean_root: bool = False,
+    all_generated: bool = False,
 ) -> list[Path]:
+    if all_generated:
+        # Editable installations need their package metadata to keep working.
+        paths = [path for path in candidates() if path != ROOT / "src" / "lladar.egg-info"]
+        paths += [path for path in ROOT.iterdir() if run_artifact(path)]
+        return sorted(set(paths), key=str)
     if clean_root:
         paths = [ROOT / name for name in ROOT_ARTIFACT_DIRECTORIES]
         paths.extend(
@@ -84,7 +107,9 @@ def candidates(
             elif root.is_dir():
                 paths.extend(root.iterdir())
         return sorted(paths, key=str)
-    paths = [*ROOT.glob(".pytest-*"), *(ROOT / ".tmp").glob("pytest-*")]
+    paths = [*ROOT.glob(".pytest-*"), *ROOT.glob(".pytest_*"),
+             *(ROOT / ".tmp").glob("pytest-*")]
+    paths += [ROOT / ".tmp" / "pytest", ROOT / ".tmp" / "pytest-cache"]
     paths += list((ROOT / ".lladar").glob("pytest-*"))
     paths += list((ROOT / ".lladar").glob("terminal-build-tmp-*"))
     paths += [
@@ -131,7 +156,8 @@ def sensitive_name(path: Path) -> bool:
 
 def pytest_temp(path: Path) -> bool:
     return (
-        (path.parent == ROOT and path.name.startswith(".pytest-"))
+        (path.parent == ROOT and path.name.startswith((".pytest-", ".pytest_")))
+        or path in {ROOT / ".tmp" / "pytest", ROOT / ".tmp" / "pytest-cache"}
         or (path.parent in {ROOT / ".tmp", ROOT / ".lladar"} and path.name.startswith("pytest-"))
     )
 
@@ -154,6 +180,7 @@ def classify(
     clear_tmp: bool = False,
     clean_root: bool = False,
     include_captured_state: bool = False,
+    all_generated: bool = False,
 ) -> str | None:
     """Return a reason to keep an item, or None when it can be deleted."""
     root = ROOT.resolve()
@@ -172,6 +199,7 @@ def classify(
         (clear_lladar and path.parent == ROOT / ".lladar")
         or (clear_tmp and path.parent == ROOT / ".tmp")
         or (clean_root and path.parent == ROOT and OPERATION_REPORT.fullmatch(path.name))
+        or (all_generated and run_artifact(path))
     )
     if not path.is_dir() and not selected_file:
         return "link or non-directory"
@@ -182,7 +210,8 @@ def classify(
     if any(name == relative or name.startswith(relative + "/") for name in tracked):
         return "contains tracked files"
     allow_lladar_state = clear_lladar and path.parent == ROOT / ".lladar"
-    allow_sensitive = allow_lladar_state or (clean_root and include_captured_state) or (
+    allow_generated_state = all_generated and (run_artifact(path) or pytest_temp(path))
+    allow_sensitive = allow_generated_state or allow_lladar_state or (clean_root and include_captured_state) or (
         include_pytest_state and pytest_temp(path)
     )
     if path.is_file():
@@ -203,7 +232,7 @@ def classify(
                         # lib64 -> lib. rmtree removes links without following
                         # them; keep the exception confined to this one
                         # explicitly selected, disposable environment.
-                        if not (
+                        if not allow_generated_state and not (
                             clean_root
                             and include_captured_state
                             and path == ROOT / "linux-venv"
@@ -225,6 +254,10 @@ def classify(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="delete safe candidates after confirmation")
+    parser.add_argument(
+        "--all-generated", action="store_true",
+        help="select test/build caches, runs/ and legacy root response/evaluation artifacts, including answers, resume and captured state",
+    )
     parser.add_argument(
         "--include-pytest-state",
         action="store_true",
@@ -251,6 +284,9 @@ def main() -> None:
         help="with --clean-root, also remove selected artifacts containing browser state or credentials",
     )
     args = parser.parse_args()
+    if args.all_generated and (args.clean_root or args.clear_lladar or args.clear_tmp
+                              or args.include_pytest_state or args.include_captured_state):
+        parser.error("--all-generated cannot be combined with other cleanup modes")
     if args.clean_root and (args.clear_lladar or args.clear_tmp or args.include_pytest_state):
         parser.error("--clean-root cannot be combined with other cleanup modes")
     if args.include_captured_state and not args.clean_root:
@@ -259,12 +295,13 @@ def main() -> None:
     tracked = tracked_files()
     safe: list[Path] = []
     kept: list[tuple[Path, str]] = []
-    for path in candidates(args.clear_lladar, args.clear_tmp, args.clean_root):
+    for path in candidates(args.clear_lladar, args.clear_tmp, args.clean_root, args.all_generated):
         if args.clean_root and path.is_dir():
             print(f"Inspecting {path.relative_to(ROOT)}...", flush=True)
         reason = classify(
             path, tracked, args.include_pytest_state, args.clear_lladar,
             args.clear_tmp, args.clean_root, args.include_captured_state,
+            args.all_generated,
         )
         if reason:
             kept.append((path, reason))
@@ -272,19 +309,37 @@ def main() -> None:
             safe.append(path)
 
     print(f"Project: {ROOT}")
+    print("Mode: APPLY (confirmation required)" if args.apply else "Mode: PREVIEW ONLY (no files will be deleted)")
+    if args.all_generated:
+        print("Selected run artifacts include answers, resume checkpoints, adapters and captured state; deleting them loses that data.")
     print(f"Removal candidates: {len(safe)}")
     reports = [path for path in safe if path.parent == ROOT and OPERATION_REPORT.fullmatch(path.name)]
     if reports:
-        print(f"  DELETE {len(reports)} root operation reports (evaluation.json/responses.jsonl)")
+        print(f"  SELECT {len(reports)} root operation reports (evaluation.json/responses.jsonl)")
     for path in safe:
         if path in reports:
             continue
-        print(f"  DELETE {path.relative_to(ROOT)}")
+        print(f"  SELECT {path.relative_to(ROOT)}")
     print(f"Preserved items: {len(kept)}")
     for path, reason in kept:
         print(f"  KEEP   {path.relative_to(ROOT)} ({reason})")
 
-    if not args.apply or not safe:
+    if not args.apply:
+        print("PREVIEW ONLY: nothing was deleted.")
+        flags = [flag for flag in (
+            "--all-generated" if args.all_generated else "",
+            "--clean-root" if args.clean_root else "",
+            "--clear-lladar" if args.clear_lladar else "",
+            "--clear-tmp" if args.clear_tmp else "",
+            "--include-pytest-state" if args.include_pytest_state else "",
+            "--include-captured-state" if args.include_captured_state else "",
+        ) if flag]
+        tokens = ["python", str(Path(__file__).resolve()), *flags, "--apply"]
+        command = subprocess.list2cmdline(tokens) if os.name == "nt" else shlex.join(tokens)
+        print(f"To delete, run: {command}")
+        print("Then type DELETE at the confirmation prompt.")
+        return
+    if not safe:
         return
     item_label = "item" if len(safe) == 1 else "items"
     answer = input(f"Type DELETE to remove {len(safe)} {item_label}: ")
@@ -298,6 +353,7 @@ def main() -> None:
         reason = classify(
             path, tracked, args.include_pytest_state, args.clear_lladar,
             args.clear_tmp, args.clean_root, args.include_captured_state,
+            args.all_generated,
         )
         if reason:
             print(f"SKIP   {path.relative_to(ROOT)} ({reason})")
