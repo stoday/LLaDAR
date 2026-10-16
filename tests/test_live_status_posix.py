@@ -102,6 +102,12 @@ from lladar.command_log import command_log
 from lladar.live_status import current_status, read_user_input, status_activity, status_queries
 
 mode, log = sys.argv[1:]
+# forkpty shares one open file description across stdin/stdout/stderr. Darwin
+# records FWASWRITTEN (0x10000) on its first write, including ordinary input()
+# prompts with status disabled. Write before the baseline so the strict flag
+# comparison below measures application changes, not that kernel history bit.
+# https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+os.write(1, b'PTY_BASELINE\n')
 attrs = termios.tcgetattr(0) if os.isatty(0) else None
 flags = fcntl.fcntl(0, fcntl.F_GETFL)
 
