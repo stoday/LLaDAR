@@ -153,6 +153,7 @@ lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 
 - `--project PATH`：從專案程式碼與文件理解對外入口。只有專案也可能足夠：啟動資訊與必要執行環境設定完整時，LLaDAR 可以在隔離的專案副本中啟動服務、測試，最後只關閉自己啟動的服務。
 - `--project PATH --service-url URL`：仍檢查專案，但改用已啟動的測試服務。URL 提供的是**服務基底位址**，不是啟動指令或 API 契約；HTTP 方法、路徑、Payload、驗證需求與回應格式仍從專案理解，不會啟動或關閉該既有服務。
+- `--service-url URL --api-guide FILE`：不需要目標專案，改從 TXT、MD、DOCX 或文字 PDF 的 API 使用說明與範例建立 HTTP adapter。PDF 不做 OCR；沒有可讀文字會直接報錯。
 - `--page-url URL`：不必提供專案原始碼，改用正常問答網頁。在 LLaDAR 瀏覽器登入後，由 Akasha Agent 探索實際通訊與頁面操作、資格化協定／會話適配程式，再由無工具模型忠實抽取擷取的回答。
 
 HTTP、持續開啟的 SSE、原生文字／二進位 WebSocket 與 DOM 收取後援共用探索工具及資格化條件。Agent 調查實際 session ID、封包結構與完成證據，不預設網站 schema 或固定 selector。本機 fixture 驗證這些通訊路徑；各真實網站的驗收證據另外記錄。
@@ -163,7 +164,15 @@ HTTP、持續開啟的 SSE、原生文字／二進位 WebSocket 與 DOM 收取�
 lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.0.1:8000 --output responses.jsonl
 ```
 
-`--service-url` 是專案模式的選用參數，不是任意 API 的自動探索功能。
+也可以只提供 API 使用文件：
+
+```bash
+lladar run-agent dataset.jsonl --service-url http://127.0.0.1:8000 --api-guide docs/api-guide.md --env-file .env --lang zh-TW
+```
+
+指南必須說明 HTTP 方法、相對路徑、認證或明確不需認證、必要 header／參數與問題欄位、請求及回應範例、答案擷取與完成條件。缺漏時會在呼叫 API 前停止；多個候選需互動選擇。TXT／MD 使用 UTF-8（允許 BOM）；DOCX 讀取段落與表格，PDF 只讀已有文字。文件中的範例主機不會取代 `--service-url`，憑證從執行環境或 `--env-file` 取得。
+
+文件模式支援同步 JSON、具明確完成與關聯條件的 SSE／polling，沿用獨立 adapter 驗證、`--adapt` 重用、`--resume` 與預設 `OUTPUT.api-adapter` 匯出。不能混用 `--project`、`--page-url` 或多輪 Situation config；續跑時必須保留相同指南與服務設定。[文件模式規格](docs/PRD-api-guide-adapter.zh-TW.md)有完整驗收範圍。
 
 使用 `--project --service-url` 生成單題 HTTP adapter 時，會自動產生**可交給別人使用的 API adapter 執行包**，預設存入 `OUTPUT.api-adapter`，不需要額外的匯出參數：
 
@@ -179,13 +188,13 @@ $env:LLADAR_SERVICE_URL = 'https://your-api.example.com'
 python responses.jsonl.api-adapter/adapter.py --message '請問這個服務可以協助什麼？'
 ```
 
-也可用 `--service-url URL` 覆寫位址。認證方式從專案探索，沿用 Bearer、API key、自訂 header、Cookie 或可獨立重建的登入流程，憑證從執行時環境變數取得。HTTP helper、必要變數宣告、啟動與驗證流程整合在 `adapter.py`，不複製 `.env`、專案、瀏覽器登入狀態或執行證據。`LLADAR_API_TIMEOUT` 設定 HTTP 逾時秒數，預設 60 秒。程式介接可省略 `--message`，由 stdin 傳入 `{"request_id":"q1","message":"問題"}`，stdout 回傳含相同 `request_id`、`output`、`observation` 的 JSON。
+也可用 `--service-url URL` 覆寫位址。認證方式從專案探索，沿用 Bearer、API key、自訂 header、Cookie 或可獨立重建的登入流程，憑證從執行時環境變數取得。HTTP helper、必要變數宣告、啟動與驗證流程整合在 `adapter.py`，不複製 `.env`、專案、瀏覽器登入狀態或執行證據。`LLADAR_API_TIMEOUT` 設定整題的總等待期限與預設 HTTP 逾時，預設 60 秒，包含 SSE 與 polling；單次請求指定的逾時不能延長總期限。程式介接可省略 `--message`，由 stdin 傳入 `{"request_id":"q1","message":"問題"}`，stdout 回傳含相同 `request_id`、`output`、`observation` 的 JSON。
 
 認證資料不等於資料存取權限：API 伺服器仍須檢查接收者的帳號、角色、租戶與資源權限，並負責金鑰發放、撤銷與到期。缺少必要變數會在送出請求前停止，401/403 不會繞過；HTTP 重新導向會被拒絕，請指定最終服務位址。跨電腦使用時，`localhost` 要換成可連到的伺服器位址，服務監聽與網路設定需另行準備；攜帶憑證的遠端服務應使用 HTTPS。瀏覽器登入、MFA 或跨站認證若無法獨立重建，需先補足認證契約。
 
 交付包的 README 包含 Windows PowerShell 與 Linux／macOS bash/zsh 的 Python 版本檢查、建立本機虛擬環境、設定這份 adapter 所需憑證變數與啟動步驟。目前只需 Python 3.11+ 標準函式庫，不另附 `requirements.txt`，也不需執行 pip 安裝或複製生成者的 `.venv`。可選擇加上 `-I -S`，使用與生成時驗證相同的 Python 隔離模式。生成時的驗證只涵蓋當時執行的系統，不表示已在所有作業系統實測。
 
-目前交付包限單題 `DATASET` 模式搭配 `--project` 與 `--service-url`。目的目錄必須不存在；`--resume` 只接受內容完全相同的既有交付包，不覆寫修改。重用舊 adapter 時，可加上 `--export-adapter` 將其驗證並保存為可攜版本；舊 adapter 也必須符合可攜契約。未要求匯出的 `--adapt --project` 流程仍支援一般專案 adapter。生成程式以使用者權限執行；空目錄與 Python 隔離驗證不是作業系統沙箱。
+目前交付包限單題 `DATASET` 模式搭配 `--service-url` 與 `--project` 或 `--api-guide`。目的目錄必須不存在；`--resume` 只接受內容完全相同的既有交付包，不覆寫修改。重用舊 adapter 時，可加上 `--export-adapter` 將其驗證並保存為可攜版本；文件模式重用也會自動匯出。舊 adapter 必須符合可攜契約。未要求匯出的 `--adapt --project` 流程仍支援一般專案 adapter。生成程式以使用者權限執行；空目錄與 Python 隔離驗證不是作業系統沙箱。
 缺少啟動、驗證或請求／回應資訊時仍需補充，不能只靠 URL 補齊。
 `--page-url` 不能與 `--project` 或 `--service-url` 合用；詳見[目標選擇指南](site/zh-TW/guides/run-agent.html#choose-target)。
 

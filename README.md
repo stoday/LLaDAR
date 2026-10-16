@@ -181,6 +181,7 @@ Which target option should you use?
 
 - `--project PATH`: inspect the project's source and documentation to learn its public interface. A project alone can be enough: when startup details and the required runtime configuration are available, LLaDAR can start the service in an isolated project copy, test it, and stop only the service it started.
 - `--project PATH --service-url URL`: inspect the same project, but use an already running test service. The URL supplies its **base address**, not its startup command or API contract. LLaDAR still learns the HTTP method, route, payload, authentication requirements, and response format from the project; it does not start or stop that existing service.
+- `--service-url URL --api-guide FILE`: build an HTTP adapter from API usage documentation and examples without a target project. Supports TXT, MD, DOCX and text PDF; PDFs without readable text fail immediately, with no OCR.
 - `--page-url URL`: use a normal question webpage without providing project source. Sign in in LLaDAR's browser, handle any website dialogs, open the conversation page/window and keep the input box empty, then return to the terminal and press Enter. If several pages are open, select the conversation page by its displayed index. An Akasha Agent explores observed communication and page operations, qualifies a generated protocol/session programme, and a separate tool-free model faithfully extracts the captured answers.
 
 HTTP, persistent SSE, native text/binary WebSocket and DOM fallback use the same discovery tools and qualification contract. The Agent investigates actual session IDs, envelopes and terminal evidence instead of assuming a website schema. Local fixtures validate these transport paths; real-site acceptance is recorded separately.
@@ -191,7 +192,15 @@ For an already running test service:
 lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.0.1:8000 --output responses.jsonl
 ```
 
-`--service-url` is optional in project mode, not an arbitrary-API discovery option.
+For documentation-only APIs:
+
+```bash
+lladar run-agent dataset.jsonl --service-url http://127.0.0.1:8000 --api-guide docs/api-guide.md --env-file .env --lang en
+```
+
+The guide must document the HTTP method, relative endpoint, authentication or explicit absence of authentication, required headers/parameters and question mapping, request/response examples, unchanged answer extraction and completion rules. Missing contracts stop before API calls; multiple candidates require selection. TXT/MD must use UTF-8 (BOM accepted); DOCX includes paragraphs and tables; PDF reads existing text only. Example hosts never override `--service-url`; credentials come from the environment or `--env-file`.
+
+Guide mode supports synchronous JSON and documented SSE/polling completion and correlation. It shares independent adapter verification, `--adapt`, `--resume` and automatic `OUTPUT.api-adapter` export. It cannot be combined with `--project`, `--page-url` or multi-turn situation mode. Resume requires the unchanged guide and service configuration. See the [document-mode specification](docs/PRD-api-guide-adapter.zh-TW.md).
 
 Generating a single-question HTTP adapter with `--project --service-url` automatically produces a shareable API client bundle at `OUTPUT.api-adapter`. No export flag is needed:
 
@@ -207,13 +216,13 @@ $env:LLADAR_SERVICE_URL = 'https://your-api.example.com'
 python responses.jsonl.api-adapter/adapter.py --message 'What can this service help with?'
 ```
 
-`--service-url URL` also overrides the address. The generated adapter preserves project authentication (Bearer, API key, custom headers, cookies, or a reproducible credential exchange), reading credential values from the recipient's environment. HTTP helpers, required variable declarations, CLI and validation are folded into `adapter.py`: no `.env`, project, browser login state or run evidence is exported. `LLADAR_API_TIMEOUT` sets the HTTP timeout in seconds (default 60). For programmatic use, omit `--message` and send `{"request_id":"q1","message":"question"}` on stdin; stdout is JSON with the same `request_id`, `output` and `observation`.
+`--service-url URL` also overrides the address. The generated adapter preserves project authentication (Bearer, API key, custom headers, cookies, or a reproducible credential exchange), reading credential values from the recipient's environment. HTTP helpers, required variable declarations, CLI and validation are folded into `adapter.py`: no `.env`, project, browser login state or run evidence is exported. `LLADAR_API_TIMEOUT` sets the total question deadline and default HTTP timeout in seconds (default 60), including streams and polling; an explicit per-request timeout cannot extend that deadline. For programmatic use, omit `--message` and send `{"request_id":"q1","message":"question"}` on stdin; stdout is JSON with the same `request_id`, `output` and `observation`.
 
 The API server remains responsible for account/role/tenant/resource authorization, credential issuance, expiry and revocation. Sharing a client grants no server permissions. Missing required variables stop before requests; 401/403 are not bypassed. Redirects are rejected: specify the final API base URL. Replace localhost with a reachable server address for remote use and configure its listener/network separately; use HTTPS when sending credentials remotely. Browser login, MFA and cross-site authentication need an independently reproducible contract.
 
 The generated README includes Python version checks, local venv setup, this adapter's required credential variable names, and launch commands for Windows PowerShell and Linux/macOS bash/zsh. Only the Python 3.11+ standard library is needed, so no requirements.txt or pip install step is included. Do not distribute the creator's `.venv`. Optionally add `-I -S` to match generation-time Python isolation. Verification covers the system running it, not every recipient OS.
 
-Bundles currently support single-question DATASET mode with `--project` and `--service-url`. The destination must not exist; `--resume` accepts only an identical existing bundle. To export an older adapter, combine `--adapt` with `--export-adapter`; supplied source must satisfy the portable contract and pass verification again. Without explicit export, ordinary reused project adapters retain the existing `--adapt --project` flow. Generated code runs with user permissions; directory/Python isolation is not an OS sandbox.
+Bundles support single-question DATASET mode with `--service-url` and either `--project` or `--api-guide`. The destination must not exist; `--resume` accepts only an identical existing bundle. To export an older project adapter, combine `--adapt` with `--export-adapter`; guide mode also exports reused adapters automatically. Supplied source must satisfy the portable contract and pass verification again. Without explicit export, ordinary reused project adapters retain the existing `--adapt --project` flow. Generated code runs with user permissions; directory/Python isolation is not an OS sandbox.
 Missing startup, authentication, or request/response details require clarification;
 a URL alone does not fill those gaps. `--page-url` cannot be combined with
 `--project` or `--service-url`. See the [target selection guide](site/guides/run-agent.html#choose-target).

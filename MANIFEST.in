@@ -1,4 +1,5 @@
 include tests/fixture_extraction.py
+include tests/fixture_api_guide.py
 include tests/conftest.py
 include scripts/cleanup_generated.py
 include scripts/verify_browser_package.py

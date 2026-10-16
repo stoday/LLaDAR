@@ -12,7 +12,7 @@ REQUIRED = {"answer_extraction.py", "extraction_provider.py", "response_capture.
             "browser_agent_loop.py", "browser_discovery_driver.py", "browser_provenance.py", "browser_inspection.py",
             "browser_reference.py", "browser_materials.py", "browser_protocol_projection.py",
             "protocol_runtime.py", "protocol_resources.py", "resource_limits.py", "terminal_review.py",
-            "live_status.py", "adapter_documentation.py", "portable_api.py", "api_runtime.py"}
+            "live_status.py", "adapter_documentation.py", "portable_api.py", "api_runtime.py", "api_guide.py"}
 REMOVED = {"generated_parser.py", "parser_generation.py", "parser_runtime.py", "parser_recording.py",
            "parser_cache.py", "parser_provider.py", "response_decoder.py", "browser_operation.py",
            "browser_adapter.py", "browser_repair.py", "dom_capture.py", "websocket_capture.py", "playwright_driver.py"}

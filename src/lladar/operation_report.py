@@ -16,7 +16,7 @@ from .resource_limits import resource_limit
 _CURRENT = ContextVar("lladar_operation", default=None)
 _STAGES = {"test-dataset", "situation", "run-agent", "eval", "report"}
 _INPUTS = ("knowledge", "dataset", "responses", "eval_output", "situation_config",
-           "instructions_file", "observe_file", "stop_criteria_file", "skill", "resume")
+           "instructions_file", "observe_file", "stop_criteria_file", "skill", "resume", "api_guide")
 _SETTINGS = ("count", "seed", "question_type", "max_turns", "num_scenarios",
              "max_input_tokens", "max_output_tokens", "max_tool_calls", "timeout",
              "temperature", "auto_window_ratio", "force", "strict", "verbose")

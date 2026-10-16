@@ -463,7 +463,7 @@ def build_parser() -> argparse.ArgumentParser:
             "under the working directory. --fresh-browser-profile uses a separate signed-out profile. "
             "Private adapter, ledger and discovery evidence are saved in OUTPUT.work/browser-discovery.\n\n"
             "Project mode:\n"
-            "--service-url does not discover an arbitrary API; it is for an inspected project."
+            "--service-url requires an inspected project or --api-guide documentation."
         ),
         formatter_class=_HelpFormatter,
     )
@@ -476,6 +476,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--project", default=None, metavar="PATH",
         help="Target project directory (default: current directory); situation mode calibrates a supplied or generated session adapter.",
     )
+    target.add_argument("--api-guide", metavar="PATH",
+        help="API usage and examples in TXT, MD, DOCX or text PDF; requires --service-url (default: project mode; no OCR).")
     target.add_argument(
         "--page-url", metavar="URL",
         help="Question website: demonstrate one complete question and answer in a visible browser, then press Enter; after saving the recording, a material Agent selects evidence and a code Agent generates an HTTP, WebSocket or browser UI adapter for immediate website testing (default: project mode; unavailable with --situation-config).",
@@ -543,7 +545,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Existing test-service base URL that the generated adapter may call (default: none).",
     )
     runner.add_argument("--export-adapter", metavar="DIRECTORY",
-                        help="Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).")
+                        help="Custom portable API adapter directory; requires --service-url and explicit --project or --api-guide, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).")
     runner.set_defaults(confirm_browser_run=False, allow_response_model_transfer=False)
     runner.add_argument(
         "--fresh-browser-profile", action="store_true",
@@ -906,11 +908,13 @@ def _execute(
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
-            if args.export_adapter is not None and (args.project is None or not args.service_url
+            if args.api_guide is not None and (not args.service_url or args.situation_config is not None):
+                parser.error(tr('--api-guide requires --service-url in single-question mode'))
+            if args.export_adapter is not None and ((args.project is None and args.api_guide is None) or not args.service_url
                     or args.page_url is not None or args.situation_config is not None):
-                parser.error(tr('--export-adapter requires explicit --project and --service-url in single-question mode'))
-            if args.adapt is not None and args.project is None and args.page_url is None:
-                parser.error(tr('--adapt requires an explicit --project or --page-url'))
+                parser.error(tr('--export-adapter requires --service-url and explicit --project or --api-guide in single-question mode'))
+            if args.adapt is not None and args.project is None and args.page_url is None and args.api_guide is None:
+                parser.error(tr('--adapt requires an explicit --project, --api-guide or --page-url'))
             if args.demo_question is not None and (args.page_url is None or not args.demo_question.strip()):
                 parser.error(tr('--demo-question requires --page-url and a non-empty question'))
             if args.adapter is not None and args.page_url is None:
@@ -949,7 +953,7 @@ def _execute(
                 parser.error(tr('DATASET is required unless --situation-config is set'))
             if args.num_scenarios is not None:
                 parser.error(tr('--num-scenarios requires --situation-config'))
-            project = args.project if args.project is not None else (None if args.page_url else ".")
+            project = args.project if args.project is not None else (None if args.page_url or args.api_guide else ".")
             completed = run_agent(
                 args.dataset,
                 args.output,
@@ -975,6 +979,7 @@ def _execute(
                 graphify_python=args.graphify_python,
                 adapt=args.adapter if args.page_url else args.adapt,
                 service_url=args.service_url,
+                api_guide=args.api_guide,
                 export_adapter=args.export_adapter,
                 confirm_browser_run=args.confirm_browser_run,
                 browser_session_policy=args.conversation_policy if args.page_url else None,

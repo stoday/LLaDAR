@@ -8,6 +8,7 @@ import json
 import shutil
 import sys
 import time
+import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
 from datetime import datetime
@@ -116,6 +117,17 @@ from .work_session import current_session, stage_session, publish_bundle, public
 from .run_strategy import ScheduledCase, StrategyCase
 
 
+@contextmanager
+def _guide_workspace(directory: Path):
+    session = current_session()
+    saved = session.data["state"].get("guide_workspace")
+    workspace = Path(saved) if saved else directory / ("guide-" + uuid.uuid4().hex) / "workspace"
+    workspace.mkdir(parents=True, exist_ok=bool(saved))
+    if not saved:
+        session.put("guide_workspace", str(workspace))
+    yield workspace
+
+
 @language_stage
 @stage_session("run-agent")
 def run_agent(
@@ -143,6 +155,7 @@ def run_agent(
     graphify_python: str | Path | None = None,
     adapt: str | Path | None = None,
     service_url: str | None = None,
+    api_guide: str | Path | None = None,
     export_adapter: str | Path | None = None,
     interface_selector: Callable[[dict], str] | None = None,
     strategy_agent_factory: SkillAgentFactory | None = None,
@@ -157,20 +170,27 @@ def run_agent(
     lang: str | None = None,
 ) -> int:
     """Fill actual_response in a new JSONL file without evaluating it."""
-    if sum(value is not None for value in (answer, project, page_url)) != 1:
-        raise ValueError("provide exactly one of answer, project, or page_url")
-    if adapt is not None and project is None and page_url is None:
-        raise ValueError("--adapt requires --project or --page-url")
+    if sum(value is not None for value in (answer, project, page_url, api_guide)) != 1:
+        raise ValueError("provide exactly one of answer, project, page_url, or api_guide")
+    guide = None
+    if api_guide is not None:
+        if not service_url:
+            raise ValueError("--api-guide requires --service-url")
+        from .api_guide import read_api_guide
+        with status_activity("Reading API guide"):
+            guide = read_api_guide(api_guide)
+    if adapt is not None and project is None and page_url is None and guide is None:
+        raise ValueError("--adapt requires --project, --api-guide or --page-url")
     if page_url is not None and service_url is not None:
         raise ValueError("--service-url applies only to a project target")
-    if export_adapter is None and project is not None and service_url and adapt is None:
+    if export_adapter is None and service_url and (guide is not None or (project is not None and adapt is None)):
         export_adapter = Path(str(output) + ".api-adapter")
     if export_adapter is not None:
-        if project is None or not service_url or page_url is not None:
-            raise ValueError("--export-adapter requires --project and --service-url")
+        if (project is None and guide is None) or not service_url or page_url is not None:
+            raise ValueError("--export-adapter requires --service-url and --project or --api-guide")
         if Path(export_adapter).exists() and resume is None:
             raise FileExistsError("--export-adapter destination already exists")
-    if project is None and interface_selector is not None:
+    if project is None and guide is None and interface_selector is not None:
         raise ValueError("interface_selector applies only to a project target")
     if page_url is None and confirm_browser_run:
         raise ValueError("--confirm-browser-run requires --page-url")
@@ -188,7 +208,7 @@ def run_agent(
     from .answer_extraction import DEFAULT_EXTRACTION_MODEL
     extraction_model = model or DEFAULT_EXTRACTION_MODEL
     model = model or DEFAULT_ADAPTER_MODEL
-    if project is None and page_url is None and (max_input_tokens is not None or max_output_tokens is not None):
+    if project is None and guide is None and page_url is None and (max_input_tokens is not None or max_output_tokens is not None):
         raise ValueError("max_input_tokens and max_output_tokens apply only to a project target")
     if page_url is not None:
         from .answer_extraction import ExtractionOptions
@@ -197,7 +217,7 @@ def run_agent(
         browser_limits.input_byte_limit
     adapter_profile = resolve_model_profile(
         model, max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens,
-    ) if project is not None else None
+    ) if project is not None or guide is not None else None
     page_origin = None
     if page_url is not None:
         from .browser_target import browser_failure_diagnostic, validate_browser_page_url
@@ -268,7 +288,7 @@ def run_agent(
     context = (
         copy_project(project, runs_root=runs_root)
         if project is not None and schedule
-        else _empty_context()
+        else _guide_workspace(session.directory) if guide is not None and schedule else _empty_context()
     )
     completed = 0
     browser_cancelled = False
@@ -278,8 +298,11 @@ def run_agent(
     results: list[dict[str, Any]] = []
     target_evidence: dict[str, Any] = {
         "project": str(Path(project).resolve()) if project is not None else None,
-        "adapter_model": model if project is not None else None,
+        "adapter_model": model if project is not None or guide is not None else None,
     }
+    if guide is not None:
+        target_evidence["api_guide"] = {"path": str(guide.path), "format": guide.format,
+                                      "sha256": guide.sha256, "empty_pages": list(guide.empty_pages)}
     responses_spool = session.directory / "responses.pending.jsonl"
     trials_spool = session.directory / "trials.pending.jsonl"
     with context as workspace, responses_spool.open("w", encoding="utf-8", newline="\n") as response_stream, trials_spool.open("w", encoding="utf-8", newline="\n") as trial_stream:
@@ -288,7 +311,7 @@ def run_agent(
         adapter_sha256 = None
         try:
             probes = list(dict.fromkeys(item.case.question for item in schedule))[:2]
-            if project is not None and schedule:
+            if (project is not None or guide is not None) and schedule:
                 from .auto_adapter import AutoAdapter
 
                 automatic = AutoAdapter(
@@ -305,8 +328,29 @@ def run_agent(
                     graphify_python=graphify_python,
                     service_url=service_url,
                     portable=export_adapter is not None,
+                    resume_evidence=guide is not None and resume is not None,
                 )
-                if adapt is not None:
+                if guide is not None:
+                    accepted_contract = session.data["state"].get("guide_contract")
+                    if accepted_contract:
+                        contract_path = Path(accepted_contract["path"])
+                        if not contract_path.is_file() or file_sha(contract_path) != accepted_contract["sha256"]:
+                            raise ValueError("API guide contract changed; cannot resume")
+                    accepted = session.data["state"].get("guide_adapter")
+                    candidate = accepted or session.data["state"].get("guide_candidate")
+                    if candidate:
+                        candidate_path = Path(candidate["path"])
+                        if not candidate_path.is_file() or file_sha(candidate_path) != candidate["sha256"]:
+                            raise ValueError("Saved API guide adapter changed; cannot resume")
+                    if accepted:
+                        automatic.prepare_existing(accepted["path"], probes)
+                    else:
+                        automatic.prepare(probes, interactive=interactive, interface_selector=interface_selector,
+                                          api_guide=guide, existing_adapter=adapt)
+                        session.put("guide_adapter", {"path": str(automatic.evidence / "adapter.py"),
+                            "sha256": hashlib.sha256(automatic.source).hexdigest(),
+                            "contract": automatic.report["interface_selection"]["candidate"]["contract"]})
+                elif adapt is not None:
                     automatic.prepare_existing(adapt, probes)
                 else:
                     automatic.prepare(
