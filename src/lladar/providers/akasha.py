@@ -15,6 +15,7 @@ from ..exceptions import ProviderError
 from ..model_profiles import resolve_model_profile
 from .base import parse_json_object
 from ..language import current_language
+from ..live_status import status_activity
 
 
 _CLIENT_CHILDREN = (
@@ -267,6 +268,7 @@ class AkashaProvider:
             copy_model_destination(expected_destination) if expected_destination is not None else None
         )
 
+    @status_activity("Waiting for model response")
     def generate_message(self, prompt: str, *, system_prompt: str, model: str,
                          temperature: float = 0.0):
         """One tool-free Akasha model invocation, retaining completion metadata.
@@ -310,6 +312,7 @@ class AkashaProvider:
             self.generate_text(prompt, model=model, temperature=temperature)
         )
 
+    @status_activity("Waiting for model response")
     def generate_text(
         self,
         prompt: str,

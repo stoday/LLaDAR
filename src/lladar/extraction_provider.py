@@ -12,6 +12,7 @@ import sys
 
 from .answer_extraction import ExtractionError, MAX_INPUT_BYTES, contains_sensitive_text, safe_usage, validate_result
 from .resource_limits import resource_limit
+from .live_status import status_activity
 
 MAX_REQUEST_BYTES = MAX_INPUT_BYTES
 MAX_RESPONSE_BYTES = resource_limit("PROVIDER_RESPONSE_BYTES")
@@ -71,6 +72,7 @@ class AkashaExtractionProvider:
             except ModelDestinationError:
                 raise ExtractionError('provider_destination_unconfirmed') from None
 
+    @status_activity("Extracting captured answer")
     def extract(self, request: dict, *, timeout_seconds: float) -> dict:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ExtractionError("extraction_time_exhausted")

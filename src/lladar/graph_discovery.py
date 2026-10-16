@@ -11,6 +11,7 @@ import subprocess
 from .interfaces import write_json
 from .project_inventory import inventory
 from .resource_limits import resource_limit
+from .live_status import status_activity
 
 
 WORKER = r'''
@@ -48,6 +49,7 @@ def resolve_graph_python(explicit: str | Path | None) -> Path:
 
 
 class CodeGraph:
+    @status_activity("Building project code graph")
     def __init__(self, workspace: Path, evidence: Path, *, enabled: bool = True,
                  python: str | Path | None = None, timeout: float = 60):
         self.nodes, self.edges = [], []

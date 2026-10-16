@@ -14,6 +14,7 @@ import threading
 import time
 
 from .resource_limits import resource_limit
+from .live_status import status_activity
 
 _HOST_REASONS = frozenset({
     'discovery_budget_exhausted', 'discovery_time_exhausted', 'checkpoint_failed', 'checkpoint_integrity_failed',
@@ -162,6 +163,7 @@ def _silence_thread(start):
                     sys.stderr = sys.stderr.stream
 
 
+@status_activity("Running website adapter model and tools")
 def run_browser_agent(*, factory, tools, prompt, model, env_file, profile,
                       max_rounds, timeout, model_started, tool_started, pump,
                        expected_destination=None, trace_output=None, user_task=None):

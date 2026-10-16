@@ -10,6 +10,7 @@ from typing import Any, TextIO
 
 from tqdm import tqdm
 from .language import current_language, tr
+from .live_status import current_status, status_activity
 
 
 _COLORS = {
@@ -47,6 +48,7 @@ class ProgressReporter:
         self.last_progress: dict[str, float] = {}
         self._output_lock = RLock()
         self._input_depth = 0
+        self._status = current_status()
         from .work_session import current_session
         session = current_session()
         if session is not None:
@@ -68,7 +70,12 @@ class ProgressReporter:
         with self._output_lock:
             if self._input_depth:
                 return
-            self._emit(label, message)
+            if self._status is not None and label != "STATUS":
+                with self._status.progress_output() as allowed:
+                    if allowed:
+                        self._emit(label, message)
+            else:
+                self._emit(label, message)
 
     @contextmanager
     def user_input(self):
@@ -76,7 +83,8 @@ class ProgressReporter:
         with self._output_lock:
             self._input_depth += 1
         try:
-            yield
+            with self._status.user_input() if self._status is not None else nullcontext():
+                yield
         finally:
             with self._output_lock:
                 self._input_depth -= 1
@@ -131,7 +139,8 @@ class ProgressReporter:
             thread.start()
         status = "finished"
         try:
-            yield
+            with status_activity(message):
+                yield
         except BaseException:
             status = "interrupted"
             raise

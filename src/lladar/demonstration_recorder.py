@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import builtins
+from contextvars import copy_context
 import hashlib
 import json
 from pathlib import Path
@@ -15,6 +16,7 @@ from .independent_adapter import IndependentAdapterError, origin
 from .recording_store import RecordingStore
 from .resource_limits import resource_limit
 from .language import tr
+from .live_status import read_user_input, status_user_input
 from .work_session import atomic_json, digest
 
 
@@ -37,17 +39,18 @@ class DemonstrationRecorder:
         self.closed = False
         self.question = ''
 
+    @status_user_input()
     def prompt(self, message, input_fn):
         """The browser owner keeps pumping while terminal input waits."""
         if input_fn is not builtins.input:
-            return input_fn(message)
+            return read_user_input(message, input_fn=input_fn)
         replies = queue.Queue()
         def read():
             try:
-                replies.put((True, input_fn(message)))
+                replies.put((True, read_user_input(message, input_fn=input_fn)))
             except BaseException as error:
                 replies.put((False, error))
-        threading.Thread(target=read, daemon=True).start()
+        threading.Thread(target=copy_context().run, args=(read,), daemon=True).start()
         deadline = time.monotonic() + resource_limit('MANUAL_VERIFICATION_TIMEOUT_SECONDS')
         while replies.empty():
             if time.monotonic() >= deadline:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .language import tr, language_stage, current_language
+from .live_status import status_activity
 
 import hashlib
 import json
@@ -107,7 +108,8 @@ def copy_project(project: str | Path, *, runs_root: str | Path | None = None):
                 ignored.add(name)
         return ignored
 
-    shutil.copytree(source, workspace, ignore=ignore)
+    with status_activity("Copying target project"):
+        shutil.copytree(source, workspace, ignore=ignore)
     yield workspace
 
 from .work_session import current_session, stage_session, publish_bundle, publication_metadata, file_sha
@@ -141,6 +143,7 @@ def run_agent(
     graphify_python: str | Path | None = None,
     adapt: str | Path | None = None,
     service_url: str | None = None,
+    export_adapter: str | Path | None = None,
     interface_selector: Callable[[dict], str] | None = None,
     strategy_agent_factory: SkillAgentFactory | None = None,
     page_url: str | None = None,
@@ -160,6 +163,13 @@ def run_agent(
         raise ValueError("--adapt requires --project or --page-url")
     if page_url is not None and service_url is not None:
         raise ValueError("--service-url applies only to a project target")
+    if export_adapter is None and project is not None and service_url and adapt is None:
+        export_adapter = Path(str(output) + ".api-adapter")
+    if export_adapter is not None:
+        if project is None or not service_url or page_url is not None:
+            raise ValueError("--export-adapter requires --project and --service-url")
+        if Path(export_adapter).exists() and resume is None:
+            raise FileExistsError("--export-adapter destination already exists")
     if project is None and interface_selector is not None:
         raise ValueError("interface_selector applies only to a project target")
     if page_url is None and confirm_browser_run:
@@ -294,6 +304,7 @@ def run_agent(
                     graphify=graphify,
                     graphify_python=graphify_python,
                     service_url=service_url,
+                    portable=export_adapter is not None,
                 )
                 if adapt is not None:
                     automatic.prepare_existing(adapt, probes)
@@ -303,6 +314,19 @@ def run_agent(
                         interactive=interactive,
                         interface_selector=interface_selector,
                     )
+                if export_adapter is not None:
+                    from .portable_api import write_bundle
+                    reporter.emit("WRITE", tr("Preparing portable adapter documentation"))
+                    write_bundle(
+                        Path(export_adapter), automatic.source, resume=resume is not None,
+                        lang=current_language().lang, model=automatic.model,
+                        env_file=automatic.env_file,
+                        documentation_cache=session.directory / "portable-documents.json",
+                        max_input_tokens=automatic.model_profile.max_input_tokens,
+                        max_output_tokens=automatic.model_profile.max_output_tokens)
+                    automatic.report["portable_export"] = str(Path(export_adapter).resolve())
+                    automatic._save()
+                    target_evidence["portable_export"] = str(Path(export_adapter).resolve())
                 if automatic.source is not None:
                     adapter_sha256 = hashlib.sha256(automatic.source).hexdigest()
                     target_evidence.update(adapter_sha256=adapter_sha256,

@@ -2,7 +2,7 @@ name: Recoverable stage contracts
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, "codex/terminal-status-*"]
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,3 +22,5 @@ jobs:
         run: python -m pip install -e ".[test]"
       - name: Exercise public contracts, persistence and process crashes
         run: python -m pytest tests/test_recoverable_generation.py tests/test_recoverable_evaluation.py tests/test_recoverable_report.py tests/test_recoverable_runner.py
+      - name: Exercise terminal status queries and human input handoff
+        run: python -m pytest tests/test_live_status.py tests/test_live_status_posix.py tests/test_progress.py tests/test_cli_log.py

@@ -18,6 +18,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from typing import Callable
 import uuid
 
@@ -27,6 +28,7 @@ from .interfaces import DISCOVERY_PROMPT, NeedsConfirmation, choose_interface, p
 from .validation_retry import run_validated
 from .model_profiles import resolve_model_profile
 from .resource_limits import resource_limit
+from .live_status import status_activity
 
 
 MAX_ADAPTER_REPAIR_ATTEMPTS = resource_limit('AUTO_ADAPTER_REPAIR_ATTEMPTS')
@@ -258,6 +260,7 @@ class AutoAdapter:
                  verbose: bool = True,
                  graphify: bool = True, graphify_python: str | Path | None = None,
                  service_url: str | None = None,
+                 portable: bool = False,
                  max_input_tokens: int | None = None,
                  max_output_tokens: int | None = None,
                  agent_factory: Callable | None = None):
@@ -275,6 +278,9 @@ class AutoAdapter:
         self.agent_factory = agent_factory
         self.graphify, self.graphify_python = graphify, graphify_python
         self.service_url = validate_service_url(service_url) if service_url else None
+        self.portable = portable
+        if portable and (not self.service_url or self.protocol_mode != "single"):
+            raise ValueError("Portable export requires an existing HTTP service and single-question protocol")
         evidence_name = "adapter-evidence" if self.workspace.name.casefold() == "adapter" else "adapter"
         self.evidence = self.workspace.parent / evidence_name
         self.evidence.mkdir()
@@ -317,6 +323,11 @@ class AutoAdapter:
                 f"Adapter discovery blocked: {proposal.get('blockers') or proposal.get('explanation')}"
             )
         self.source = self._path(proposal["harness"]).read_bytes()
+        if self.portable:
+            from .portable_api import required_environment
+            required_environment(self.source)
+            if self.service_url.encode("utf-8") in self.source:
+                raise ValueError("Portable adapter must use the recipient's LLADAR_SERVICE_URL, not embed the generation URL")
         digest = hashlib.sha256(self.source).hexdigest()
         self.report["adapter_sha256"] = digest
         versions = self.report.setdefault("adapter_versions", [])
@@ -460,6 +471,7 @@ class AutoAdapter:
             else:
                 failure = None
 
+    @status_activity("Executing target adapter in an isolated subprocess")
     def execute(self, source: bytes, question: str, *, phase: str, case_id: str | None = None) -> dict:
         from .runner import copy_project
 
@@ -470,14 +482,30 @@ class AutoAdapter:
         environment = dict(self.explorer.environment)
         completed: subprocess.CompletedProcess | None = None
         try:
-            with copy_project(self.workspace, runs_root=self.evidence / "requests") as cwd:
+            context = (tempfile.TemporaryDirectory(prefix="portable-", dir=self.evidence)
+                       if self.portable else copy_project(self.workspace, runs_root=self.evidence / "requests"))
+            with context as cwd:
+                cwd = Path(cwd)
                 result["workspace"] = str(cwd)
                 result["adapter_sha256"] = hashlib.sha256(source).hexdigest()
-                adapter_path = cwd.parent / "adapter.py"
-                adapter_path.write_bytes(source)
-                helper = cwd.parent / "lladar_service_runtime.py"
-                helper_source = Path(__file__).with_name("service_runtime.py").read_bytes()
-                helper.write_bytes(helper_source)
+                if self.portable:
+                    from .portable_api import write_bundle
+                    bundle = cwd / "bundle"
+                    write_bundle(bundle, source, lang="en")
+                    adapter_path = bundle / "adapter.py"
+                    cwd = cwd / "work"
+                    cwd.mkdir()
+                    command = [str(self.python), "-I", "-S", str(adapter_path)]
+                    environment["LLADAR_SERVICE_URL"] = self.service_url
+                    environment["LLADAR_API_TIMEOUT"] = str(self.timeout)
+                else:
+                    adapter_path = cwd.parent / "adapter.py"
+                    adapter_path.write_bytes(source)
+                    helper = cwd.parent / "lladar_service_runtime.py"
+                    helper_source = Path(__file__).with_name("service_runtime.py").read_bytes()
+                    helper.write_bytes(helper_source)
+                    command = [str(self.python), str(adapter_path)]
+                adapter_source = adapter_path.read_bytes()
                 environment["LLADAR_REQUEST_ID"] = request_id
                 # Keep common temporary/cache writes separate between requests.
                 temp = cwd.parent / "tmp"
@@ -489,7 +517,7 @@ class AutoAdapter:
                 source_hashes = {path: hashlib.sha256(path.read_bytes()).digest()
                                  for path in cwd.rglob('*') if path.is_file() and path.suffix.lower() in code_suffixes}
                 completed = _run_process(
-                    [str(self.python), str(adapter_path)], cwd=cwd,
+                    command, cwd=cwd,
                     request=json.dumps(request, ensure_ascii=False),
                     environment=environment, timeout=self.timeout,
                 )
@@ -527,9 +555,9 @@ class AutoAdapter:
                     raise ValueError("Adapter returned provider metadata; extract only the final answer text")
                 if not isinstance(payload.get("observation"), str) or not payload["observation"].strip():
                     raise ValueError("Adapter must explain how it observed the answer")
-                if adapter_path.read_bytes() != source:
+                if adapter_path.read_bytes() != adapter_source:
                     raise ValueError("Adapter changed during execution")
-                if helper.read_bytes() != helper_source:
+                if not self.portable and helper.read_bytes() != helper_source:
                     raise ValueError("Adapter changed service runtime helper")
                 if any(not path.is_file() or hashlib.sha256(path.read_bytes()).digest() != digest
                        for path, digest in source_hashes.items()):
@@ -549,6 +577,7 @@ class AutoAdapter:
             output.write(json.dumps(result, ensure_ascii=False) + "\n")
         return result
 
+    @status_activity("Discovering and generating target adapter")
     def prepare(self, probes: list[str], *, interactive: bool | None = None,
                 candidate_id: str | None = None, clarification: str | None = None,
                 interface_selector: Callable[[dict], str] | None = None) -> None:
@@ -649,6 +678,7 @@ class AutoAdapter:
                                         + "\nClarifications: "
                                         + json.dumps(history, ensure_ascii=False))
 
+                    @status_activity("Waiting for adapter discovery model")
                     def generate_discovery(prompt: str) -> str:
                         self.explorer.start_agent_turn()
                         with redirect_stdout(sys.stderr):
@@ -700,6 +730,9 @@ class AutoAdapter:
                     plan = None
                     continue
                 selected = next(c for c in plan["candidates"] if c["id"] == value)
+                if self.portable and (selected.get("transport") != "http"
+                        or (selected.get("service") or {}).get("mode") != "existing"):
+                    raise ValueError("Portable export requires a selected existing public HTTP interface")
                 self.report.pop("error", None)
                 self.report["interface_selection"] = {"method": action, "candidate": selected,
                                                        "acknowledged_unresolved": plan["unresolved"]}
@@ -713,6 +746,9 @@ class AutoAdapter:
                                 "Do not bypass it for an inner model/agent method. If unavailable, report a blocker."
                               + "\nClarifications: " + json.dumps(history, ensure_ascii=False)
                               + "\nProbe questions: " + json.dumps(probes, ensure_ascii=False))
+            if self.portable:
+                from .portable_api import PORTABLE_PROMPT
+                coding_context += PORTABLE_PROMPT
             def new_coding_agent():
                 self.explorer.start_agent_turn()
                 with redirect_stdout(sys.stderr):
@@ -728,7 +764,7 @@ class AutoAdapter:
             initial_failure = None
             try:
                 agent = new_coding_agent()
-                with redirect_stdout(sys.stderr):
+                with redirect_stdout(sys.stderr), status_activity("Waiting for adapter generation model"):
                     response = _stream_answer(agent(self.coding_prompt + coding_context))
                 self._accept_proposal(_json_object(str(response)))
             except (OSError, ValueError, RuntimeError) as error:
@@ -741,7 +777,7 @@ class AutoAdapter:
                 self._restore_verification_candidate()
                 context = self._repair_context()
                 agent = new_coding_agent()
-                with redirect_stdout(sys.stderr):
+                with redirect_stdout(sys.stderr), status_activity("Waiting for adapter repair model"):
                     response = _stream_answer(agent(
                         self.repair_prompt + coding_context
                         + f"\nRepair attempt: {attempt}/{MAX_ADAPTER_REPAIR_ATTEMPTS}"
@@ -767,6 +803,7 @@ class AutoAdapter:
                 shutil.copytree(generated, self.evidence / "harnesses", dirs_exist_ok=True)
             self._save()
 
+    @status_activity("Verifying existing target adapter")
     def prepare_existing(self, path: str | Path, probes: list[str]) -> None:
         """Load an exact adapter and independently verify it without model calls."""
         original = Path(path).resolve()
@@ -776,6 +813,11 @@ class AutoAdapter:
                 raise ValueError("--adapt must point to an existing Python adapter file")
             source = original.read_bytes()
             ast.parse(source, filename=str(original))
+            from .portable_api import STANDALONE_HEADER
+            if source.decode("utf-8-sig").startswith(STANDALONE_HEADER):
+                if self.protocol_mode != "single" or not self.service_url:
+                    raise ValueError("Standalone API adapters require single-question mode and --service-url")
+                self.portable = True
             self.report["reused_adapter"] = {"path": str(original), "sha256": hashlib.sha256(source).hexdigest()}
             metadata = original.parent / "run.json"
             if metadata.is_file():
@@ -809,6 +851,7 @@ class AutoAdapter:
         finally:
             self._save()
 
+    @status_activity("Waiting for target response")
     def answer(self, question: str, case_id: str) -> str:
         if self.source is None or self.report["status"] != "verified":
             raise RuntimeError("Adapter has not passed independent verification")

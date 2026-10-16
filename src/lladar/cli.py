@@ -18,6 +18,7 @@ from .api import DEFAULT_DATASET_MODEL, create_test_dataset
 from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
 from .resource_limits import resource_limit
 from .command_log import command_log
+from .live_status import status_queries
 from .operation_report import OperationReport, current_operation, exception_exit_code, operation_scope
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
 from .evaluation import DEFAULT_EVALUATION_MODEL, evaluate
@@ -541,6 +542,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--service-url", metavar="URL",
         help="Existing test-service base URL that the generated adapter may call (default: none).",
     )
+    runner.add_argument("--export-adapter", metavar="DIRECTORY",
+                        help="Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).")
     runner.set_defaults(confirm_browser_run=False, allow_response_model_transfer=False)
     runner.add_argument(
         "--fresh-browser-profile", action="store_true",
@@ -681,7 +684,11 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
             )
         args.interactive = True
     try:
-        with language_scope(Language(args.lang)), command_log(getattr(args, "log", None)):
+        with (
+            language_scope(Language(args.lang)),
+            command_log(getattr(args, "log", None)),
+            status_queries(getattr(args, "verbose", False)),
+        ):
             # Announce after the log is installed; nested stage calls share this context.
             if args.lang not in {"en", "zh-TW", "ja", "ko", "zh-CN"}:
                 print(tr('Language {p0}: model-generated content uses this code; interface, fixed headings and offline templates use English.', p0=args.lang), file=sys.stderr)
@@ -899,6 +906,9 @@ def _execute(
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
+            if args.export_adapter is not None and (args.project is None or not args.service_url
+                    or args.page_url is not None or args.situation_config is not None):
+                parser.error(tr('--export-adapter requires explicit --project and --service-url in single-question mode'))
             if args.adapt is not None and args.project is None and args.page_url is None:
                 parser.error(tr('--adapt requires an explicit --project or --page-url'))
             if args.demo_question is not None and (args.page_url is None or not args.demo_question.strip()):
@@ -965,6 +975,7 @@ def _execute(
                 graphify_python=args.graphify_python,
                 adapt=args.adapter if args.page_url else args.adapt,
                 service_url=args.service_url,
+                export_adapter=args.export_adapter,
                 confirm_browser_run=args.confirm_browser_run,
                 browser_session_policy=args.conversation_policy if args.page_url else None,
                 fresh_browser_profile=args.fresh_browser_profile,
@@ -988,6 +999,9 @@ def _execute(
                 _show_work_summary("run-agent", args.output)
                 return 1
             print(tr('Answered {p0} record(s) at {p1}', p0=completed, p1=args.output))
+            exported = run_metadata.get("target", {}).get("portable_export") or args.export_adapter
+            if exported is not None:
+                print(tr('API adapter bundle: {p0}', p0=Path(exported).resolve()))
             current_operation().record(count=completed)
             _show_work_summary("run-agent", args.output)
             return 0

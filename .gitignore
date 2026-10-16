@@ -54,6 +54,7 @@ akasha-repo
 # Recoverable stage workspaces (source snapshots and captured answers)
 *.work/
 *.work-*/
+*.api-adapter/
 # Per-invocation CLI operation reports
 *.operation.md
 *.operation-[0-9]*.md

@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 import time
 from uuid import uuid4
+from .live_status import status_activity
 
 _ACTIVE = ContextVar("lladar_work_session", default=None)
 CONTRACT_VERSION = 1
@@ -57,15 +58,21 @@ def file_sha(path):
     return checksum.hexdigest()
 
 
+@status_activity("Checking input files and session fingerprints")
 def file_identity(value):
     path = Path(value)
     if path.is_file():
         return {"name": path.name, "sha256": file_sha(path)}
     if path.is_dir():
+        excluded = {".git", ".venv", "__pycache__", "node_modules", ".env"}
+        files = []
+        # Prune before walking: filtering rglob results still visits every file
+        # in environments, delaying the first checkpoint and progress message.
+        for directory, directories, names in os.walk(path):
+            directories[:] = [name for name in directories if name not in excluded]
+            files.extend(Path(directory) / name for name in names if name not in excluded)
         return {str(p.relative_to(path)): file_sha(p)
-                for p in sorted(path.rglob("*")) if p.is_file() and not any(
-                    part in {".git", ".venv", "__pycache__", "node_modules", ".env"}
-                    for part in p.relative_to(path).parts)}
+                for p in sorted(files) if p.is_file()}
     return str(value)
 
 

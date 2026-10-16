@@ -25,6 +25,7 @@ from .progress import ProgressReporter
 from .recording_store import RecordingStore
 from .resource_limits import resource_limit
 from .language import tr
+from .live_status import read_user_input, status_activity
 from .work_session import atomic_json, current_session, digest
 
 
@@ -152,7 +153,7 @@ class IndependentTarget:
             session = current_session()
             for reporter in session.reporters if session else ():
                 stack.enter_context(reporter.user_input())
-            return self.input_fn(prompt)
+            return read_user_input(prompt, input_fn=self.input_fn)
 
     def _record(self):
         self.evidence['stage'] = 'demonstration'
@@ -197,6 +198,7 @@ class IndependentTarget:
             raise IndependentAdapterError('adapter_runtime_mismatch')
         self.candidate = value
 
+    @status_activity("Recording, generating and verifying website adapter")
     def prepare(self, _probes=None, *, interactive=None, record_count=0, request_count=0):
         self.interactive = interactive
         try:
@@ -653,6 +655,7 @@ class IndependentTarget:
         if self._tested_hash != self.candidate['sha256']:
             raise IndependentAdapterError('adapter_not_qualified')
 
+    @status_activity("Waiting for website response")
     def answer(self, question, request_id):
         if not self._qualified:
             raise IndependentAdapterError('adapter_not_qualified')

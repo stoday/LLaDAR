@@ -175,6 +175,28 @@ lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.
 ```
 
 `--service-url` is optional in project mode, not an arbitrary-API discovery option.
+
+Generating a single-question HTTP adapter with `--project --service-url` automatically produces a shareable API client bundle at `OUTPUT.api-adapter`. No export flag is needed:
+
+```powershell
+lladar run-agent dataset.jsonl --project ../my-agent --service-url http://127.0.0.1:8000 --output responses.jsonl
+```
+
+Generation inspects the project for the HTTP contract and authentication method. A selected existing public HTTP interface must pass verification from an empty working directory using isolated Python without site packages before delivery. `responses.jsonl.api-adapter` contains a self-contained `adapter.py`, a cross-platform `README.md`, and a commented `.env.example` listing the service URL, timeout and required credential names with empty credential values. The adapter reads process environment variables; it does not load `.env` automatically. With `--lang`, non-English documentation and configuration comments are translated through `akasha.ask` using the adapter model; code, commands and configuration names stay unchanged. The translation is cached for resume. English needs no translation call. The Python file runs on its own: recipients need Python 3.11+, their own credentials and API network access, without the project or a LLaDAR installation. Optionally use `--export-adapter api-client` to customize the directory.
+
+```powershell
+$env:LLADAR_SERVICE_URL = 'https://your-api.example.com'
+# Set your own credential variables listed in the README or adapter.py: REQUIRED_ENV.
+python responses.jsonl.api-adapter/adapter.py --message 'What can this service help with?'
+```
+
+`--service-url URL` also overrides the address. The generated adapter preserves project authentication (Bearer, API key, custom headers, cookies, or a reproducible credential exchange), reading credential values from the recipient's environment. HTTP helpers, required variable declarations, CLI and validation are folded into `adapter.py`: no `.env`, project, browser login state or run evidence is exported. `LLADAR_API_TIMEOUT` sets the HTTP timeout in seconds (default 60). For programmatic use, omit `--message` and send `{"request_id":"q1","message":"question"}` on stdin; stdout is JSON with the same `request_id`, `output` and `observation`.
+
+The API server remains responsible for account/role/tenant/resource authorization, credential issuance, expiry and revocation. Sharing a client grants no server permissions. Missing required variables stop before requests; 401/403 are not bypassed. Redirects are rejected: specify the final API base URL. Replace localhost with a reachable server address for remote use and configure its listener/network separately; use HTTPS when sending credentials remotely. Browser login, MFA and cross-site authentication need an independently reproducible contract.
+
+The generated README includes Python version checks, local venv setup, this adapter's required credential variable names, and launch commands for Windows PowerShell and Linux/macOS bash/zsh. Only the Python 3.11+ standard library is needed, so no requirements.txt or pip install step is included. Do not distribute the creator's `.venv`. Optionally add `-I -S` to match generation-time Python isolation. Verification covers the system running it, not every recipient OS.
+
+Bundles currently support single-question DATASET mode with `--project` and `--service-url`. The destination must not exist; `--resume` accepts only an identical existing bundle. To export an older adapter, combine `--adapt` with `--export-adapter`; supplied source must satisfy the portable contract and pass verification again. Without explicit export, ordinary reused project adapters retain the existing `--adapt --project` flow. Generated code runs with user permissions; directory/Python isolation is not an OS sandbox.
 Missing startup, authentication, or request/response details require clarification;
 a URL alone does not fill those gaps. `--page-url` cannot be combined with
 `--project` or `--service-url`. See the [target selection guide](site/guides/run-agent.html#choose-target).
@@ -381,6 +403,17 @@ for each run because existing logs are preserved.
 With `--page-url`, progress shows the current discovery stage, safe tool names and
 ledger counts, with periodic waiting messages. Tool arguments/results and model
 reasoning stay out of normal logs; `--no-verbose` hides detailed progress.
+
+In a Windows, Linux or macOS interactive terminal with `--verbose` (enabled by default), press
+Enter during work to see the current activity, time in that stage and time since
+the last progress message. This covers input checks, graph building, adapter
+generation/repair, model waits and target subprocess execution. Status goes to
+stderr and is also saved by `--log`. Keyboard polling pauses for human input
+prompts, including sign-in, choices and YES/MATCH confirmation. It is disabled
+with piped stdin, redirected stderr or `--no-verbose`. Linux and macOS retain
+normal canonical terminal input and Ctrl+C behavior; text typed ahead is kept
+for the next human prompt. Native PTY handoff tests run in the Ubuntu/macOS CI jobs.
+
 Each LLaDAR progress message includes local time with milliseconds and a UTC
 offset, plus cumulative elapsed seconds (`[+12.345s]`). Browser waits also show
 the current stage's duration (`stage_elapsed`); the log retains the same markers.

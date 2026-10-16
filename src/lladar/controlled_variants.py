@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .language import tr
+from .live_status import read_user_input, status_user_input
 
 from collections.abc import Callable, Iterable
 from typing import Any
@@ -24,6 +25,7 @@ def normalize_controlled_variant_topics(topics: str | Iterable[str] | None) -> t
     return tuple(selected)
 
 
+@status_user_input()
 def select_controlled_variant_topics(
     dimensions: Iterable[dict[str, Any]], *, input_fn: Callable[[str], str] = input,
     output_fn: Callable[[str], None] = print,
@@ -35,7 +37,7 @@ def select_controlled_variant_topics(
     output_fn(tr('Available controlled-variant dimensions (enter numbers separated by commas; 0 skips):'))
     for index, dimension in enumerate(available, start=1):
         output_fn(f"  {index}. {dimension['label']} ({dimension['id']})")
-    choice = input_fn(tr('Selection: ')).strip()
+    choice = read_user_input(tr('Selection: '), input_fn=input_fn).strip()
     if choice in {"", "0"}:
         return ()
     try:

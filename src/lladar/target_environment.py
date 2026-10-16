@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from .live_status import status_activity
 
 
 def target_environment(python: Path, env_file: str | Path | None = None) -> dict[str, str]:
@@ -35,6 +36,7 @@ def target_environment(python: Path, env_file: str | Path | None = None) -> dict
     return environment
 
 
+@status_activity("Checking target Python environment")
 def validate_target_python(python: str | Path) -> dict[str, str]:
     # Preserve venv symlinks on POSIX: resolving python to the base executable
     # would silently escape the virtual environment.

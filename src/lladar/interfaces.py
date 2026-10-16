@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .language import tr
+from .live_status import read_user_input, status_user_input
 
 import json
 from collections.abc import Callable
@@ -155,6 +156,7 @@ def _display(value: object) -> str:
     return "".join(char if char.isprintable() else " " for char in str(value))
 
 
+@status_user_input()
 def choose_interface(plan: dict, *, interactive: bool | None,
                      candidate_id: str | None = None,
                      selector: Callable[[dict], str] | None = None) -> tuple[str, str]:
@@ -193,12 +195,12 @@ def choose_interface(plan: dict, *, interactive: bool | None,
     while True:
         print(tr('輸入編號或 ID；c 補充需求並重新探索；q 保存離開：'), end=" ", file=sys.stderr, flush=True)
         try:
-            value = input().strip()
+            value = read_user_input().strip()
             if value.lower() == "q":
                 return "pause", ""
             if value.lower() == "c":
                 print(tr('請描述要測的功能或正常使用方式：'), end=" ", file=sys.stderr, flush=True)
-                clarification = input().strip()
+                clarification = read_user_input().strip()
                 if clarification:
                     return "clarify", clarification
                 continue
