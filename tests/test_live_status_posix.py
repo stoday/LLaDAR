@@ -107,7 +107,8 @@ flags = fcntl.fcntl(0, fcntl.F_GETFL)
 
 def unchanged():
     assert attrs is None or termios.tcgetattr(0) == attrs
-    assert fcntl.fcntl(0, fcntl.F_GETFL) == flags
+    actual_flags = fcntl.fcntl(0, fcntl.F_GETFL)
+    assert actual_flags == flags, f'stdin flags changed: {flags:#x} -> {actual_flags:#x}'
     assert current_status() is None
     assert not any(t.name == 'lladar-status-input' for t in threads())
 
