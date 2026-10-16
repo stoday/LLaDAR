@@ -5,6 +5,13 @@ import venv
 import pytest
 
 
+def pytest_configure(config):
+    # pytest creates basetemp itself, but not missing parent directories.
+    # A fresh checkout has no .tmp/ until the first test invocation.
+    if config.option.basetemp is not None:
+        Path(config.option.basetemp).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+
 @pytest.fixture
 def qualified_browser_demonstration(monkeypatch):
     """Isolate post-demonstration discovery contracts from terminal input.
