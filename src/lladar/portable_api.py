@@ -37,6 +37,23 @@ submitted questions. Return the normal harness/explanation/blockers proposal.
 """
 
 LAUNCHER = '''
+def _lladar_deadline():
+    import os
+    import sys
+    import threading
+    seconds = float(os.environ.get("LLADAR_API_TIMEOUT", "60"))
+    if not 0 < seconds < float("inf"):
+        raise ValueError("API timeout must be finite and positive")
+    output = sys.stderr
+    def expired():
+        output.write("API adapter timed out\\n")
+        output.flush()
+        os._exit(1)
+    timer = threading.Timer(seconds, expired)
+    timer.daemon = True
+    timer.start()
+    return timer
+
 def _lladar_prepare(required):
     import argparse
     import io
@@ -175,7 +192,7 @@ For a remote host replace localhost/127.0.0.1 with its reachable address; config
 the server's listener and network access separately. Use HTTPS when carrying
 credentials remotely. Redirects are rejected; provide the final API base URL.
 `--service-url URL` overrides LLADAR_SERVICE_URL without modifying adapter.py.
-LLADAR_API_TIMEOUT sets the HTTP timeout in seconds (default 60):
+LLADAR_API_TIMEOUT sets the total question deadline and default HTTP timeout in seconds (default 60):
 
 ```powershell
 $env:LLADAR_API_TIMEOUT = '120'
@@ -218,8 +235,8 @@ def bundle_environment(required: list[str]) -> str:
         "# Required: reachable HTTP(S) API base URL; use HTTPS for remote credentials.",
         "# --service-url overrides LLADAR_SERVICE_URL. Do not put credentials in the URL.",
         "LLADAR_SERVICE_URL=https://api.example.com", "",
-        "# Optional: positive HTTP timeout in seconds (default 60).",
-        "# A timeout supplied explicitly by the generated adapter takes precedence.",
+        "# Optional: positive total question deadline and default HTTP timeout in seconds (default 60).",
+        "# An explicit per-request timeout cannot extend the total question deadline.",
         "LLADAR_API_TIMEOUT=60", "",
     ]
     for name in required:
@@ -316,11 +333,33 @@ class _InlineImports(ast.NodeTransformer):
         return ([ast.Import(names=ordinary)] if ordinary else []) + assignments
 
 
+def _upgrade_standalone_deadline(source: bytes) -> bytes:
+    """Add the current deadline to older exported CLIs, preserving input files."""
+    tree = ast.parse(source)
+    if any(isinstance(node, ast.FunctionDef) and node.name == "_lladar_deadline" for node in tree.body):
+        return source
+    main_test = ast.dump(ast.parse('__name__ == "__main__"', mode="eval").body)
+    main = next((node for node in tree.body if isinstance(node, ast.If) and ast.dump(node.test) == main_test), None)
+    if main is None or not main.body or not isinstance(main.body[0], ast.Try):
+        raise ValueError("Standalone adapter must use the exported CLI structure")
+    outer = main.body[0]
+    prepare = outer.body[0] if outer.body else None
+    if (not isinstance(prepare, ast.Assign) or not isinstance(prepare.value, ast.Call)
+            or not isinstance(prepare.value.func, ast.Name) or prepare.value.func.id != "_lladar_prepare"):
+        raise ValueError("Standalone adapter must use the exported CLI structure")
+    tree.body.insert(tree.body.index(main), ast.parse(LAUNCHER).body[0])
+    outer.body.insert(1, ast.parse("_lladar_timer = _lladar_deadline()").body[0])
+    outer.finalbody.extend(ast.parse('if "_lladar_timer" in locals():\n    _lladar_timer.cancel()').body)
+    result = (ast.unparse(ast.fix_missing_locations(tree)) + "\n").encode("utf-8")
+    compile(result, "adapter.py", "exec")
+    return result
+
+
 def standalone_source(source: bytes) -> bytes:
     """Flatten verified code and runtime into readable Python, without exec or sidecar files."""
     required = required_environment(source)
     if source.decode("utf-8-sig").startswith(STANDALONE_HEADER):
-        return source
+        return _upgrade_standalone_deadline(source)
     generated = ast.parse(source)
     for node in ast.walk(generated):
         name = node.id if isinstance(node, ast.Name) else (getattr(node, "asname", None) or getattr(node, "name", ""))
@@ -335,6 +374,7 @@ def standalone_source(source: bytes) -> bytes:
 if __name__ == "__main__":
     try:
         _lladar_incoming, _lladar_captured, _lladar_stdout, _lladar_stderr = _lladar_prepare(REQUIRED_ENV)
+        _lladar_timer = _lladar_deadline()
         with _lladar_stdout, _lladar_stderr:
             try:
                 pass
@@ -345,10 +385,13 @@ if __name__ == "__main__":
     except Exception as _lladar_error:
         _lladar_fail(_lladar_error)
         raise SystemExit(1)
+    finally:
+        if "_lladar_timer" in locals():
+            _lladar_timer.cancel()
 ''')
     # if -> outer try -> with -> generated try. These blocks keep module scope,
     # so generated functions retain their original global-variable semantics.
-    wrapper.body[0].body[0].body[1].body[0].body = generated.body or [ast.Pass()]
+    wrapper.body[0].body[0].body[2].body[0].body = generated.body or [ast.Pass()]
     header = ast.parse(STANDALONE_HEADER + "from __future__ import " + ", ".join(sorted(imports.future))
                        + "\nREQUIRED_ENV = " + repr(required))
     namespace = ast.parse('''

@@ -19,6 +19,7 @@ dependencies = [
   "pydantic-monty==1.1.0",
   "llama-index-core>=0.14.25",
   "tqdm>=4.66,<5",
+  "certifi>=2026.10.19",
 ]
 
 classifiers = [
@@ -33,6 +34,9 @@ lladar = "lladar.cli:main"
 [project.optional-dependencies]
 test = ["pytest>=8", "websockets>=15,<16"]
 streamlit-test = ["streamlit>=1.57,<2"]
+
+[tool.uv]
+required-version = ">=0.13.4"
 
 [tool.setuptools.packages.find]
 where = ["src"]

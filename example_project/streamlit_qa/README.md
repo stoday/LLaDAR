@@ -5,10 +5,14 @@ A native `st.chat_input` / `st.chat_message` page with session history. Each ans
 Run from the LLaDAR repository root:
 
 ```powershell
-uv run --extra test --extra streamlit-test streamlit run example_project/streamlit_qa/app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
+uv sync --locked --extra test
+uv sync --project example_project/streamlit_qa --locked --extra test
+uv run --project example_project/streamlit_qa --locked streamlit run example_project/streamlit_qa/app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
 ```
 
 Open http://127.0.0.1:8501. Stop the page with Ctrl+C.
+
+The page uses its own `.venv`; the LLaDAR controller and browser harness use the root environment. See the [shared environment guide](../README.md) for version requirements and certifi updates. The root `streamlit-test` extra remains available for controller integration tests.
 
 Install Playwright Chromium before using LLaDAR's browser mode:
 

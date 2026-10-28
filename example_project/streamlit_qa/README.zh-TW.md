@@ -5,10 +5,14 @@
 在 LLaDAR 專案根目錄啟動：
 
 ```powershell
-uv run --extra test --extra streamlit-test streamlit run example_project/streamlit_qa/app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
+uv sync --locked --extra test
+uv sync --project example_project/streamlit_qa --locked --extra test
+uv run --project example_project/streamlit_qa --locked streamlit run example_project/streamlit_qa/app.py --server.address 127.0.0.1 --server.port 8501 --browser.gatherUsageStats false
 ```
 
 開啟 http://127.0.0.1:8501，在下方輸入問題。Ctrl+C 停止測試頁。
+
+頁面使用範例自己的 `.venv`；LLaDAR 控制程式與瀏覽器 harness 使用根目錄環境。版本要求與 certifi 升級見[統一建置說明](../README.md)。根目錄的 `streamlit-test` extra 仍供控制程式整合測試使用。
 
 使用 LLaDAR 瀏覽器模式前，先安裝 Playwright Chromium：
 

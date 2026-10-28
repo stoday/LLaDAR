@@ -33,7 +33,9 @@ def test_private_utf8_is_masked_before_decode_without_changing_length_delimited_
     assert private not in repr(result)
 
 
-_SECRET = "private-session/+ 中文?"
+_SECRET = "private-session/+ 中文?\u083e\u083f"
+# These final characters produce '+' and '/' in standard Base64, so URL-safe
+# inputs differ and exercise the alphabet conversion as well as padding.
 _RAW = _SECRET.encode()
 _JSON_ESCAPED = json.dumps(_SECRET, ensure_ascii=True)[1:-1].encode()
 _COMMON_FORMS = [

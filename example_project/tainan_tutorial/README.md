@@ -26,22 +26,25 @@
 或從 LLaDAR repository root 複製貼上：
 
 ```powershell
-uv sync --project .\example_project\tainan_tutorial --extra test; uv run --project .\example_project\tainan_tutorial tainan-demo serve
+uv sync --project example_project/tainan_tutorial --locked --extra test
+uv run --project example_project/tainan_tutorial --locked tainan-demo serve
 ```
 
 瀏覽器開啟 <http://127.0.0.1:8764>。首頁只有「開始完整展示」與「載入既有結果」兩個主要動作。
 
 ## 常用命令
 
+以下命令從本範例目錄執行。環境版本與 certifi 升級方式見[統一建置說明](../README.md)。
+
 ```powershell
 # 執行離線 replay，輸出 JSON 與獨立 HTML 報告
-uv run tainan-demo run
+uv run --locked tainan-demo run
 
 # 執行測試
-uv run pytest --basetemp .pytest-tmp
+uv run --locked --extra test pytest --basetemp .pytest-tmp
 
 # 選用：透過 akasha-terminal 執行 live 模式
-uv run tainan-demo run --mode live --model gemini:gemini-2.5-flash
+uv run --locked tainan-demo run --mode live --model gemini:gemini-2.5-flash
 ```
 
 Live 模式不套用 Replay 的 golden verdict；它只顯示 deterministic signals 並標成待討論，避免拿預錄答案的判定錯套到新回答。

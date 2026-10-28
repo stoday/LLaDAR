@@ -8,9 +8,10 @@ from __future__ import annotations
 from .language import tr, current_language
 
 from contextlib import redirect_stdout
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import ast
 import hashlib
+from itertools import groupby
 import json
 import os
 from pathlib import Path
@@ -263,7 +264,8 @@ class AutoAdapter:
                  portable: bool = False,
                  max_input_tokens: int | None = None,
                  max_output_tokens: int | None = None,
-                 agent_factory: Callable | None = None):
+                 agent_factory: Callable | None = None,
+                 resume_evidence: bool = False):
         if timeout <= 0 or max_tool_calls <= 0:
             raise ValueError("timeout and max_tool_calls must be positive")
         self.model_profile = resolve_model_profile(
@@ -276,6 +278,7 @@ class AutoAdapter:
         self.env_file = str(Path(env_file).resolve()) if env_file else ""
         self.model, self.timeout, self.verbose = model, timeout, verbose
         self.agent_factory = agent_factory
+        self.resume_evidence = resume_evidence
         self.graphify, self.graphify_python = graphify, graphify_python
         self.service_url = validate_service_url(service_url) if service_url else None
         self.portable = portable
@@ -283,7 +286,7 @@ class AutoAdapter:
             raise ValueError("Portable export requires an existing HTTP service and single-question protocol")
         evidence_name = "adapter-evidence" if self.workspace.name.casefold() == "adapter" else "adapter"
         self.evidence = self.workspace.parent / evidence_name
-        self.evidence.mkdir()
+        self.evidence.mkdir(exist_ok=resume_evidence)
         self.explorer = WorkspaceExplorer(
             workspace, python_executable=str(self.python),
             environment=target_environment(self.python, env_file),
@@ -300,6 +303,8 @@ class AutoAdapter:
                              "target_python": str(self.python), "verification": [],
                              "max_repair_attempts": MAX_ADAPTER_REPAIR_ATTEMPTS,
                              "repairs": [], "adapter_versions": []}
+        if resume_evidence and (self.evidence / "run.json").is_file():
+            self.report.update(json.loads((self.evidence / "run.json").read_text(encoding="utf-8")))
     def _save(self) -> None:
         (self.evidence / "run.json").write_text(
             json.dumps(self.report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -326,6 +331,9 @@ class AutoAdapter:
         if self.portable:
             from .portable_api import required_environment
             required_environment(self.source)
+            source_text = self.source.decode("utf-8-sig")
+            if _redact_secrets(source_text, self.explorer.environment) != source_text:
+                raise ValueError("Portable adapter must not embed credential values")
             if self.service_url.encode("utf-8") in self.source:
                 raise ValueError("Portable adapter must use the recipient's LLADAR_SERVICE_URL, not embed the generation URL")
         digest = hashlib.sha256(self.source).hexdigest()
@@ -580,7 +588,19 @@ class AutoAdapter:
     @status_activity("Discovering and generating target adapter")
     def prepare(self, probes: list[str], *, interactive: bool | None = None,
                 candidate_id: str | None = None, clarification: str | None = None,
-                interface_selector: Callable[[dict], str] | None = None) -> None:
+                interface_selector: Callable[[dict], str] | None = None,
+                api_guide=None, existing_adapter: str | Path | None = None) -> None:
+        if api_guide is not None:
+            from .api_guide import GuideBlock
+            sanitized = []
+            for location, parts in groupby(api_guide.blocks, key=lambda block: block.location.rsplit("/part:", 1)[0]):
+                text = _redact_secrets("".join(part.text for part in parts), self.explorer.environment)
+                if len(text) <= 8000:
+                    sanitized.append(GuideBlock(location, text))
+                else:
+                    sanitized.extend(GuideBlock(f"{location}/part:{offset // 8000 + 1}", text[offset:offset+8000])
+                                     for offset in range(0, len(text), 8000))
+            api_guide = replace(api_guide, blocks=tuple(sanitized))
         def run_harness(path: str, message: str) -> str:
             self.explorer._check_budget()
             if message not in probes:
@@ -620,6 +640,13 @@ class AutoAdapter:
         def write_harness(filename: str, content: str) -> str:
             return self.explorer.write_harness(filename, content)
 
+        def read_guide(start_block: int = 1, max_characters: int = 24000) -> str:
+            self.explorer._check_budget()
+            page = api_guide.read(start_block=start_block, max_characters=max_characters)
+            self.report.setdefault("guide_reads", []).append({"start_block": start_block,
+                "locations": [item["location"] for item in page["blocks"]], "next_block": page["next_block"]})
+            return json.dumps(page, ensure_ascii=False)
+
         from functools import wraps
 
         def recoverable(function):
@@ -639,7 +666,7 @@ class AutoAdapter:
             agent_factory = self.agent_factory or akasha.agents
             from .graph_discovery import CodeGraph
 
-            graph = CodeGraph(self.workspace, self.evidence, enabled=self.graphify,
+            graph = CodeGraph(self.workspace, self.evidence, enabled=self.graphify and api_guide is None,
                               python=self.graphify_python, timeout=min(self.timeout, 60))
             self.report["graph"] = graph.summary
             if self.verbose:
@@ -664,8 +691,28 @@ class AutoAdapter:
                          ("Write one standalone Python adapter.", write_harness),
                          ("Verify adapter in a fresh project copy using the selected mode's runtime protocol. The message argument is an exact plain-text probe; inspect adapter_runtime_protocol in the result.", run_harness),
                      ]]
+            if api_guide is not None:
+                from .api_guide import GUIDE_DISCOVERY_PROMPT, validate_guide_plan
+                guide_tools = [akasha.create_tool("Read located API documentation in bounded blocks.", recoverable(read_guide), "read_guide"),
+                               akasha.create_tool("Check only environment variable presence, never values.", recoverable(check_runtime), "check_runtime")]
+                tools = guide_tools + tools[-2:]
+                discovery_tools = guide_tools
+                graph_context = "\nAuthorized service URL: " + str(self.service_url)
+                graph_context += "\nDocument identity: " + json.dumps({"format": api_guide.format, "sha256": api_guide.sha256,
+                    "blocks": len(api_guide.blocks), "empty_pages": api_guide.empty_pages})
+                graph_context += "\nRead ALL required evidence using read_guide. Empty pages contain no readable evidence."
+                discovery_base = GUIDE_DISCOVERY_PROMPT
+            else:
+                discovery_tools, discovery_base = tools[:5], DISCOVERY_PROMPT
             plan_path = self.evidence / "interfaces.json"
             plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.exists() else None
+            guide_session = None
+            if api_guide is not None:
+                from .work_session import current_session, file_sha
+                guide_session = current_session()
+                locked = guide_session.data["state"].get("guide_contract") if guide_session else None
+                if locked:
+                    candidate_id, interface_selector = locked["candidate_id"], None
             history = self.report.setdefault("clarifications", [])
             if clarification:
                 history.append(clarification)
@@ -674,17 +721,17 @@ class AutoAdapter:
                 if plan is None:
                     self.report["status"] = "discovering"
                     self._save()
-                    discovery_prompt = (DISCOVERY_PROMPT + graph_context
+                    discovery_prompt = (discovery_base + graph_context
                                         + "\nClarifications: "
                                         + json.dumps(history, ensure_ascii=False))
 
-                    @status_activity("Waiting for adapter discovery model")
+                    @status_activity("Extracting API guide contract" if api_guide is not None else "Waiting for adapter discovery model")
                     def generate_discovery(prompt: str) -> str:
                         self.explorer.start_agent_turn()
                         with redirect_stdout(sys.stderr):
                             discovery = agent_factory(
                                 system_prompt=current_language().instruction(),
-                                model=self.model, env_file=self.env_file, tools=tools[:5],
+                                model=self.model, env_file=self.env_file, tools=discovery_tools,
                                 max_input_tokens=self.model_profile.max_input_tokens,
                                 max_output_tokens=self.model_profile.max_output_tokens,
                                 max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
@@ -692,6 +739,14 @@ class AutoAdapter:
                             return _stream_answer(discovery(prompt))
 
                     def validate_discovery(response: str) -> dict:
+                        if api_guide is not None:
+                            plan = validate_guide_plan(parse_object(str(response), "candidates"), api_guide, self.service_url)
+                            read_locations = {location for page in self.report.get("guide_reads", []) for location in page["locations"]}
+                            self.report["guide_unread_locations"] = [block.location for block in api_guide.blocks if block.location not in read_locations]
+                            if any(source["location"] not in read_locations for candidate in plan["candidates"]
+                                   for field in candidate["contract"].values() for source in field["evidence"]):
+                                raise ValueError("API guide contract cites unread document evidence; use read_guide")
+                            return plan
                         return validate_plan(
                             parse_object(str(response), "candidates"),
                             self.explorer,
@@ -713,7 +768,10 @@ class AutoAdapter:
                     write_json(plan_path, plan)
                     self.report.setdefault("discovery_history", []).append(plan)
                 else:
-                    validate_plan(plan, self.explorer, service_url=self.service_url)
+                    if api_guide is not None:
+                        validate_guide_plan(plan, api_guide, self.service_url)
+                    else:
+                        validate_plan(plan, self.explorer, service_url=self.service_url)
                 self.report["status"] = "needs_confirmation"
                 self._save()
                 action, value = choose_interface(
@@ -736,9 +794,15 @@ class AutoAdapter:
                 self.report.pop("error", None)
                 self.report["interface_selection"] = {"method": action, "candidate": selected,
                                                        "acknowledged_unresolved": plan["unresolved"]}
+                if guide_session:
+                    guide_session.put("guide_contract", {"path": str(plan_path), "sha256": file_sha(plan_path),
+                        "candidate_id": selected["id"], "guide_sha256": api_guide.sha256})
                 self.report["status"] = "adapting"
                 self._save()
                 break
+            if existing_adapter is not None:
+                self.prepare_existing(existing_adapter, probes)
+                return
             # The generation agent only runs after a public interface is selected.
             coding_context = ("\nSELECTED PUBLIC INTERFACE: "
                               + json.dumps(selected, ensure_ascii=False)
@@ -762,11 +826,23 @@ class AutoAdapter:
                     )
 
             initial_failure = None
+            pending_source = self.evidence / "adapter.py"
+            resume_candidate = api_guide is not None and self.resume_evidence and pending_source.is_file()
+            if resume_candidate:
+                restored_source = pending_source.read_bytes()
+                if hashlib.sha256(restored_source).hexdigest() != self.report.get("adapter_sha256"):
+                    raise ValueError("Saved API guide adapter changed; cannot resume")
             try:
-                agent = new_coding_agent()
-                with redirect_stdout(sys.stderr), status_activity("Waiting for adapter generation model"):
-                    response = _stream_answer(agent(self.coding_prompt + coding_context))
-                self._accept_proposal(_json_object(str(response)))
+                if resume_candidate:
+                    self.source = restored_source
+                    self._restore_verification_candidate()
+                else:
+                    agent = new_coding_agent()
+                    with redirect_stdout(sys.stderr), status_activity("Waiting for adapter generation model"):
+                        response = _stream_answer(agent(self.coding_prompt + coding_context))
+                    self._accept_proposal(_json_object(str(response)))
+                    if guide_session:
+                        guide_session.put("guide_candidate", {"path": str(pending_source), "sha256": self.report["adapter_sha256"]})
             except (OSError, ValueError, RuntimeError) as error:
                 initial_failure = {
                     "phase": "generation",
@@ -785,6 +861,8 @@ class AutoAdapter:
                         + json.dumps(context, ensure_ascii=False)
                     ))
                 self._accept_proposal(_json_object(str(response)))
+                if guide_session:
+                    guide_session.put("guide_candidate", {"path": str(pending_source), "sha256": self.report["adapter_sha256"]})
 
             self._verify_with_repairs(probes, repair, initial_failure)
         except NeedsConfirmation:

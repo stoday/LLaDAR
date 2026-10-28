@@ -199,7 +199,7 @@ def stage_session(stage):
             for key, value in values.items():
                 if key in ignored:
                     continue
-                if key in {"dataset", "responses", "eval_output", "knowledge", "skill", "adapt", "project"} and value is not None:
+                if key in {"dataset", "responses", "eval_output", "knowledge", "skill", "adapt", "project", "api_guide"} and value is not None:
                     if key == "knowledge":
                         from .loaders import load_knowledge
                         value = [{"name": str(p.resolve()), "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}

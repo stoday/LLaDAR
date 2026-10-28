@@ -20,9 +20,15 @@ WORKFLOWS = [
 ]
 
 
-@pytest.mark.parametrize("argv,operation,filename", WORKFLOWS)
-@pytest.mark.parametrize("destination", [None, "nested/results", "existing.json", "nested/custom.jsonl"])
+@pytest.mark.parametrize("argv,operation,filename,destination", [
+    (*workflow, destination)
+    for workflow in WORKFLOWS
+    for destination in [None, "nested/results", "existing.json", "nested/custom.jsonl"]
+    if destination is None or workflow[1] in {"create_test_dataset", "create_report"}
+])
 def test_output_reaches_each_workflow_as_a_file(tmp_path, monkeypatch, capsys, argv, operation, filename, destination):
+    # Each workflow exercises default-output wiring. Both timestamped dataset
+    # names and fixed report names exercise every shared destination rule.
     monkeypatch.chdir(tmp_path)
     # Existing directories take precedence even when their names have a suffix.
     Path("existing.json").mkdir()

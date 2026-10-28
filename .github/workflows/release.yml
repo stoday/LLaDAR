@@ -76,6 +76,9 @@ jobs:
     timeout-minutes: 30
     env:
       EXAMPLE_MODEL: ${{ vars.LLADAR_LIVE_MODEL || 'gemini-3.8-flash' }}
+      # Match the local Vertex Express API-key setup; set the repository
+      # variable to 'false' when intentionally using Gemini Developer API.
+      GOOGLE_GENAI_USE_VERTEXAI: ${{ vars.GOOGLE_GENAI_USE_VERTEXAI || 'true' }}
     steps:
       - name: Require Gemini credentials
         env:
@@ -114,6 +117,20 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
+          python - <<'PY'
+          import os
+          from lladar.providers.akasha import resolve_model_destination
+
+          vertex = os.environ["GOOGLE_GENAI_USE_VERTEXAI"].lower()
+          if vertex not in {"true", "false"}:
+              raise ValueError("GOOGLE_GENAI_USE_VERTEXAI must be true or false")
+          expected = ("https://aiplatform.googleapis.com" if vertex == "true"
+                      else "https://generativelanguage.googleapis.com")
+          actual = resolve_model_destination("gemini:" + os.environ["EXAMPLE_MODEL"], env_file=None)["origin"]
+          print("Configured Gemini endpoint:", actual)
+          if actual != expected:
+              raise RuntimeError("Gemini backend does not match GOOGLE_GENAI_USE_VERTEXAI")
+          PY
           python scripts/verify_rest_graph_live.py \
             --target-python "$RUNNER_TEMP/lladar-live-target/bin/python" \
             --model "gemini:$EXAMPLE_MODEL"
