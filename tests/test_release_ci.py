@@ -130,7 +130,11 @@ def test_live_rest_verification_entrypoint_loads():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path):
+@pytest.mark.parametrize("history", [
+    "clean", "repaired", "same_candidate_retry", "last_verification_failed",
+    "dataset_failed", "wrong_candidate",
+])
+def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path, history):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     spec = importlib.util.spec_from_file_location(
         "_verify_rest_graph_live_test", ROOT / "scripts" / "verify_rest_graph_live.py"
@@ -196,6 +200,7 @@ def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path):
                       "version": "fixture"},
             "interface_selection": {"candidate": {"transport": "http"}},
             "status": "verified",
+            "adapter_sha256": "f" * 64,
         })
         workspace = tmp_path / "workspace"
         workspace.mkdir()
@@ -206,9 +211,21 @@ def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path):
         )
         write_json(workspace / "lladar-service.json", {"stopped": True, "port": 0})
         observations = [
-            {"phase": phase, "ok": True, "output": "API客服：fixture", "workspace": str(workspace)}
+            {"phase": phase, "ok": True, "output": "API客服：fixture", "workspace": str(workspace),
+             "adapter_sha256": "f" * 64}
             for phase in ["verification", "dataset", "dataset", "dataset"]
         ]
+        if history in {"repaired", "same_candidate_retry"}:
+            observations.insert(0, {
+                "phase": "verification", "ok": False, "error": "request timed out",
+                "adapter_sha256": ("0" if history == "repaired" else "f") * 64,
+            })
+        elif history == "last_verification_failed":
+            observations.insert(1, {**observations[0], "ok": False, "error": "request timed out"})
+        elif history == "dataset_failed":
+            observations[-1]["ok"] = False
+        elif history == "wrong_candidate":
+            observations[-1]["adapter_sha256"] = "0" * 64
         (adapter / "observations.jsonl").write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in observations), encoding="utf-8"
         )
@@ -218,11 +235,18 @@ def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path):
     monkeypatch.setattr(module, "run_agent", fake_run_agent)
     monkeypatch.setattr(sys, "argv", [str(script), "--target-python", "fixture-python"])
 
+    if history in {"last_verification_failed", "dataset_failed", "wrong_candidate"}:
+        with pytest.raises(AssertionError):
+            module.main()
+        return
+
     module.main()
 
     verification = json.loads(next((tmp_path / ".lladar").glob("live-rest-graph-*/verification.json"))
                               .read_text(encoding="utf-8"))
     assert verification["answers"] == 1
     assert verification["verified_requests"] == 4
+    assert verification["verification_attempts"] == (1 if history == "clean" else 2)
+    assert verification["failed_verification_attempts"] == (0 if history == "clean" else 1)
     assert runtime_calls == [Path("fixture-python")]
     assert inventory_calls == [target, target]

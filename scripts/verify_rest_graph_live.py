@@ -55,8 +55,14 @@ def main():
     assert report['interface_selection']['candidate']['transport'] == 'http'
     assert report['status'] == 'verified'
     observations = [json.loads(line) for line in (evidence / 'observations.jsonl').read_text(encoding='utf-8').splitlines()]
-    final = [row for row in observations if row['phase'] in ('verification', 'dataset')]
-    assert len(final) == 4 and all(row['ok'] for row in final)
+    verification = [row for row in observations if row['phase'] == 'verification']
+    trials = [row for row in observations if row['phase'] == 'dataset']
+    # Repairs retain earlier failed probes. The final accepted candidate must
+    # pass its latest independent probe and all three formal trials.
+    assert verification and verification[-1]['ok'], 'Final independent verification failed'
+    assert len(trials) == 3 and all(row['ok'] for row in trials), 'Expected three successful formal trials'
+    final = [verification[-1], *trials]
+    assert all(row['adapter_sha256'] == report['adapter_sha256'] for row in final), 'Final adapter hash mismatch'
     for row in final:
         assert row['output'].startswith('API客服：')
         workspace = Path(row['workspace'])
@@ -71,6 +77,8 @@ def main():
     audit = json.loads((evidence / 'audit.json').read_text(encoding='utf-8'))
     assert any(item['tool'] == 'query_graph' for item in audit)
     (output / 'verification.json').write_text(json.dumps({'answers': count, 'verified_requests': len(final),
+        'verification_attempts': len(verification),
+        'failed_verification_attempts': sum(not row['ok'] for row in verification),
         'graph_version': report['graph']['version'], 'run': str(run)}, indent=2), encoding='utf-8')
     print(f'Paid REST and graph verification passed: {output}')
 
