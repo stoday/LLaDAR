@@ -420,6 +420,8 @@ JSONL 的每一行固定只有三個欄位：
 
 ## 開發
 
+五個受測範例各自使用獨立的 uv 環境與鎖檔。安裝流程與 certifi 安全版本更新請見[範例建置說明](example_project/README.md)。
+
 ```bash
 python -m pip install -e ".[test]"
 pytest

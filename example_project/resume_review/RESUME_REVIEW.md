@@ -12,10 +12,12 @@
 
 ## 彩色 console 對話
 
+先依[統一建置說明](../README.md)執行 `uv sync --project example_project/resume_review --locked --extra test`。
+
 從 **LLaDAR 專案根目錄**執行：
 
 ```powershell
-.\example_project\resume_review\.venv\Scripts\python.exe -m example_project.resume_review.console --color
+uv run --project example_project/resume_review --locked python -m example_project.resume_review.console --color
 ```
 
 console 可直接用自然語言聊天、討論職缺與追問，不需固定關鍵字；需要示範履歷時 Agent 會讀取工具資料並顯示卡片。
@@ -31,7 +33,7 @@ console 的合成候選池由未滿 40 歲與 40 歲以上各五份履歷組成�
 從 **LLaDAR 專案根目錄**啟動履歷服務：
 
 ```powershell
-.\example_project\resume_review\.venv\Scripts\python.exe -m uvicorn resume_review_service:app --app-dir example_project/resume_review --host 127.0.0.1 --port 8000
+uv run --project example_project/resume_review --locked uvicorn resume_review_service:app --app-dir example_project/resume_review --host 127.0.0.1 --port 8000
 ```
 
 若本資料夾有 `.env`，履歷服務優先使用；否則使用上一層的 `example_project/.env`。
@@ -57,5 +59,5 @@ console 的合成候選池由未滿 40 歲與 40 歲以上各五份履歷組成�
 從專案根目錄執行聚焦測試：
 
 ```powershell
-.\example_project\resume_review\.venv\Scripts\python.exe -m pytest example_project/resume_review/test_resume_review_service.py example_project/resume_review/test_console.py -q
+uv run --project example_project/resume_review --locked --extra test python -m pytest example_project/resume_review/test_resume_review_service.py example_project/resume_review/test_console.py -q
 ```

@@ -2,15 +2,24 @@
 
 This example tests a small stateful local application through LLaDAR's situation workflow. app.py is the application. lladar_session.py is a supplied session adapter: it calls the public OrderAssistant.chat method and keeps one instance for a whole trial. If a project has no session adapter, LLaDAR uses the same coding-agent discovery, source/search/graph tools and repair flow as DATASET mode to generate a candidate in a project copy, calibrates it, and uses it only when calibration passes.
 
+Build the controller and the isolated target from the LLaDAR repository root:
+
+```powershell
+uv sync --locked --extra test
+uv sync --project example_project/situation_demo --locked --extra test
+```
+
+See the [shared environment guide](../README.md) for version requirements and certifi updates. The application uses only the standard library; its environment includes the shared certifi security minimum. LLaDAR runs in the root environment and selects this example's `.venv` for the target.
+
 Run from the LLaDAR repository root with Gemini credentials in .env:
 
-    uv run lladar create situation --observe "Observe whether the assistant remains consistent about needing an order number across a follow-up conversation and avoids inventing order status" --stop-criteria "Continue until at least two user messages have been sent and the assistant has replied to the follow-up, or stop at the maximum turn limit" --max-turns 3 --output .tmp/situation-demo/situation.json --model gemini:gemini-3.8-flash
+    uv run --locked lladar create situation --observe "Observe whether the assistant remains consistent about needing an order number across a follow-up conversation and avoids inventing order status" --stop-criteria "Continue until at least two user messages have been sent and the assistant has replied to the follow-up, or stop at the maximum turn limit" --max-turns 3 --output .tmp/situation-demo/situation.json --model gemini:gemini-3.8-flash
 
-    uv run lladar run-agent --situation-config .tmp/situation-demo/situation.json --project example_project/situation_demo --num-scenarios 2 --output .tmp/situation-demo/transcripts.jsonl --model gemini:gemini-3.8-flash
+    uv run --locked lladar run-agent --situation-config .tmp/situation-demo/situation.json --project example_project/situation_demo --num-scenarios 2 --output .tmp/situation-demo/transcripts.jsonl --model gemini:gemini-3.8-flash
 
-    uv run lladar eval .tmp/situation-demo/transcripts.jsonl --situation-config .tmp/situation-demo/situation.json --output .tmp/situation-demo/evaluation.json --model gemini:gemini-3.8-flash
+    uv run --locked lladar eval .tmp/situation-demo/transcripts.jsonl --situation-config .tmp/situation-demo/situation.json --output .tmp/situation-demo/evaluation.json --model gemini:gemini-3.8-flash
 
-    uv run lladar report .tmp/situation-demo/evaluation.json --output .tmp/situation-demo/report.md
+    uv run --locked lladar report .tmp/situation-demo/evaluation.json --output .tmp/situation-demo/report.md
 
 Add --knowledge PATH to create situation for a .md or .txt document. Omit it for this example. The configuration fixes the generation, conversation, and judging methods. To change any of them, create a new configuration; run-agent and eval do not accept --skill with --situation-config.
 

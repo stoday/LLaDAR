@@ -1,0 +1,16 @@
+[project]
+name = "lladar-example-diet"
+version = "0.1.0"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "akasha-terminal[light]==1.8.3",
+  "certifi>=2026.10.19",
+  "python-dotenv>=1,<2",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[tool.uv]
+required-version = ">=0.13.4"
+package = false

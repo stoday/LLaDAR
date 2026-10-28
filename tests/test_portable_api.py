@@ -212,10 +212,16 @@ def test_auto_adapter_verifies_without_project_and_exports_existing_source(tmp_p
         assert builder.report["status"] == "verified"
 
 
-@pytest.mark.parametrize("custom_destination", [False, True])
-@pytest.mark.parametrize("lang", ["en", "zh-TW", "fr"])
-@pytest.mark.parametrize("logged", [False, True])
+@pytest.mark.parametrize("custom_destination,lang,logged", [
+    (False, "en", False),
+    (True, "en", True),
+    (False, "zh-TW", True),
+    (True, "zh-TW", False),
+    (True, "fr", True),
+])
 def test_runner_exports_a_verified_bundle_and_records_it(tmp_path, monkeypatch, isolated_target_python, custom_destination, lang, logged):
+    # Cover all destination/log combinations and each language here; detailed
+    # language, cache and document preservation checks live in the bundle tests.
     import akasha
     from lladar.runner import run_agent
     from test_simple_pipeline import StrategySkillAgent

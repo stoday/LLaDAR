@@ -9,6 +9,7 @@ description = "Offline-first Tainan historical-tour framing bias demonstration"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
+  "certifi>=2026.10.19",
   "akasha-terminal[light]>=1.5",
   "fastapi>=0.115,<1",
   "PyYAML>=6,<7",
@@ -31,4 +32,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+
+[tool.uv]
+required-version = ">=0.13.4"
 

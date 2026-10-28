@@ -90,6 +90,15 @@ def located_plan(format):
     return plan
 
 
+@pytest.fixture
+def guide_dataset(tmp_path):
+    guide = tmp_path / "guide.md"
+    guide.write_text(GUIDE, encoding="utf-8")
+    dataset = tmp_path / "dataset.jsonl"
+    dataset.write_text(json.dumps({"question": "hello", "expected_answer": "unused", "actual_response": None}) + "\n", encoding="utf-8")
+    return guide, dataset
+
+
 @pytest.mark.parametrize("format", ["md", "txt", "docx", "pdf"])
 def test_cli_guide_calls_real_http_and_exports_relocatable_adapter(tmp_path, monkeypatch, format):
     from lladar.cli import main
@@ -149,14 +158,11 @@ def test_resume_reuses_verified_adapter_after_documentation_interruption(tmp_pat
     assert json.loads(output.read_text())["actual_response"] == "reply: hello"
 
 
-def test_contract_cannot_claim_unread_document_evidence(tmp_path, monkeypatch):
+def test_contract_cannot_claim_unread_document_evidence(tmp_path, monkeypatch, guide_dataset):
     from lladar.runner import run_agent
     from test_simple_pipeline import RandomSampleSkillAgent
     from test_portable_api import api
-    guide = tmp_path / "guide.md"
-    guide.write_text(GUIDE, encoding="utf-8")
-    dataset = tmp_path / "dataset.jsonl"
-    dataset.write_text(json.dumps({"question": "hello", "expected_answer": "unused", "actual_response": None}) + "\n")
+    guide, dataset = guide_dataset
     document_model(monkeypatch, read=False)
     monkeypatch.setenv("EXAMPLE_API_KEY", "recipient-private-key")
     with api() as (url, calls):
@@ -293,14 +299,11 @@ def test_invalid_text_encoding_has_actionable_error(tmp_path):
         read_api_guide(path)
 
 
-def test_endpoint_must_be_present_in_cited_document_text(tmp_path, monkeypatch):
+def test_endpoint_must_be_present_in_cited_document_text(tmp_path, monkeypatch, guide_dataset):
     from lladar.runner import run_agent
     from test_simple_pipeline import RandomSampleSkillAgent
     from test_portable_api import api
-    guide = tmp_path / "guide.md"
-    guide.write_text(GUIDE, encoding="utf-8")
-    dataset = tmp_path / "dataset.jsonl"
-    dataset.write_text(json.dumps({"question": "hello", "expected_answer": "unused", "actual_response": None}) + "\n")
+    guide, dataset = guide_dataset
     plan = guide_plan()
     plan["candidates"][0]["contract"]["path"]["value"] = "/invented"
     document_model(monkeypatch, plan=plan)
@@ -312,14 +315,11 @@ def test_endpoint_must_be_present_in_cited_document_text(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("missing", ["auth", "request", "request_example", "response_example", "answer", "completion"])
-def test_missing_contract_stops_before_any_target_request(tmp_path, monkeypatch, missing):
+def test_missing_contract_stops_before_any_target_request(tmp_path, monkeypatch, missing, guide_dataset):
     from lladar.runner import run_agent
     from test_simple_pipeline import RandomSampleSkillAgent
     from test_portable_api import api
-    guide = tmp_path / "guide.md"
-    guide.write_text(GUIDE, encoding="utf-8")
-    dataset = tmp_path / "dataset.jsonl"
-    dataset.write_text(json.dumps({"question": "hello", "expected_answer": "unused", "actual_response": None}) + "\n")
+    guide, dataset = guide_dataset
     plan = guide_plan()
     del plan["candidates"][0]["contract"][missing]
     document_model(monkeypatch, plan=plan)
@@ -482,14 +482,11 @@ def test_chinese_help_explains_document_mode_and_no_ocr(capsys):
     assert "不做 OCR" in help_text
 
 
-def test_adapter_containing_known_credential_is_never_executed_or_exported(tmp_path, monkeypatch):
+def test_adapter_containing_known_credential_is_never_executed_or_exported(tmp_path, monkeypatch, guide_dataset):
     from lladar.runner import run_agent
     from test_simple_pipeline import RandomSampleSkillAgent
     from test_portable_api import api, SOURCE
-    guide = tmp_path / "guide.md"
-    guide.write_text(GUIDE, encoding="utf-8")
-    dataset = tmp_path / "dataset.jsonl"
-    dataset.write_text(json.dumps({"question": "hello", "expected_answer": "unused", "actual_response": None}) + "\n")
+    guide, dataset = guide_dataset
     adapter = tmp_path / "adapter.py"
     adapter.write_bytes(SOURCE + b"\n# recipient-private-key\n")
     document_model(monkeypatch)
@@ -503,14 +500,11 @@ def test_adapter_containing_known_credential_is_never_executed_or_exported(tmp_p
     assert not Path(str(output) + ".api-adapter").exists()
 
 
-def test_malformed_model_candidate_can_recover_without_speculative_http(tmp_path, monkeypatch):
+def test_malformed_model_candidate_can_recover_without_speculative_http(tmp_path, monkeypatch, guide_dataset):
     from lladar.runner import run_agent
     from test_simple_pipeline import RandomSampleSkillAgent
     from test_portable_api import api
-    guide = tmp_path / "guide.md"
-    guide.write_text(GUIDE, encoding="utf-8")
-    dataset = tmp_path / "dataset.jsonl"
-    dataset.write_text(json.dumps({"question": "hello", "expected_answer": "unused", "actual_response": None}) + "\n")
+    guide, dataset = guide_dataset
     replies = iter([{"candidates": [None], "unresolved": []}, guide_plan()])
     document_model(monkeypatch, plan=lambda: next(replies))
     monkeypatch.setenv("EXAMPLE_API_KEY", "recipient-private-key")

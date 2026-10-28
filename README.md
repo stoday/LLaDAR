@@ -507,6 +507,9 @@ behavior and safety boundaries.
 
 ## Development
 
+The five target examples have separate uv environments and lockfiles. See the
+[example setup guide](example_project/README.md) for installation and certifi security updates.
+
 ```bash
 python -m pip install -e ".[test]"
 pytest

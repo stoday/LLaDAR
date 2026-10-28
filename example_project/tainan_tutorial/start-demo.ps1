@@ -74,11 +74,11 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "[1/2] 建立或更新獨立環境..." -ForegroundColor Cyan
-& uv sync --project $ProjectRoot --extra test
+& uv sync --project $ProjectRoot --locked --extra test
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
 Write-Host "[2/2] 啟動展示頁：$BaseUrl" -ForegroundColor Green
-& uv run --project $ProjectRoot tainan-demo serve --host 127.0.0.1 --port $Port
+& uv run --project $ProjectRoot --locked tainan-demo serve --host 127.0.0.1 --port $Port
 exit $LASTEXITCODE
