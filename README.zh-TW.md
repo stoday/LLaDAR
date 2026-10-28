@@ -422,6 +422,8 @@ JSONL 的每一行固定只有三個欄位：
 
 五個受測範例各自使用獨立的 uv 環境與鎖檔。安裝流程與 certifi 安全版本更新請見[範例建置說明](example_project/README.md)。
 
+GitHub Actions 的真實測試讀取 Repository Secret `GEMINI_API_KEY`，並以 Repository Variable `GOOGLE_GENAI_USE_VERTEXAI` 選擇後端，預設為 `true`，使用 API key 的 Vertex AI Express 模式。使用 Gemini Developer API 金鑰時，請明確設為 `false`。CI 會先核對初始化後的實際端點，再執行真實呼叫；本機 `.env` 設定不會自動上傳到 GitHub。
+
 ```bash
 python -m pip install -e ".[test]"
 pytest

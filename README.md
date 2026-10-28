@@ -510,6 +510,12 @@ behavior and safety boundaries.
 The five target examples have separate uv environments and lockfiles. See the
 [example setup guide](example_project/README.md) for installation and certifi security updates.
 
+The GitHub Actions live test reads the repository secret `GEMINI_API_KEY`.
+The repository variable `GOOGLE_GENAI_USE_VERTEXAI` selects its backend and defaults
+to `true` for Vertex AI Express mode with an API key. Set it to `false` for a
+Gemini Developer API key. CI checks the initialized endpoint before making live
+calls; local `.env` settings are not uploaded to GitHub.
+
 ```bash
 python -m pip install -e ".[test]"
 pytest
