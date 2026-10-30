@@ -1,4 +1,5 @@
 {
+  "lladar plan requires terminal input; start it directly in an interactive terminal.": "lladar plan 需要終端機輸入；請直接在互動式終端機中啟動。",
   "API adapter bundle: {p0}": "API adapter 執行包：{p0}",
   "--export-adapter requires explicit --project and --service-url in single-question mode": "--export-adapter 必須在單題模式明確指定 --project 與 --service-url",
   "Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).": "自訂可攜 API adapter 執行包的目錄；需在單題模式明確指定 --project 與 --service-url（預設：生成既有服務 adapter 時存入 OUTPUT.api-adapter）。",

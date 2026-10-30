@@ -1,4 +1,9 @@
 {
+  "lladar plan requires terminal input; start it directly in an interactive terminal.": "lladar plan 需要终端输入；请直接在交互式终端中启动。",
+  "  Next: Choose your target; replace the example URL or project path before running.": "  下一步：选择测试入口；执行前请将示例网址或项目路径替换为实际值。",
+  "    Website (replace the example URL): {p0}": "    网站（请替换示例网址）：{p0}",
+  "    Project (replace YOUR_PROJECT_PATH): {p0}": "    项目（请替换 YOUR_PROJECT_PATH）：{p0}",
+  "    Change --num-scenarios to run more than one scenario.": "    如需执行多个场景，请调整 --num-scenarios。",
   "API adapter bundle: {p0}": "API adapter 运行包：{p0}",
   "--export-adapter requires explicit --project and --service-url in single-question mode": "--export-adapter 必须在单题模式明确指定 --project 与 --service-url",
   "Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).": "自定义可移植 API adapter 运行包的目录；需在单题模式明确指定 --project 与 --service-url（默认：生成现有服务 adapter 时保存到 OUTPUT.api-adapter）。",

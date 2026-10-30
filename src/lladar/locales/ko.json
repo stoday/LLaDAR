@@ -1,4 +1,9 @@
 {
+  "lladar plan requires terminal input; start it directly in an interactive terminal.": "lladar plan에는 터미널 입력이 필요합니다. 대화형 터미널에서 직접 실행하세요.",
+  "  Next: Choose your target; replace the example URL or project path before running.": "  다음 단계: 테스트 대상을 선택하고 실행 전에 예제 URL 또는 프로젝트 경로를 실제 값으로 바꾸세요.",
+  "    Website (replace the example URL): {p0}": "    웹사이트(예제 URL을 바꾸세요): {p0}",
+  "    Project (replace YOUR_PROJECT_PATH): {p0}": "    프로젝트(YOUR_PROJECT_PATH를 바꾸세요): {p0}",
+  "    Change --num-scenarios to run more than one scenario.": "    여러 시나리오를 실행하려면 --num-scenarios를 변경하세요.",
   "API adapter bundle: {p0}": "API adapter 실행 패키지: {p0}",
   "--export-adapter requires explicit --project and --service-url in single-question mode": "--export-adapter는 단일 질문 모드에서 --project와 --service-url을 명시해야 합니다",
   "Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).": "이식 가능한 API adapter 패키지의 저장 디렉터리를 지정합니다. 단일 질문 모드에서 --project와 --service-url을 명시해야 합니다 (기본값: 기존 서비스 adapter 생성 시 OUTPUT.api-adapter).",
