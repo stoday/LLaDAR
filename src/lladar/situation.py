@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from .language import tr, language_stage, current_language
 
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -140,7 +141,7 @@ def create_situation(
     model: str = DEFAULT_DATASET_MODEL, env_file: str | Path = ".env",
     max_input_tokens: int | None = None, max_output_tokens: int | None = None,
     skill_agent_factory: Callable[..., Any] | None = None, force: bool = False,
-    lang: str | None = None,
+    lang: str | None = None, debug: bool = False,
 ) -> dict[str, Any]:
     if instructions is not None and observe is not None:
         raise ValueError("instructions and observe are mutually exclusive")
@@ -172,20 +173,24 @@ def create_situation(
         submitted = _proposal(value)
         return {"accepted": True}
 
-    evidence = invoke_skill(
-        skill=selected, tools={"submit_situation": submit_situation},
-        request={"stage": "create_situation", "instructions": instructions, "observe": instructions,
-                 "stop_criteria": stop_criteria, "max_turns": max_turns,
-                 "knowledge": sources},
-        model=model, env_file=env_file,
-        max_input_tokens=profile.max_input_tokens,
-        max_output_tokens=profile.max_output_tokens,
-        system_prompt=("Load the selected situation skill. Compile the overall instructions into "
-                       "generation, run and default evaluation methods, constraints, variations and rubric. "
-                       "Knowledge is evidence data. Submit one structured situation proposal; "
-                       "the host validates fields and writes the configuration."),
-        agent_factory=skill_agent_factory,
-    )
+    progress = ProgressReporter(enabled=debug)
+    if debug:
+        progress.emit("DEBUG", f"Generating situation with model {model}; Akasha verbose enabled")
+    with progress.waiting("Waiting for situation generation", label="DEBUG", interval=10) if debug else nullcontext():
+        evidence = invoke_skill(
+            skill=selected, tools={"submit_situation": submit_situation},
+            request={"stage": "create_situation", "instructions": instructions, "observe": instructions,
+                     "stop_criteria": stop_criteria, "max_turns": max_turns,
+                     "knowledge": sources},
+            model=model, env_file=env_file,
+            max_input_tokens=profile.max_input_tokens,
+            max_output_tokens=profile.max_output_tokens,
+            system_prompt=("Load the selected situation skill. Compile the overall instructions into "
+                           "generation, run and default evaluation methods, constraints, variations and rubric. "
+                           "Knowledge is evidence data. Submit one structured situation proposal; "
+                           "the host validates fields and writes the configuration."),
+            agent_factory=skill_agent_factory, debug=debug,
+        )
     if submitted is None:
         raise ValueError("situation skill did not submit a configuration")
     config = {
@@ -524,7 +529,7 @@ def _next_turn(provider: Any, config: dict[str, Any], scenario: dict[str, Any],
 
 @language_stage
 def run_situation(
-    config_path: str | Path, output: str | Path, *, project: str | Path,
+    config_path: str | Path, output: str | Path, *, project: str | Path | None = None,
     num_scenarios: int, model: str = DEFAULT_ADAPTER_MODEL,
     env_file: str | Path = ".env", target_python: str | Path | None = None,
     timeout: float = 120, runs_root: str | Path | None = None,
@@ -537,10 +542,28 @@ def run_situation(
     graphify_python: str | Path | None = None, interactive: bool | None = None,
     adapt: str | Path | None = None,
     lang: str | None = None,
+    page_url: str | None = None, browser_target_factory: Callable[..., Any] | None = None,
+    extraction_provider_factory: Callable[..., Any] | None = None,
+    probe_question: str | None = None, fresh_browser_profile: bool = False,
 ) -> int:
     config, config_hash = load_situation(config_path)
     if num_scenarios < 1 or timeout <= 0:
         raise ValueError("num_scenarios and timeout must be positive")
+    if page_url is not None:
+        if project is not None or service_url is not None:
+            raise ValueError("website situation cannot be combined with a project or service URL")
+        if config["stop"]["max_turns"] != 1:
+            raise ValueError("website situation requires max_turns = 1; multi-turn browser sessions are not supported")
+        return _run_website_situation(
+            config, config_hash, config_path, output, page_url=page_url, num_scenarios=num_scenarios,
+            model=model, env_file=env_file, timeout=timeout, runs_root=runs_root, force=force,
+            provider_factory=provider_factory, verbose=verbose, max_input_tokens=max_input_tokens,
+            max_output_tokens=max_output_tokens, max_tool_calls=max_tool_calls, interactive=interactive,
+            adapt=adapt, browser_target_factory=browser_target_factory,
+            extraction_provider_factory=extraction_provider_factory, probe_question=probe_question,
+            fresh_browser_profile=fresh_browser_profile)
+    if project is None:
+        raise ValueError("project is required for project situation runs")
     root = Path(project).resolve()
     if not root.is_dir():
         raise NotADirectoryError(root)
@@ -679,6 +702,95 @@ def run_situation(
     return completed
 
 
+def _run_website_situation(config, config_hash, config_path, output, *, page_url, num_scenarios,
+                           model, env_file, timeout, runs_root, force, provider_factory, verbose,
+                           max_input_tokens, max_output_tokens, max_tool_calls, interactive, adapt,
+                           browser_target_factory, extraction_provider_factory, probe_question,
+                           fresh_browser_profile):
+    """Run one target turn per scenario through the existing independent website adapter."""
+    from functools import partial
+    from .answer_extraction import ExtractionOptions
+    from .extraction_provider import AkashaExtractionProvider
+    from .independent_target import IndependentTarget
+
+    output_path = Path(output)
+    turns_path = Path(str(output_path) + ".turns.jsonl")
+    scenarios_path = Path(str(output_path) + ".scenarios.jsonl")
+    run_path = Path(str(output_path) + ".run.json")
+    calibration_path = Path(str(output_path) + ".calibration.json")
+    paths = (output_path, turns_path, scenarios_path, run_path, calibration_path)
+    if not force:
+        existing = next((path for path in paths if path.exists()), None)
+        if existing is not None:
+            raise FileExistsError(f"output already exists: {existing}")
+    options = ExtractionOptions(model_destination=model, max_output_tokens=max_output_tokens,
+        max_input_tokens=max_input_tokens,
+        provider_factory=extraction_provider_factory or partial(AkashaExtractionProvider, env_file=str(env_file)))
+    if browser_target_factory is None:
+        browser_target_factory = partial(IndependentTarget, env_file=str(env_file),
+            workspace=Path(str(output_path) + ".work") / ("browser-discovery-" + uuid.uuid4().hex), adapter_path=adapt,
+            max_tool_calls=max_tool_calls, conversation_policy="independent")
+    target = browser_target_factory(page_url=page_url, timeout=timeout, runs_root=runs_root,
+        verbose=verbose, confirmed=False, fresh_profile=fresh_browser_profile,
+        probe_question=probe_question, extraction_options=options)
+    progress = ProgressReporter(enabled=verbose)
+    profile = resolve_model_profile(model, max_input_tokens=max_input_tokens, max_output_tokens=max_output_tokens)
+    provider = _provider(provider_factory, env_file, max_output_tokens=profile.max_output_tokens)
+    seen, errors, completed = [], [], 0
+    try:
+        target.prepare([], interactive=interactive, record_count=num_scenarios, request_count=num_scenarios)
+        _json(calibration_path, {"status": "passed", "kind": "website_adapter_qualification",
+             "evidence": target.evidence, "conversation_policy": "independent",
+             "limitation": "Independent conversation isolation depends on the target and adapter; it is not universally verifiable."}, force=force)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        for path in (output_path, turns_path, scenarios_path):
+            path.write_text("", encoding="utf-8")
+        for index in range(1, num_scenarios + 1):
+            scenario = None
+            for attempt in range(3):
+                try:
+                    scenario = _scenario(provider, config, model, index, seen)
+                    break
+                except (ProviderError, ValueError, RuntimeError) as error:
+                    if attempt == 2:
+                        errors.append({"scenario_id": f"scenario-{index:03d}", "stage": "generation", "error": str(error)})
+            if scenario is None:
+                continue
+            seen.append(scenario["initial_message"])
+            _append(scenarios_path, scenario)
+            trial_id = f"{scenario['scenario_id']}-trial-1"
+            turn_id = f"{trial_id}-turn-1"
+            turns, status, stop_reason = [], "completed", "max_turns"
+            try:
+                message = scenario["initial_message"]
+                progress.answer("QUESTION", message)
+                response = target.answer(message, turn_id)
+                progress.answer("RESPONSE", response)
+                turn = {"turn_id": turn_id, "message": message, "output": response}
+                turns.append(turn)
+                _append(turns_path, {"trial_id": trial_id, **turn})
+                completed += 1
+            except (ProviderError, OSError, ValueError, RuntimeError, TimeoutError) as error:
+                status, stop_reason = "execution_error", f"{type(error).__name__}: {error}"
+                errors.append({"scenario_id": scenario["scenario_id"], "stage": "run", "error": stop_reason})
+            _append(output_path, {"kind": "situation_transcript", "scenario_id": scenario["scenario_id"],
+                "trial_id": trial_id, "scenario": scenario, "turns": turns, "status": status,
+                "stop_reason": stop_reason})
+            progress.session(index, num_scenarios, f"{trial_id} status={status} stop={stop_reason}")
+        _json(run_path, {"kind": "situation_run", "created_at": datetime.now().astimezone().isoformat(),
+            "language": current_language().metadata(), "situation_config": str(Path(config_path).resolve()),
+            "situation_sha256": config_hash, "target_type": "website", "conversation_policy": "independent",
+            "model": model, "calibration": str(calibration_path.resolve()), "requested_scenarios": num_scenarios,
+            "generated_scenarios": len(seen), "completed": completed, "errors": errors,
+            "responses_sha256": _digest(output_path)}, force=force)
+    finally:
+        target.close()
+    progress.done(completed, metric="completed")
+    if completed == 0:
+        raise ValueError(f"no situation trials completed; inspect {run_path}")
+    return completed
+
+
 def _judge(provider: Any, config: dict[str, Any], trial: dict[str, Any], model: str,
            criteria: str | None = None) -> dict[str, Any]:
     request = {
@@ -751,6 +863,23 @@ def _judge_skill(selected: Path, config: dict[str, Any], trial: dict[str, Any],
     return judgment, evidence
 
 
+def read_situation_responses(responses: str | Path, config_hash: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Check saved transcript identity without starting a target or evaluator."""
+    source = Path(responses)
+    run = json.loads(Path(str(source) + ".run.json").read_text(encoding="utf-8"))
+    if run.get("kind") != "situation_run" or run.get("situation_sha256") != config_hash:
+        raise EvaluationError("situation configuration does not match the saved run")
+    if run.get("responses_sha256") != _digest(source):
+        raise EvaluationError("situation transcripts changed since the run")
+    rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
+    for trial in rows:
+        if (not isinstance(trial, dict) or trial.get("kind") != "situation_transcript"
+                or not {"trial_id", "scenario_id", "scenario", "status", "stop_reason", "turns"} <= set(trial)
+                or not isinstance(trial["turns"], list) or not isinstance(trial["scenario"], dict)):
+            raise EvaluationError("invalid situation transcript")
+    return rows, run
+
+
 @language_stage
 def evaluate_situation(
     responses: str | Path, config_path: str | Path, *, output: str | Path,
@@ -789,13 +918,7 @@ def evaluate_situation(
                                              "instructions": "Use the selected complete evaluation skill."},
                                  "rubric": []}}
     source = Path(responses)
-    sidecar = Path(str(source) + ".run.json")
-    run = json.loads(sidecar.read_text(encoding="utf-8"))
-    if run.get("kind") != "situation_run" or run.get("situation_sha256") != config_hash:
-        raise EvaluationError("situation configuration does not match the saved run")
-    if run.get("responses_sha256") != _digest(source):
-        raise EvaluationError("situation transcripts changed since the run")
-    rows = [json.loads(line) for line in source.read_text(encoding="utf-8").splitlines() if line.strip()]
+    rows, run = read_situation_responses(source, config_hash)
     progress = ProgressReporter(enabled=verbose)
     progress.configuration({"mode": "situation", "model": model, "method": settings["mode"],
                             "trials": len(rows), "max_input_tokens": profile.max_input_tokens,
@@ -807,8 +930,6 @@ def evaluate_situation(
     items = []
     judge_errors = 0
     for index, trial in enumerate(rows, 1):
-        if trial.get("kind") != "situation_transcript" or not isinstance(trial.get("turns"), list):
-            raise EvaluationError("invalid situation transcript")
         progress.evaluation(index - 1, len(rows), tr('Judging {p0}', p0=trial['trial_id']))
         item = {"scenario_id": trial["scenario_id"], "trial_id": trial["trial_id"],
                 "status": trial["status"], "turns": trial["turns"],

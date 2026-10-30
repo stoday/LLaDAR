@@ -1,4 +1,5 @@
 {
+  "lladar plan requires terminal input; start it directly in an interactive terminal.": "lladar plan 需要終端機輸入；請直接在互動式終端機中啟動。",
   "API adapter bundle: {p0}": "API adapter 執行包：{p0}",
   "--export-adapter requires explicit --project and --service-url in single-question mode": "--export-adapter 必須在單題模式明確指定 --project 與 --service-url",
   "Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).": "自訂可攜 API adapter 執行包的目錄；需在單題模式明確指定 --project 與 --service-url（預設：生成既有服務 adapter 時存入 OUTPUT.api-adapter）。",
@@ -26,6 +27,10 @@
   "  Files:": "  檔案：",
   "  Work session: {p0}": "  工作階段：{p0}",
   "  Next: {p0}": "  下一步：{p0}",
+  "  Next: Choose your target; replace the example URL or project path before running.": "  下一步：選擇受測入口；執行前請將範例網址或專案路徑換成實際值。",
+  "    Website (replace the example URL): {p0}": "    網站（請替換範例網址）：{p0}",
+  "    Project (replace YOUR_PROJECT_PATH): {p0}": "    專案（請替換 YOUR_PROJECT_PATH）：{p0}",
+  "    Change --num-scenarios to run more than one scenario.": "    如需執行多個情境，請調整 --num-scenarios。",
   "  Next: Open {p0} to review the report.": "  下一步：開啟 {p0} 閱讀報告。",
   "    Continue with --resume SESSION_PATH and the same inputs/settings.": "    使用相同輸入與設定，以 --resume SESSION_PATH 繼續。",
   "    Replace PROJECT with your target project directory.": "    將 PROJECT 換成受測專案目錄。",

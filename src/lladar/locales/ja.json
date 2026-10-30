@@ -1,4 +1,9 @@
 {
+  "lladar plan requires terminal input; start it directly in an interactive terminal.": "lladar plan には端末入力が必要です。対話型端末で直接起動してください。",
+  "  Next: Choose your target; replace the example URL or project path before running.": "  次の手順：テスト対象を選択し、実行前にサンプル URL またはプロジェクトパスを実際の値に置き換えてください。",
+  "    Website (replace the example URL): {p0}": "    ウェブサイト（サンプル URL を置き換えてください）：{p0}",
+  "    Project (replace YOUR_PROJECT_PATH): {p0}": "    プロジェクト（YOUR_PROJECT_PATH を置き換えてください）：{p0}",
+  "    Change --num-scenarios to run more than one scenario.": "    複数のシナリオを実行するには --num-scenarios を変更してください。",
   "API adapter bundle: {p0}": "API adapter 実行パッケージ：{p0}",
   "--export-adapter requires explicit --project and --service-url in single-question mode": "--export-adapter は単一質問モードで --project と --service-url の明示指定が必要です",
   "Custom directory for the portable API adapter bundle; requires explicit --project and --service-url, single-question mode (default: OUTPUT.api-adapter when generating an existing-service adapter).": "可搬 API adapter の保存先を指定します。単一質問モードで --project と --service-url の明示指定が必要です（既定：既存サービス用 adapter の生成時に OUTPUT.api-adapter）。",

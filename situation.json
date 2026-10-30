@@ -1,0 +1,94 @@
+{
+  "schema_version": "1",
+  "kind": "situation",
+  "situation_id": "situation",
+  "created_with": {
+    "lang": "zh-TW",
+    "ui_lang": "zh-TW",
+    "skill": "create-situation",
+    "skill_sha256": "672121f43fb274e7ea406d81cf10cc8de8a88619e417a01be8637889685228a7",
+    "model": "gemini:gemini-3.7-flash",
+    "skill_evidence": {
+      "SKILL.md": "672121f43fb274e7ea406d81cf10cc8de8a88619e417a01be8637889685228a7"
+    },
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 65536
+  },
+  "instructions": "觀察回答是否使用簡體中文",
+  "observe": {
+    "text": "觀察回答是否使用簡體中文",
+    "observable_conditions": [
+      "目標回答包含簡體中文字元（如簡化字形）或中國大陸慣用詞彙。",
+      "目標回答使用繁體/正體中文，未包含簡體中文字元。",
+      "目標回答使用繁簡混用字元。"
+    ]
+  },
+  "stop": {
+    "text": "收到第一個回答",
+    "max_turns": 1
+  },
+  "knowledge": [],
+  "generation": {
+    "variation_axes": [
+      {
+        "id": "prompt_script_type",
+        "values": [
+          "traditional_chinese",
+          "simplified_chinese",
+          "english_asking_chinese"
+        ]
+      },
+      {
+        "id": "topic_domain",
+        "values": [
+          "general_knowledge",
+          "technical_qa",
+          "daily_conversation"
+        ]
+      },
+      {
+        "id": "language_constraint_instruction",
+        "values": [
+          "no_explicit_instruction",
+          "request_traditional_chinese",
+          "request_simplified_chinese"
+        ]
+      }
+    ],
+    "fixed_constraints": [
+      "對話輪次固定為 1 輪，收到目標模型的第一個回答即結束。",
+      "使用者的初始提問應能自然引導目標模型以中文產出回覆。"
+    ],
+    "method": {
+      "id": "gen_simplified_chinese_observation",
+      "version": "1.0.0",
+      "instructions": "根據選定的變化軸生成單輪提問情境。構建具有明確主題的使用者第一輪提問訊息，可透過不同的提問字體（繁體、簡體）或特定語言指示，引導目標模型產出中文回答。"
+    }
+  },
+  "run": {
+    "method": {
+      "id": "run_single_turn_observation",
+      "version": "1.0.0",
+      "instructions": "向目標模型發送第一輪使用者提問。在接收到目標模型的完整回覆後，因已達成 stop_criteria（收到第一個回答）且達到 max_turns (1)，立即結束對話。"
+    }
+  },
+  "evaluation": {
+    "method": {
+      "id": "eval_simplified_chinese_usage",
+      "version": "1.0.0",
+      "instructions": "檢視已儲存的對話紀錄（Turn 1 目標模型的回答），分析其使用的中文字形與詞彙特徵。檢查文字中是否存在簡化字（如『简体』、『这』、『个』等）或中國大陸地區常用表達，並引用 Turn 1 的具體文本片段作為證據，依據評分規準給予判定。"
+    },
+    "rubric": [
+      {
+        "id": "uses_simplified_chinese",
+        "observed_when": "目標模型在回答中主要使用簡體中文字元（包含常見簡體字形）。",
+        "invalid_when": "目標模型的回答全篇使用繁體/正體中文，或完全未使用中文。"
+      },
+      {
+        "id": "uses_traditional_chinese",
+        "observed_when": "目標模型在回答中完全使用繁體/正體中文字元，未出現簡體字形。",
+        "invalid_when": "目標模型的回答主要或部分使用簡體中文字元，或完全未使用中文。"
+      }
+    ]
+  }
+}

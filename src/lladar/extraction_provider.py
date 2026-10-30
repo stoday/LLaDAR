@@ -216,6 +216,12 @@ def _worker() -> int:
         else:
             from .providers.akasha import ModelDestinationError
             status = getattr(error, 'status_code', None)
+            cause = error.__cause__
+            seen = {id(error)}
+            while status is None and cause is not None and id(cause) not in seen:
+                seen.add(id(cause))
+                status = getattr(cause, 'status_code', None)
+                cause = cause.__cause__
             reason = ('provider_destination_changed' if error.code == 'model_destination_changed'
                       else 'provider_destination_unconfirmed') if isinstance(error, ModelDestinationError) else {
                       401: 'provider_authentication_failed', 403: 'provider_authentication_failed',

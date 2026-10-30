@@ -16,13 +16,16 @@ in plain language; use a local Skill when you need more control over the method.
 
 | What you want to learn | How LLaDAR helps |
 | --- | --- |
-| Does the Agent answer according to your documents? | Generate questions and expected answers from your knowledge, then test the target Agent. |
+| Does the Agent give the correct answer from your knowledge documents? | Generate questions and expected answers from your knowledge, then compare the target Agent's responses. This is not a complete hallucination check. |
 | How does a deployed chat website respond? | Test supported question pages through a guided browser flow, without supplying project source. |
 | Does the Agent stay consistent across follow-up questions? | Create multi-turn situations with an observation goal and stopping rules. |
 | Does it meet your own evaluation criteria? | Describe the criteria in plain language, or supply a Skill for a custom method. |
 
-For example, you could check whether a support Agent invents a refund policy,
-asks for missing information, or stays consistent when a user follows up.
+For example, you could test a support Agent's answers against a refund policy,
+check whether it asks for missing information, or observe whether it stays
+consistent when a user follows up. A source-grounded dataset does not by itself
+prove that every extra claim is unsupported; that requires suitable evidence and
+evaluation criteria.
 
 An evaluator Agent judges the responses; Python computes the statistics.
 Saved answers and record-level evidence let you inspect the judgments and
@@ -39,6 +42,25 @@ python -m pip install lladar
 Configure your model provider's credentials in `.env` or the process environment.
 Your target Agent also needs its own runtime configuration. Check the installed
 version with `lladar --version`.
+
+To clarify a goal before testing, start an interactive planning conversation:
+
+```bash
+lladar plan "Check whether my support Agent follows the refund documents" --debug
+```
+
+The planner selects a workflow profile, asks for missing decisions, and submits
+a draft `PlanSpec`. Python validates local inputs and stage dependencies, then
+compiles the commands. It supports document QA, behavior situations, reevaluating
+saved responses, and reporting an existing evaluation. Planning does not call the
+target or run any test stage. See [the plan v2 specification](docs/PRD-plan-v2.zh-TW.md).
+
+Each new plan directory contains `plan.md`, `plan.json`, `plan-events.jsonl` and
+`plan.log`. `--debug` adds detailed redacted console events; `--log PATH` selects
+a new text log file. `ready` plans include `commands.ps1` for review and later
+execution; `blocked` and `failed` plans contain `diagnostics.json` with error
+codes, trace IDs and next actions. A ready plan confirms static checks, not that
+the target works. Existing plan directories and log files are preserved.
 
 With your knowledge documents in `./knowledge` and an Agent project in
 `../my-agent`, run:
@@ -131,6 +153,10 @@ direct QA or an evidence graph for concept and controlled-variant probes; graphs
 are optional. Python can also produce or repair candidates. Final results are
 validated before publishing. Every dataset includes `dataset.jsonl.generation.json`;
 `dataset.jsonl.graph.json` is written only when a valid graph is used.
+
+This step creates questions and expected answers from your knowledge documents. It is
+not a complete hallucination detector. Checking unsupported extra claims needs an
+evaluation method with enough source evidence.
 
 To let the Agent discover actual datasets in a public GitHub repository:
 

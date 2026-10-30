@@ -1,0 +1,10 @@
+{
+  "url": "https://chatgpt.com",
+  "composer": "#mobile-composer-prompt",
+  "assistant": "[data-message-role=\"assistant\"]",
+  "complete_attribute": "data-message-complete",
+  "endpoint_path": "/unauth-mweb/conversation/updates",
+  "content_type": "application/vnd.openai.conversation-source+ndjson",
+  "end_record_type": "end",
+  "prompt": "嗨"
+}

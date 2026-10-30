@@ -14,7 +14,7 @@ from .language import Language, language_scope, tr
 from .resource_limits import resource_limit
 
 _CURRENT = ContextVar("lladar_operation", default=None)
-_STAGES = {"test-dataset", "situation", "run-agent", "eval", "report"}
+_STAGES = {"test-dataset", "situation", "run-agent", "eval", "report", "plan"}
 _INPUTS = ("knowledge", "dataset", "responses", "eval_output", "situation_config",
            "instructions_file", "observe_file", "stop_criteria_file", "skill", "resume", "api_guide")
 _SETTINGS = ("count", "seed", "question_type", "max_turns", "num_scenarios",
@@ -93,7 +93,7 @@ class OperationReport:
         destination = getattr(args, "output", None)
         if self.stage.endswith("-skill"):
             self.set_output(destination or Path("lladar-skills") / self.stage.removesuffix("-skill"))
-        elif self.stage != "test-dataset":
+        elif self.stage not in {"test-dataset", "plan"}:
             filename = {"situation": "situation.json", "run-agent": "responses.jsonl",
                         "eval": "evaluation.json", "report": "report.md"}[self.stage]
             self.set_output(resolver(destination, filename))
@@ -111,6 +111,8 @@ class OperationReport:
         if self.stage.endswith("-skill"):
             return [self.output / name for name in ("SKILL.md", "AUTHORING.md", "language.json")]
         paths = [self.output, *(Path(str(self.output) + suffix) for suffix in _SIDECARS.get(self.stage, ()))]
+        if self.stage == "plan" and self.output.is_dir():
+            paths = [self.output / name for name in ("plan.md", "plan.json", "commands.ps1", "plan-events.jsonl", "plan.log", "diagnostics.json")]
         if self.stage == "test-dataset" and self.args and getattr(self.args, "from_github", None):
             from .github_dataset import artifact_paths
             paths.extend(artifact_paths(self.output))

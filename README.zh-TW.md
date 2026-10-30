@@ -14,13 +14,14 @@ LLaDAR 是測試 Agent 與聊天網站的命令列工具。從知識文件產生
 
 | 你想知道的事 | LLaDAR 如何協助 |
 | --- | --- |
-| Agent 是否依照文件回答？ | 從知識文件生成問題與預期答案，再實際測試受測 Agent。 |
+| Agent 的回答是不是真的出自知識文件的正確答案？ | 從知識文件生成問題與預期答案，再比較受測 Agent 的回答。這不是完整的捏造內容檢查。 |
 | 已部署的聊天網站會如何回應？ | 透過引導式瀏覽器流程測試支援的問答頁面，不必提供專案原始碼。 |
 | 面對追問，Agent 是否保持一致？ | 建立多輪情境，指定觀察目標與停止條件。 |
 | 回答是否符合自己的評估需求？ | 用自然語言描述準則，或提供 Skill 自訂評估方法。 |
 
-例如，你可以檢查客服 Agent 是否編造退款規則、是否詢問缺少的資訊，
-或在使用者追問後仍保持前後一致。
+例如，你可以拿退款政策檢查客服 Agent 的主要回答、檢查它是否詢問缺少的資訊，
+或觀察它在使用者追問後是否保持前後一致。若要檢查回答是否加入文件沒有支持的內容，
+還需要足夠的來源證據與適合的評估準則，不能只靠一般文件題目自動得到這個結論。
 
 回答由評估 Agent 判讀，統計由 Python 計算。保存的回答與逐筆證據讓你能檢查
 判斷依據，也能用不同準則重新評估同一批回答。
@@ -36,6 +37,23 @@ python -m pip install lladar
 在 `.env` 或程序環境設定模型供應者的憑證；受測 Agent 也須備妥自己的執行環境設定。
 使用 `lladar --version` 查看已安裝版本。
 
+想先釐清測試目標，可啟動互動式規劃：
+
+```powershell
+lladar plan "我想測客服是否依退款文件回答" --lang zh-TW --debug
+```
+
+planner 依工作流 profile 只詢問缺少的必要資訊，由模型提交結構化 `PlanSpec`，
+再由程式驗證本機輸入、能力組合和階段依賴，產生後續指令。
+支援文件問答、行為情境、既有回答重評估及既有評估結果報告；規劃本身不呼叫受測目標，
+也不執行出題、測試、評估或報告。詳見 [plan v2 規格](docs/PRD-plan-v2.zh-TW.md)。
+
+新的計畫目錄會保存 `plan.md`、`plan.json`、`plan-events.jsonl` 和 `plan.log`。
+`--debug` 顯示即時去敏化診斷；`--log PATH` 可指定新的文字 log 檔，未開 debug 仍保存紀錄。
+`ready` 計畫另外提供 `commands.ps1`，供檢閱後執行；`blocked` 或 `failed` 計畫提供
+`diagnostics.json`，列出錯誤碼、trace ID 及修正方向。`ready` 只代表靜態檢查通過，
+不代表受測目標已驗證可用。既有計畫目錄和 log 檔不會覆寫。
+
 假設知識文件放在 `./knowledge`，受測 Agent 專案位於 `../my-agent`，依序執行：
 
 ```bash
@@ -47,6 +65,8 @@ lladar report evaluation.json --output report.md
 
 這四步串起 **文件 → 測試問題 → 真實回答 → 評估 → 報告**。
 開啟 `report.md` 檢視結果與逐筆測試證據。也可以使用既有題庫，或重新評估已保存的回答。
+
+注意：從文件出題主要是檢查回答是否符合知識文件裡的正確答案，不等於完整的幻覺或超出文件內容偵測。
 
 ### 如果受測目標是聊天網站
 
@@ -267,6 +287,16 @@ lladar eval responses.jsonl --output evaluation.json
 建立情境時可用 `--max-input-tokens N` 與 `--max-output-tokens N` 分別覆寫
 編製模型的 token 額度，兩者須為正整數；省略者使用所選模型的 profile 預設。
 設定檔的 `created_with` 保存實際額度。這兩個引數只作用於建立設定。
+
+情境設定為 `--max-turns 1` 時，也可以用網頁入口執行單輪情境，例如：
+
+```powershell
+lladar create situation --instructions "觀察回答是否使用簡體中文" --stop-criteria "收到第一個回答" --max-turns 1 --output situation.json --lang zh-TW
+lladar run-agent --situation-config situation.json --page-url http://localhost:8501 --num-scenarios 3 --output transcripts.jsonl --lang zh-TW
+lladar eval transcripts.jsonl --situation-config situation.json --output evaluation.json --lang zh-TW
+```
+
+網頁流程需要互動終端、登入與示範，並使用獨立對話模式；對話是否真正隔離仍取決於網站與 adapter，請檢查資格化證據。網頁多輪情境尚不支援。
 
 `create situation --instructions TEXT`（或 `--instructions-file PATH`）一次規劃
 生成、執行、停止與預設評估，保存完整 config。同批情境對話可保留原始 config，
