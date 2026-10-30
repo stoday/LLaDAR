@@ -7,9 +7,7 @@ most useful sections to customize are `observable_conditions`,
 `fixed_constraints`, `variation_axes`, and the three method instructions.
 After editing, run:
 
-```sh
-lladar create situation --instructions "TEXT" --stop-criteria "TEXT" --max-turns 3 --skill ./my-situation --output ./situation.json
-```
+Run `lladar create situation --instructions "TEXT" --stop-criteria "TEXT" --max-turns 3 --skill ./my-situation --output ./situation.json` after editing.
 
 Inspect the accepted situation configuration before using it with
 `run-agent --situation-config`. Keep the observation policy concrete and

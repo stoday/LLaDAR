@@ -6,9 +6,7 @@ Edit the selection policy in `SKILL.md`. Use it to choose all cases, a sample,
 or a focused subset, and set the repeat count. The Skill schedules cases; the
 host runs the target Agent and writes responses. After editing, run:
 
-```sh
-lladar run-agent DATASET.jsonl --project PROJECT --skill ./my-run-agent --output responses.jsonl
-```
+Run `lladar run-agent DATASET.jsonl --project PROJECT --skill ./my-run-agent --output responses.jsonl` after editing.
 
 Inspect the response JSONL and use a new output path when comparing policies.
 

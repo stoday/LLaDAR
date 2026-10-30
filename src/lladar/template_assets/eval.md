@@ -6,9 +6,7 @@ Edit the judgment policy in `SKILL.md` when changing what counts as a good
 answer. Typical changes are accepting equivalent wording, requiring a missing
 condition, or adding a dimension such as concision. Then run:
 
-```sh
-lladar eval RESPONSES.jsonl --skill ./my-eval --output evaluation.json
-```
+Run `lladar eval RESPONSES.jsonl --skill ./my-eval --output evaluation.json` after editing.
 
 Compare the saved evaluation with the previous output. The host calculates
 aggregates; the Skill supplies one plan and one grounded judgment per trial.

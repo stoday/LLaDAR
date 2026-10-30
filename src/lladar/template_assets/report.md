@@ -6,9 +6,7 @@ Edit the prose policy in `SKILL.md` when changing the report audience, tone,
 ordering, or emphasis. For example, ask for a Traditional Chinese report that
 prioritizes execution failures and evidence limitations. Then run:
 
-```sh
-lladar report EVALUATION.json --skill ./my-report --output report.md
-```
+Run `lladar report EVALUATION.json --skill ./my-report --output report.md` after editing.
 
 The host owns measurements and tables. The Skill should interpret supplied
 facts, explain limitations, and avoid inventing numbers.

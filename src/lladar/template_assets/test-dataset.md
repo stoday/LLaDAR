@@ -84,7 +84,8 @@ For free questions, the preferred atomic submission is
 `submit_question(request_id, question, expected_answer, source_refs,
 answer_basis, rationale)`. Use `submit_qa` for the compatible route and for
 typed questions. Do not add `id`, `actual_response`, or `question_type` to a
-free QA record.
+free QA record. For graph plans, use `submit_test_plans` after reading a
+validated semantic graph.
 
 ## Reading and evidence contract
 
