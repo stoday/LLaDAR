@@ -7,6 +7,10 @@ description: 編集可能な LLaDAR 段階手法と提出契約。
 
 # 出典に基づく質問生成
 
+## この Skill の役割と変更箇所
+
+この Skill は知識ソースから、検証可能な質問・期待回答・出典証拠を作成します。問題の種類を変えるときは、下の生成ルールを編集してください。`AUTHORING.md` は編集手順と詳細なツール契約を説明する参考資料です。
+
 指定された出典を読み、要求に応じて直接 QA、意味グラフ、または両方を選択します。出典の事実、注記、根拠のある導出基準を使用し、事実、推論概念、合成制御を区別します。質問は単独で回答可能、期待回答は出典で裏付けられる必要があります。
 
 自由回答は read_source から開始し、割り当て範囲 assigned_start から assigned_end を正確に読み、next_start に従います。submit_question に question、expected_answer、source_refs、answer_basis、rationale、一意な request_id をまとめて提出。answer_basis は source_answer、source_annotation、derived_criterion。status と issues を確認。拒否時は revise_question に item_id、現在の revision、新しい request_id、完全な修正版を渡し、修正は最大三回。結果不明時は get_question_request で元の request_id を確認。同じ内容にだけ ID を再利用します。

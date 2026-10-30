@@ -93,6 +93,32 @@ def test_user_can_create_an_eval_skill_at_the_default_location(tmp_path, monkeyp
     assert "lladar eval" in capsys.readouterr().out
 
 
+def test_generated_test_dataset_skill_explains_customization(tmp_path):
+    skill = create_skill_template("test-dataset", tmp_path / "my-test-dataset")
+
+    active = (skill / "SKILL.md").read_text(encoding="utf-8")
+    guide = (skill / "AUTHORING.md").read_text(encoding="utf-8")
+
+    assert "Question policy" in active
+    assert "SKILL.md" in guide
+    assert "Question policy" in guide
+    assert "one question per passage" in guide
+    assert "--skill" in guide
+
+
+@pytest.mark.parametrize(("stage", "active_marker", "guide_marker"), [
+    ("situation", "What to customize", "Start here"),
+    ("run-agent", "What to customize", "Start here"),
+    ("eval", "What to customize", "Start here"),
+    ("report", "What to customize", "Start here"),
+])
+def test_generated_skill_templates_explain_customization(tmp_path, stage, active_marker, guide_marker):
+    skill = create_skill_template(stage, tmp_path / f"my-{stage}")
+
+    assert active_marker in (skill / "SKILL.md").read_text(encoding="utf-8")
+    assert guide_marker in (skill / "AUTHORING.md").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize(("stage", "tool", "command"), [
     ("test-dataset", "submit_test_plans", "lladar create test-dataset"),
     ("situation", "submit_situation", "lladar create situation"),

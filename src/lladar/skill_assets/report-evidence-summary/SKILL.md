@@ -5,6 +5,14 @@ description: Write an evidence-bounded summary of a saved LLaDAR evaluation.
 
 # Evidence summary
 
+## What to customize
+
+This Skill turns saved evaluation facts into a human-readable report. Edit the
+audience, tone, ordering, and emphasis rules when you want a different report
+style. `AUTHORING.md` explains the edit loop and the required narrative fields.
+Keep measurements and tables owned by the host; the Skill interprets them and
+must not invent or recalculate results.
+
 Use only the supplied evaluation facts. Submit concise overview, findings, and
 limitations. Do not calculate, change, or invent measurements; deterministic
 tables are rendered by the host.

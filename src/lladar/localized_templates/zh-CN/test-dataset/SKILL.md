@@ -7,6 +7,10 @@ description: 可编辑的 LLaDAR 阶段方法与提交契约。
 
 # 来源支持的问题生成
 
+## 这个 Skill 的作用与修改位置
+
+这个 Skill 从知识来源生成可验证的问题、预期答案和原文证据。要改变题目生成方式，请修改下面的生成规则。`AUTHORING.md` 说明修改流程和详细工具契约，是参考资料而不是额外执行指示。
+
 读取指定来源，依请求选择直接 QA、语意图谱或两者。使用来源中的事实、注解或可证明推导的准则；保留来源证据，区分来源事实、推论概念与合成控制。问题须独立可回答，预期答案须由来源支持。
 
 直接自由问答：先 read_source，针对指定批次精确读取 assigned_start 至 assigned_end 并跟随 next_start。透过 submit_question 一次提交 question、expected_answer、source_refs、answer_basis、rationale 与唯一 request_id。answer_basis 使用 source_answer、source_annotation 或 derived_criterion。确认 status 与 issues。若被拒绝，以 revise_question 使用 item_id、目前 revision、新 request_id 与完整修正版；最多修正三次。提交结果不确定时用 get_question_request 查询原 request_id，只对相同内容重用该 ID。

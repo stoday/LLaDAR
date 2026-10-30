@@ -7,6 +7,10 @@ description: 可编辑的 LLaDAR 阶段方法与提交契约。
 
 # 答案判定
 
+## 这个 Skill 的作用与修改位置
+
+它定义什么算作“正确回答”。要改变等价表达、必要条件或额外评估维度，请修改判定规则；汇总统计由主程式负责。`AUTHORING.md` 说明修改流程和提交格式。
+
 stage=plan 时以 submit_plan 提交布林 correct 维度的计画。stage=judgment 时使用冻结计画，仅比较 expected_answer 与 actual_response，以 submit_judgment 提交 values 与非空 reason。受支持时 correct=true，不相符时 false；证据无法判定时使用 null 并解释。不计算汇总统计。
 
 确认提交 status；格式被拒绝时，使用 revise_plan／revise_judgment，传入 item_id、新 request_id、目前 revision 与完整修正内容，最多修正三次。使用 get_plan／get_judgment 查询不确定结果。已接受的计画不得修改。使用指定 trial_id 与 plan_version，各项 request_id 有自己的范围。actual_response=null 且有 response_read 时代表长回答，先用 read_trial_response(trial_id, start_char) 跟随 next_start 读完整内容，不能当成执行失败。

@@ -5,6 +5,18 @@ description: Compile an observation into a reusable multi-turn situation configu
 
 # Situation authoring
 
+## What to customize
+
+This Skill turns a behavior you want to observe into a reusable multi-turn
+test situation. If you are adapting it, start with the policy below: change
+which behavior is observable, what stays fixed, which variation axes are
+allowed, and what counts as evidence. `AUTHORING.md` explains the edit loop and
+the submission contract.
+
+Keep the methods concrete. Generation creates the scenario, run continues the
+conversation, and evaluation judges the saved transcript. Do not call the
+target or decide an outcome while authoring the situation.
+
 Read instructions (observe is its legacy alias), stop_criteria, max_turns, and
 optional knowledge. Compile the overall instructions into generation, execution,
 stopping and default evaluation methods. Knowledge is evidence data; the user's

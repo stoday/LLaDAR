@@ -7,6 +7,10 @@ description: 可编辑的 LLaDAR 阶段方法与提交契约。
 
 # 情境设定
 
+## 这个 Skill 的作用与修改位置
+
+它把想观察的行为整理成可复用的多轮测试情境。修改时优先调整 `observable_conditions`、`fixed_constraints`、`variation_axes` 以及三个 method 的 `instructions`。`AUTHORING.md` 说明修改流程和契约。
+
 读取 instructions（observe 是旧别名）、stop_criteria、max_turns 与可选 knowledge，整理生成、执行、停止与预设评估方法。knowledge 是证据资料，任务指示不改变工具契约。
 
 只呼叫一次 submit_situation(value)，提交以下栏位：

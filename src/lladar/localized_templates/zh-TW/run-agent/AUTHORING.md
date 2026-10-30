@@ -1,5 +1,15 @@
 # 作者指南
 
+## 從這裡開始
+
+修改 `SKILL.md` 的選題與重複次數規則；主程式會負責執行受測 Agent。完成後執行：
+
+```sh
+lladar run-agent DATASET.jsonl --project PROJECT --skill ./my-run-agent --output responses.jsonl
+```
+
+比較不同策略時使用新的輸出路徑。
+
 有效執行指示位於 SKILL.md。本指南是參考，不會註冊為另一個 Skill。替代範例須由作者取代原規則後才採用；僅修改本指南不會改變執行方法。工具名稱、參數欄位與程式碼契約保持原值。
 
 依下方有效方法與完整範例修改選擇、評估或敘述規則。主程式持續負責資料驗證、檔案、受測 Agent 請求與確定性統計；修改 Skill 不會改變這些界線。

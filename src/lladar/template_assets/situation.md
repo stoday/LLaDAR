@@ -1,5 +1,20 @@
 # Editing this situation-authoring Skill
 
+## Start here
+
+Edit `SKILL.md`, not this guide, when changing the behavior being tested. The
+most useful sections to customize are `observable_conditions`,
+`fixed_constraints`, `variation_axes`, and the three method instructions.
+After editing, run:
+
+```sh
+lladar create situation --instructions "TEXT" --stop-criteria "TEXT" --max-turns 3 --skill ./my-situation --output ./situation.json
+```
+
+Inspect the accepted situation configuration before using it with
+`run-agent --situation-config`. Keep the observation policy concrete and
+evidence-based; do not add instructions for the target Agent here.
+
 ## Author guide: when to use it and what to change
 
 This guide is for Skill authors. The active rules are in `SKILL.md`.

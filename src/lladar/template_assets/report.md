@@ -1,5 +1,18 @@
 # Editing this report-writing Skill
 
+## Start here
+
+Edit the prose policy in `SKILL.md` when changing the report audience, tone,
+ordering, or emphasis. For example, ask for a Traditional Chinese report that
+prioritizes execution failures and evidence limitations. Then run:
+
+```sh
+lladar report EVALUATION.json --skill ./my-report --output report.md
+```
+
+The host owns measurements and tables. The Skill should interpret supplied
+facts, explain limitations, and avoid inventing numbers.
+
 ## Author guide: purpose, tools, and customization
 
 This guide is for Skill authors. The active rules are in `SKILL.md`.

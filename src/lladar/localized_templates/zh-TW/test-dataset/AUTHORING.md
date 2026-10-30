@@ -1,24 +1,135 @@
-# 作者指南
+# 作者指南：怎麼修改題目生成方式
 
-有效執行指示位於 SKILL.md。本指南是參考，不會註冊為另一個 Skill。替代範例須由作者取代原規則後才採用；僅修改本指南不會改變執行方法。工具名稱、參數欄位與程式碼契約保持原值。
+## 先做這件事
 
-依下方有效方法與完整範例修改選擇、評估或敘述規則。主程式持續負責資料驗證、檔案、受測 Agent 請求與確定性統計；修改 Skill 不會改變這些界線。
+這個目錄有兩個主要檔案：
 
-## 方法與提交契約
+- `SKILL.md`：模型真正執行的規則。想改「產生什麼題目」就改這裡。
+- `AUTHORING.md`：本指南，說明可以改哪裡、如何驗證，以及進階工具契約。
 
-# 來源支持的問題生成
+一般只需要修改 `SKILL.md` 的「題目規則」區段，然後重新執行：
 
-讀取指定來源，依請求選擇直接 QA、語意圖譜或兩者。使用來源中的事實、註解或可證明推導的準則；保留來源證據，區分來源事實、推論概念與合成控制。問題須獨立可回答，預期答案須由來源支持。
+```sh
+lladar create test-dataset --knowledge ./knowledge --skill ./my-skill --output ./dataset.jsonl
+```
 
-直接自由問答：先 read_source，針對指定批次精確讀取 assigned_start 至 assigned_end 並跟隨 next_start。透過 submit_question 一次提交 question、expected_answer、source_refs、answer_basis、rationale 與唯一 request_id。answer_basis 使用 source_answer、source_annotation 或 derived_criterion。確認 status 與 issues。若被拒絕，以 revise_question 使用 item_id、目前 revision、新 request_id 與完整修正版；最多修正三次。提交結果不確定時用 get_question_request 查詢原 request_id，只對相同內容重用該 ID。
+檢查 `dataset.jsonl` 與旁邊的 `.generation.json`。想比較不同規則時，使用不同輸出路徑；確定要取代既有產出時才使用 `--force`。
 
-相容知識點路徑：先 submit_knowledge_points，使用 read_id 與逐字 quote 提交 statement、topic、evidence；以 list_knowledge_points／read_knowledge_point 讀取已接受知識點。submit_qa 使用 knowledge_point_id、question、expected_answer。自由題不加入 id、actual_response 或 question_type。選擇／排序題依請求的 typed contract。
+## 可以直接套用的規則範例
 
-若圖譜支持概念或對照問題：先提交有證據的 nodes、edges、facts 至 submit_semantic_graph；使用 read_semantic_graph 確認，再 submit_test_plans。direct_fact 的答案為事實值與單位；concept_mapping 的答案涵蓋完整候選集合。controlled_invariance 一組只改變一個已宣告 control_dimension 的 control_value，保留任務、概念、候選、答案契約與問題骨架。宣告維度 ID、標籤、語意範圍、值關係與相容維度；關係不明時不可使用。
+把下面的規則貼到 `SKILL.md` 的「題目規則」，或依你的領域修改：
 
-主程式負責驗證、選擇維度、去重、筆數上限、完整配對與最終寫入。依 validation_errors 與 existing_results 修正既有結果，不重送已完成的圖譜與計畫。Python 可探索、計算與修正；內建自由題使用原子提交工具，主程式負責序列化。若自訂相容方法提供 candidate_path，候選檔是完整且具權威性的快照，須遵守 candidate_contract。完成條件是候選證據與契約全部有效。
+```markdown
+## 題目規則
 
-## 修改範例（僅供作者參考）
+- 每個有意義的知識段落產生一題獨立問題。
+- 只詢問原文直接提到的事實，不使用外部知識。
+- 答案保留數字、單位、條件、例外與否定語意。
+- 問題使用自然語言，避免同一段落產生重複問題。
+- 每個預期答案都必須附上支持它的原文引用。
+```
+
+常見修改方式：
+
+| 目的 | 可以加入的規則 |
+| --- | --- |
+| 減少題目 | `每個段落最多產生一題。` |
+| 增加覆蓋率 | `若一個段落含有不同事實，最多產生三題不重複問題。` |
+| 只做事實題 | `不要產生比較、意見或需要外部知識的問題。` |
+| 允許簡單推導 | `只允許由原文數字直接計算的推導，並保留使用的來源事實。` |
+| 固定專有名詞 | `產品名稱、欄位名稱與領域術語必須沿用原文。` |
+| 產生選擇題 | `每個選項都必須能在來源中找到支持，不可自行捏造干擾選項。` |
+
+如果只是一般來源問答，不需要建立圖譜，也不需要寫 Python。只有在來源中有可比較的實體、關係或你確實要測試的受控變化時，才修改規則使用圖譜路徑。
+
+## 不要改的部分
+
+工具名稱、欄位名稱與 JSON 結構是主程式的契約。除非你正在維護相容的自訂方法，否則不要改動：
+
+- `read_source` 的讀取方式與 `next_start` 分頁流程
+- `submit_question`、`submit_qa` 的欄位名稱
+- `submit_semantic_graph` 與 `submit_test_plans` 的題型欄位
+- `knowledge_point_id`、`read_id` 與原文 `quote`
+
+主程式會檢查來源位置、結構、ID、去重、題數上限與最終寫檔；它不會替你判斷自然語言是否合理，所以「題目規則」仍要寫得明確。
+
+## 最小直接問答範例
+
+假設來源是 `Service A keeps data for 30 days.`，讀取後的 ID 是 `read_000001`：
+
+```json
+[
+  {"statement": "Service A keeps data for 30 days.", "topic": "Retention",
+   "evidence": [{"read_id": "read_000001", "quote": "Service A keeps data for 30 days."}]}
+]
+```
+
+接著可以提交：
+
+```json
+{
+  "knowledge_point_id": "kp_000001",
+  "question": "How long does Service A keep data?",
+  "expected_answer": "30 days"
+}
+```
+
+自由問題優先使用 `submit_question(request_id, question, expected_answer, source_refs, answer_basis, rationale)`。使用 `submit_qa` 時，自由題只放 `knowledge_point_id`、`question`、`expected_answer`，不要加入 `id`、`actual_response` 或 `question_type`。
+
+## 讀取與證據契約
+
+使用 `list_sources` 和 `read_source` 讀完每個來源。字元範圍從零開始，結尾不包含在範圍內；遇到 `next_start` 就繼續讀。證據必須使用實際的 `read_id` 與逐字 `quote`。
+
+## 何時使用圖譜
+
+只有在圖譜能產生有意義的比較或概念映射時才使用。提交非空的 `nodes` 與 `facts`，讀回圖譜後再提交計畫。`direct_fact` 的答案是事實值與單位；`concept_mapping` 的答案必須包含完整候選集合。不要為了完成流程而提交空圖譜或虛構概念。
+
+```json
+{
+  "nodes": [
+    {"id": "service-a", "type": "entity", "label": "Service A",
+     "origin": "source", "evidence_refs": ["kp_000001"]}
+  ],
+  "edges": [],
+  "facts": [
+    {"entity_id": "service-a", "label": "Service A", "value": "30",
+     "unit": "days", "evidence_ref": "kp_000001"}
+  ]
+}
+```
+
+```json
+[
+  {"type": "direct_fact", "entity_id": "service-a",
+   "question": "How long does Service A keep data?", "expected_answer": "30 days"}
+]
+```
+
+受控變體每一組只能改變一個已宣告的 `control_value`，並保留任務、概念、候選集合、答案契約與問題骨架。來源沒有支持的值關係不可使用。
+
+## 題型化問題
+
+如果請求明確要求單選、多選或排序，使用帶有 `question_type`、`options` 與正確選項 ID 的 `submit_qa` 契約；自由圖譜事實題不能代替指定題型。
+
+| 題型 | 選項數 | 正確答案 | 協定 |
+| --- | --- | --- | --- |
+| `single_choice` | 2–5 | 一個 | `one_option_id` |
+| `multiple_choice` | 3–6 | 多個，但不可全選 | `option_id_list` |
+| `ranking` | 3–5 | 每個選項一次 | `ordered_option_ids` |
+
+## 重試與進階交付
+
+重試時先檢查 `validation_errors` 和 `existing_results`，修正既有結果，不重送已完成的圖譜或計畫。提交結果不確定時，用原本的 request ID 查詢；只有內容完全相同才能重用該 ID。
+
+如果請求提供 `candidate_path` 與 `candidate_contract`，該 JSON 檔是完整且權威的候選快照，不是增量檔案；請依實際 request 中的契約交付，不要讓主程式猜測目錄裡的檔案。
+
+## GitHub 模式
+
+使用 `--from-github` 時，這個 Skill 還必須處理 `github_discovery` 和 `github_review`；這是進階流程，需要時再參考專案的 GitHub 資料集生成文件。
+
+## 方法與提交契約的完整範例
+
+以下範例保留給需要直接操作工具契約的作者。它們不是額外的執行指示；真正有效的規則仍在 `SKILL.md`。
 
 ```json
 [

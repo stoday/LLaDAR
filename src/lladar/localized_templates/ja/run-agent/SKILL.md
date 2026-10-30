@@ -7,6 +7,10 @@ description: 編集可能な LLaDAR 段階手法と提出契約。
 
 # 安定性実行
 
+## この Skill の役割と変更箇所
+
+データセットのどのケースを実行するか、各ケースを何回繰り返すかを決めます。変更する場合は、下の選択ルールと `repeats` を編集してください。対象 Agent の実行と回答保存はホストが担当します。`AUTHORING.md` に全件・抽出・範囲指定の例があります。
+
 read_dataset() で確認後、write_strategy(content) に完全な Python ソースを提出。入口は select_cases(cases, schedule)。元の各事例を一回だけ repeats=3 で登録します。フィルターや対象 Agent 呼び出しは行わず、戦略以外のファイルは書きません。
 
 cases は不変オブジェクトの tuple で record_index（一始まり）、question、expected_answer を持ちます。case.question を使用。schedule(case, repeats=1) は元の事例と正の整数を受け取り None を返します。再登録は回数を加算し、入口の戻り値は無視します。

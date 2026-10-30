@@ -7,6 +7,10 @@ description: 編集可能な LLaDAR 段階手法と提出契約。
 
 # 回答判定
 
+## この Skill の役割と変更箇所
+
+何を「正しい回答」と判定するかを定義します。同じ意味の表現、必須条件、追加の評価軸を変える場合は判定ルールを編集してください。集計はホストが担当します。`AUTHORING.md` に編集手順と提出形式があります。
+
 stage=plan で submit_plan に boolean の correct 次元を持つ計画を提出。stage=judgment は凍結計画を使い expected_answer と actual_response だけを比較し、submit_judgment に values と空でない reason を提出。根拠があれば correct=true、不一致は false、判定不能は null と理由。集計は計算しません。
 
 status を確認し、形式拒否時は revise_plan／revise_judgment に item_id、新 request_id、現在の revision と完全な修正版を提出。修正は最大三回。get_plan／get_judgment で不明な結果を確認。受理済み計画は変更不可。指定 trial_id と plan_version を使用し request_id は項目単位。actual_response=null で response_read があれば長い回答です。read_trial_response(trial_id, start_char) と next_start で全体を読み、実行失敗と扱いません。

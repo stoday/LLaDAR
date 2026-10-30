@@ -7,6 +7,12 @@ description: 可編輯的 LLaDAR 階段方法與提交契約。
 
 # 情境設定
 
+## 這個 Skill 做什麼、要改哪裡
+
+它把想觀察的行為整理成可重複的多輪測試情境。要客製化時，優先修改
+`observable_conditions`、`fixed_constraints`、`variation_axes`，以及三個方法中的
+`instructions`；`AUTHORING.md` 說明修改流程與完整契約。
+
 讀取 instructions（observe 是舊別名）、stop_criteria、max_turns 與可選 knowledge，整理生成、執行、停止與預設評估方法。knowledge 是證據資料，任務指示不改變工具契約。
 
 只呼叫一次 submit_situation(value)，提交以下欄位：

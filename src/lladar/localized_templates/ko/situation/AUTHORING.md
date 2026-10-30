@@ -1,5 +1,13 @@
 # 작성자 안내
 
+## 여기서 시작하기
+
+테스트할 행동을 바꾸려면 `SKILL.md`를 수정합니다. 관찰 조건, 고정 조건, 변형 축 및 세 method를 주로 변경합니다. 수정 후 다음을 실행하세요.
+
+```sh
+lladar create situation --instructions "TEXT" --stop-criteria "TEXT" --max-turns 3 --skill ./my-situation --output ./situation.json
+```
+
 실행 지시는 SKILL.md에 있습니다. 이 안내는 참고용이며 별도 Skill로 등록하지 않습니다. 대체 예제를 적용하려면 원래 규칙을 교체하세요. 안내만 수정하면 실행 방법이 바뀌지 않습니다. 도구 이름, 필드 및 코드 계약은 유지합니다.
 
 아래 방법과 전체 예제를 참고하여 선택, 평가 또는 설명 규칙을 수정하세요. 호스트는 검증, 파일, 대상 Agent 요청 및 결정적 통계를 계속 담당하며 Skill 수정으로 이 경계는 바뀌지 않습니다.

@@ -7,6 +7,10 @@ description: 편집 가능한 LLaDAR 단계 방법 및 제출 계약.
 
 # 근거 요약
 
+## 이 Skill의 역할과 수정 위치
+
+저장된 평가 사실을 사람이 읽는 보고서로 정리합니다. 독자, 문체, 순서 및 강조점을 바꾸려면 이 부분을 수정하세요. 숫자와 표는 호스트가 만들며 Skill은 제공된 근거만 해석합니다. `AUTHORING.md`에 수정 절차가 있습니다.
+
 제공된 고정 평가 사실만으로 overview, findings, limitations를 작성합니다. 숫자와 표는 호스트가 생성하며 설명에는 숫자 문자를 넣지 않고 측정을 재계산, 변경 또는 꾸며내지 않습니다. 근거에 따라 실행 오류, 판정 오류, 적은 표본 및 미완료 수동 검토를 설명합니다.
 
 단일 질문 보고서는 submit_section(section, text, source_refs, request_id)으로 세 절을 제출하고 제공된 사실 키(summary, aggregates, plan 등) 또는 시도 ID를 인용합니다. 추가 근거는 read_report_fact(reference, start_char) 및 next_start로 끝까지 읽습니다. 모든 주장의 근거를 확인하며 재개 시 completed_sections를 유지합니다. 잘못된 절만 revise_section(item_id, request_id, revision, text, source_refs)으로 수정하고 get_section으로 불확실한 결과를 조회합니다. 필요한 모든 절이 수락되어야 완료됩니다.

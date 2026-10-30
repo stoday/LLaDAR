@@ -1,49 +1,77 @@
 # Editing this test-dataset Skill
 
-## Purpose and active instructions
+## Start here
 
-SKILL.md defines the active method. This guide supplies contracts and replacement
-examples; reading it does not override the active Skill. Replace the relevant
-method in SKILL.md when choosing an alternative, and keep both files consistent.
+This directory has two important files:
 
-The request's stage is `generation`. All generation tools are available together.
-The host does not require separate knowledge_points, semantic_graph, or test_plans
-stages. Choose direct QA, a graph, or a mixture according to the active Skill.
-A requested controlled-variant workflow still requires a valid graph and pairs.
+- `SKILL.md` is the active recipe used by the generation agent. Change this
+  file when you want to change what questions are generated.
+- `AUTHORING.md` is this guide. It explains what is safe to change and keeps
+  the tool contracts and advanced examples in one place.
 
-With `--from-github`, the same selected Skill must additionally handle
-`github_discovery` and `github_review`. Discovery selects actual dataset files
-and optionally their 1-based rows using repository browsing tools. Generation
-must call `record_answer_basis` for every final QA, identifying source_answer,
-source_annotation or derived_criterion and accepted evidence point IDs.
-Review must submit each assigned frozen QA's approval and evidence-bounded
-reason using `submit_generation_review`. The host creates the mandatory
-per-question generation report. See [GitHub generation](https://github.com/stoday/LLaDAR/blob/main/docs/github-dataset-generation.md)
-for the full contracts. These requirements apply only to GitHub mode.
+The usual edit loop is:
 
-## Tools and completion
+1. Edit the plain-language rules in `SKILL.md`.
+2. Run `lladar create test-dataset` with `--skill` pointing to this directory.
+3. Inspect the generated JSONL and its `.generation.json` sidecar.
+4. Adjust the rules and run again with a new output path (or `--force` when
+   replacing an output is intentional).
 
-| Capability | Tools |
+You normally only need to edit the **Question policy** section in `SKILL.md`.
+Do not change tool names, field names, or JSON contracts unless you are
+intentionally maintaining a compatible custom method.
+
+## What you can change
+
+Replace the policy bullets in `SKILL.md` with rules that match your domain.
+These are useful, safe examples:
+
+```markdown
+## Question policy
+
+- Generate one standalone question for each meaningful passage.
+- Ask only for facts stated in the source; do not require outside knowledge.
+- Keep quantities, units, conditions, exceptions, and negation in the answer.
+- Prefer short natural questions. Do not repeat the same question.
+- Every expected answer must be supported by an exact source quote.
+```
+
+Common changes include:
+
+| Goal | Rule to add or change in `SKILL.md` |
 | --- | --- |
-| Read declared sources | list_sources, read_source |
-| Retain meaningful passages | submit_knowledge_points, list_knowledge_points, read_knowledge_point |
-| Generate direct or typed questions | submit_qa |
-| Optional graph and probes | submit_semantic_graph, read_semantic_graph, submit_test_plans |
-| Record why the method was selected | record_method |
+| Fewer questions | “Generate at most one question per passage.” |
+| More coverage | “Generate up to three non-duplicate questions when a passage contains separate facts.” |
+| Fact-only QA | “Do not ask comparison, opinion, or outside-knowledge questions.” |
+| Allow safe inference | “Allow only the stated calculation; show the source facts used.” |
+| Domain vocabulary | “Use the source’s product names and terminology exactly.” |
+| Choice questions | State the required choice type and keep every option source-supported. |
 
-Read all declared sources. Character ranges start at zero and exclude the end.
-Follow read_source.next_start until null. Point evidence uses actual read IDs
-and verbatim quotes. A meaningful passage may contain several related facts;
-keep its necessary conditions and exceptions together.
+If you only need ordinary source-grounded QA, use direct questions. You do not
+need to add a graph or Python code. Use graph questions only when the source
+contains comparable entities, relationships, or a controlled comparison that
+you actually want to test.
+
+## Active method and completion
+
+`SKILL.md` defines the active method. This guide supplies contracts and
+replacement examples; reading it does not override the active Skill. Replace
+the relevant method in `SKILL.md` when choosing an alternative, and keep both
+files consistent.
+
+The request stage is `generation`. The host does not require separate
+knowledge-points, graph, or plan stages. Choose direct QA, a graph, or a
+mixture according to the active Skill. A requested controlled-variant workflow
+still requires a valid graph and complete pairs.
 
 Completion means valid final questions, source evidence, and any graph/probe
 contracts required by the method and request. The host freezes and revalidates
-results before publishing. More than one QA may refer to the same point.
+results before publishing. Text alone is not delivery.
 
-## Minimal point, optional graph, graph plan, and direct QA
+## Minimal direct-QA example
 
 Assume the source is `Service A keeps data for 30 days.` and its read ID is
-`read_000001`. Submit this list through submit_knowledge_points(points):
+`read_000001`. Retain the passage with:
 
 ```json
 [
@@ -52,8 +80,31 @@ Assume the source is `Service A keeps data for 30 days.` and its read ID is
 ]
 ```
 
-Use the returned point IDs. For the optional graph method, assuming kp_000001
-was accepted, submit_semantic_graph(graph) takes:
+For free questions, the preferred atomic submission is
+`submit_question(request_id, question, expected_answer, source_refs,
+answer_basis, rationale)`. Use `submit_qa` for the compatible route and for
+typed questions. Do not add `id`, `actual_response`, or `question_type` to a
+free QA record.
+
+## Reading and evidence contract
+
+Use `list_sources` and read every declared source with `read_source`. Character
+ranges start at zero and exclude the end; follow `next_start` until it is null.
+Keep subjects, quantities, units, conditions, exceptions, and negation
+together. Evidence must contain an actual `read_id` and a verbatim quote.
+
+The host validates source positions, structure, IDs, deduplication, count
+limits, and final serialization. It cannot prove that a natural-language
+answer is sensible or that every source fact was covered, so keep the policy
+explicit and review the output.
+
+## Optional graph questions
+
+Use a graph only when it makes a useful comparison or concept probe possible.
+Submit non-empty `nodes` and `facts` with source evidence, read the graph, and
+then submit plans. A direct fact answer equals the fact value and unit. A
+concept-mapping answer contains the complete verified candidate set. Do not
+submit an empty graph or invent a concept just to use this path.
 
 ```json
 {
@@ -69,15 +120,6 @@ was accepted, submit_semantic_graph(graph) takes:
 }
 ```
 
-Nodes and facts must be non-empty. Node types are entity, attribute, concept.
-Concepts require at least two distinct entity member_ids. Origins are source
-or inferred, with supporting point IDs. Facts refer to entity nodes, matching
-labels and their evidence references. Each entity has one comparable fact.
-Edges have from, relation, to, origin, evidence_refs; both endpoints must exist.
-An empty edge list is valid. An empty graph is not a successful graph method.
-
-After reading the graph, submit_test_plans(plans) accepts:
-
 ```json
 [
   {"type": "direct_fact", "entity_id": "service-a",
@@ -85,11 +127,7 @@ After reading the graph, submit_test_plans(plans) accepts:
 ]
 ```
 
-The answer equals the graph fact's value and unit. A concept_mapping plan has
-type, concept_id, question, expected_answer; its answer is the complete verified
-candidate set, such as `Starter: 10 seats; Growth: 25 seats`.
-
-For direct QA, skip graph and plans entirely and call submit_qa(record):
+For a compatible direct-QA submission, use:
 
 ```json
 {
@@ -99,75 +137,35 @@ For direct QA, skip graph and plans entirely and call submit_qa(record):
 }
 ```
 
-For a direct-reading Skill, replace the graph-method instructions with:
-Read sources in order, identify meaningful passages, and generate natural
-standalone questions and source-supported answers. Retain exact source evidence.
-Use direct QA; a graph and Python are not required for this method.
+Controlled-variant pairs may change exactly one declared `control_value` while
+preserving the task, concept, candidates, answer contract, and question
+skeleton. Do not use an unknown or unsupported value relationship.
 
-## Typed QA
+## Typed questions
 
-For an explicit single-choice, multiple-choice, or ranking request, free graph
-fact plans do not satisfy the requested type. Use submit_qa with these fields:
-knowledge_point_id, knowledge_point_ids, question, expected_answer, question_type,
-answer_protocol, options, correct_option_ids. Each option has id (A, B, ...),
-text (the referenced point's exact statement), and knowledge_point_id. Referenced
-points share a topic; every option maps once to a known point and is shown in
-the question as `A. statement`.
+For an explicit single-choice, multiple-choice, or ranking request, use the
+typed `submit_qa` contract. Every option must map to a known source point;
+never invent distractors.
 
-| Type | Options | Correct IDs | Protocol | Expected answer |
-| --- | --- | --- | --- | --- |
-| single_choice | 2–5 | One | one_option_id | B |
-| multiple_choice | 3–6 | Multiple, not all | option_id_list | A,C |
-| ranking | 3–5 | Every option once | ordered_option_ids | B>A>C |
+| Type | Options | Correct IDs | Protocol |
+| --- | --- | --- | --- |
+| `single_choice` | 2–5 | One | `one_option_id` |
+| `multiple_choice` | 3–6 | Multiple, not all | `option_id_list` |
+| `ranking` | 3–5 | Every option once | `ordered_option_ids` |
 
-Ranking also requires ranking_axis and direction (ascending or descending).
-Use source-supported relations and complete candidates, not invented distractors.
+## Recovery and advanced delivery
 
-## Controlled comparisons
+On retries, inspect `validation_errors` and `existing_results`. Repair an
+existing result instead of resubmitting completed graph or plan work. After an
+uncertain submission, query the original request ID and reuse it only for
+identical content.
 
-A controlled_invariance plan has type, pair_id, source_concept,
-source_support (group_unspecified), answer_contract (invariant), varied_dimension,
-control_value, question_template, question, expected_answer. varied_dimension
-has id, label, semantic_scope, mutual_exclusivity, coexists_with (ID list).
-Unknown value relationships do not qualify.
+Python may explore, calculate, and repair candidates. If the request declares a
+`candidate_path` and `candidate_contract`, that JSON file is the complete,
+authoritative snapshot, not an incremental addition. Follow the actual
+contract in the request; do not make the host discover files by scanning a
+directory.
 
-A pair has at least two distinct control values and preserves one concept,
-dimension, source candidate set, and answer contract. Each question contains its
-control value; question_template equals question. Replacing the control values
-with one placeholder yields the same question skeleton. The host selects the
-requested dimensions and keeps pairs whole when deduplicating or applying count.
-
-## Python and candidate-file delivery
-
-Python may explore, calculate, read files, and repair the active workspace.
-Results need not all pass through submission tools. Every delivery path faces
-final source, format, graph, and probe validation.
-
-The request declares candidate_path and candidate_contract. A present JSON file
-is the complete authoritative candidate snapshot, not an addition to workspace
-results. Use only that declared delivery path; the host does not discover files
-by scanning directories. Include these fields:
-
-- reads: objects with read_id, source_id, start_char, end_char. The host reconstructs
-  text from its loaded source. Include complete source reading ranges.
-- knowledge_points: objects with id, statement, topic, evidence containing read_id
-  and quote. IDs may be author-chosen, unique, and consistent with references.
-- qa: the same raw direct/typed QA records described above.
-- graph: optional raw nodes, edges, facts. Omit it for a direct method.
-- plans: optional raw graph plans. These require a valid graph.
-- method_reason: a brief explanation of the selected method.
-
-Read candidate_contract from the actual request for the active delivery format.
-You may also adjust workspace candidates directly; the host rechecks their final
-snapshot rather than trusting an earlier accepted tool result. It validates
-structure and source positions; this alone does not prove natural-language
-entailment or complete fact coverage.
-
-## Recovery
-
-The request's validation_errors identifies final-result problems. existing_results
-reports accepted question/plan counts, graph presence, and source coverage.
-Repair incomplete work. If the Agent reaches its round limit after valid delivery,
-the host can preserve the result while recording that execution error.
-A completion summary alone is not candidate data. Normal CLI output protection,
-force, log, count, and question-type contracts remain in effect.
+With `--from-github`, the selected Skill must also handle `github_discovery`
+and `github_review`; see the repository GitHub-generation documentation for
+that advanced workflow.

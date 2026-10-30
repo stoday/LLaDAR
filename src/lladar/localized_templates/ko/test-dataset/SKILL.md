@@ -7,6 +7,10 @@ description: 편집 가능한 LLaDAR 단계 방법 및 제출 계약.
 
 # 출처에 기반한 질문 생성
 
+## 이 Skill의 역할과 수정 위치
+
+이 Skill은 지식 출처에서 검증 가능한 질문, 예상 답변 및 근거를 만듭니다. 질문 생성 방식을 바꾸려면 아래 생성 규칙을 수정하세요. `AUTHORING.md`는 수정 절차와 자세한 도구 계약을 설명하는 참고 자료입니다.
+
 지정된 출처를 읽고 요청에 따라 직접 QA, 의미 그래프 또는 둘 다 선택합니다. 출처의 사실, 주석 또는 근거 있는 도출 기준을 사용하며 출처 사실, 추론 개념 및 합성 제어를 구분합니다. 질문은 독립적으로 답변 가능하고 예상 답변은 출처로 뒷받침되어야 합니다.
 
 자유 답변은 read_source부터 시작합니다. assigned_start부터 assigned_end까지 정확히 읽고 next_start를 따릅니다. submit_question에 question, expected_answer, source_refs, answer_basis, rationale 및 고유 request_id를 함께 제출합니다. answer_basis는 source_answer, source_annotation 또는 derived_criterion입니다. status와 issues를 확인하고 거절되면 revise_question에 item_id, 현재 revision, 새 request_id 및 전체 수정본을 제출합니다. 수정은 최대 세 번입니다. 결과가 불확실하면 get_question_request로 원래 request_id를 조회하며 동일한 내용에만 해당 ID를 재사용합니다.
