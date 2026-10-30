@@ -14,7 +14,7 @@
     <section class="hero compact"><p class="eyebrow">使用指南</p><h1>評估 Agent 的回答</h1><p class="lead">先看每一題的回答是否符合預期，再把所有題目的結果整理成清楚的統計。</p></section>
     <section>
       <h2>這一步在做什麼？</h2>
-      <p>這個步驟會把每題的「預期答案」和「Agent 實際回答」放在一起檢查。你可以指定要檢查的重點，例如回答是否正確、有沒有遺漏重要限制，或有沒有說出文件不支持的內容。</p>
+      <p>這個步驟會把每題的「預期答案」和「Agent 實際回答」放在一起檢查。你可以指定要檢查的重點，例如回答是否正確或有沒有遺漏重要限制。若要判斷回答是否說出文件不支持的內容，還需要評估方法能取得足夠的來源證據；一般文件題目不會自動完成完整的幻覺偵測。</p>
       <pre><code>lladar eval artifacts/responses.jsonl --output artifacts/evaluation.json</code></pre>
     </section>
     <section>

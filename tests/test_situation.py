@@ -51,6 +51,59 @@ class Provider:
                 "reason": "The app requested the order number."}
 
 
+@pytest.mark.parametrize("debug", [False, True])
+def test_create_situation_debug_enables_akasha_verbose(tmp_path, capsys, debug):
+    options_seen = []
+
+    def factory(**options):
+        options_seen.append(options)
+        return AuthoringAgent(**options)
+
+    args = ["create", "situation", "--instructions", "Observe Chinese characters",
+            "--stop-criteria", "First response", "--max-turns", "1",
+            "--output", str(tmp_path / "situation.json")]
+    if debug:
+        args.append("--debug")
+    assert main(args, skill_agent_factory=factory) == 0
+    assert options_seen[0].get("verbose", False) is debug
+    captured = capsys.readouterr()
+    assert ("Akasha verbose enabled" in captured.err) is debug
+
+
+def test_create_situation_succeeds_after_reading_builtin_authoring_guide(tmp_path):
+    from langchain_core.messages import AIMessage
+    from lladar.skill_agent import AkashaSkillAgent
+    from test_skill_agent import ToolScriptModel
+
+    proposal = {
+        "observable_conditions": ["Response contains simplified Chinese."],
+        "fixed_constraints": [],
+        "variation_axes": [{"id": "topic", "values": ["travel", "food"]}],
+        "generation_method": {"id": "generate", "version": "1", "instructions": "Ask about a topic."},
+        "run_method": {"id": "run", "version": "1", "instructions": "Stop after one response."},
+        "evaluation_method": {"id": "judge", "version": "1", "instructions": "Inspect the response."},
+        "rubric": [{"id": "script", "observed_when": "Simplified Chinese is present.",
+                    "invalid_when": "No response was received."}],
+    }
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "create-situation"}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "read_skill_resource", "args": {"skill": "create-situation", "path": "AUTHORING.md"}, "id": "read"}]),
+        AIMessage(content="", tool_calls=[{"name": "submit_situation", "args": {"value": proposal}, "id": "submit"}]),
+        AIMessage(content="Done"),
+    ])
+
+    def factory(**options):
+        options["model"] = model
+        return AkashaSkillAgent(**options)
+
+    output = tmp_path / "situation.json"
+    create_situation(instructions="觀察回答是否使用簡體中文", stop_criteria="收到第一個回答",
+                     max_turns=1, knowledge=[], output=output, skill_agent_factory=factory)
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["stop"]["max_turns"] == 1
+    assert saved["evaluation"]["rubric"][0]["id"] == "script"
+
+
 @pytest.mark.parametrize("model,expected_input,expected_output", [
     ("gemini:gemini-3.7-flash", 1_048_576, 65_536),
     ("other:model", 131_072, 65_536),
@@ -328,6 +381,70 @@ def test_situation_cli_accepts_shared_adapter_options(monkeypatch):
     assert received["max_tool_calls"] == 20
     assert received["graphify"] is False
     assert received["interactive"] is False
+
+
+def test_situation_cli_accepts_website_target(monkeypatch):
+    received = {}
+
+    def run(*args, **kwargs):
+        received.update(kwargs)
+        return 1
+
+    monkeypatch.setattr("lladar.cli.run_situation", run)
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stderr.isatty", lambda: True)
+    assert main(["run-agent", "--situation-config", "s.json", "--page-url",
+                 "http://localhost:8501", "--num-scenarios", "2"]) == 0
+    assert received["page_url"] == "http://localhost:8501"
+    assert received["num_scenarios"] == 2
+
+
+def test_single_turn_website_situation_can_be_evaluated(tmp_path):
+    config = tmp_path / "situation.json"
+    create_situation(instructions="Observe simplified Chinese", stop_criteria="One response",
+                     max_turns=1, knowledge=[], output=config, skill_agent_factory=AuthoringAgent)
+    calls = []
+
+    class ScenarioProvider(Provider):
+        def generate_structured(self, prompt, **kwargs):
+            request = json.loads(prompt)
+            if request["task"].startswith("Generate"):
+                return {"setup": "Single turn", "initial_message": f"Question {len(calls) + 1}",
+                        "variation": request["selected_variation"]}
+            return super().generate_structured(prompt, **kwargs)
+
+    class Website:
+        evidence = {"status": "qualified"}
+
+        def prepare(self, probes, **kwargs):
+            assert kwargs["request_count"] == 2
+
+        def answer(self, question, request_id):
+            calls.append((question, request_id))
+            return "這是一個回答"
+
+        def close(self):
+            calls.append(("closed", None))
+
+    output = tmp_path / "responses.jsonl"
+    assert run_situation(config, output, page_url="http://localhost:8501", num_scenarios=2,
+                         provider_factory=ScenarioProvider, browser_target_factory=lambda **_: Website(),
+                         interactive=True) == 2
+    trials = [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()]
+    assert [len(trial["turns"]) for trial in trials] == [1, 1]
+    assert calls == [("Question 1", "scenario-001-trial-1-turn-1"),
+                     ("Question 2", "scenario-002-trial-1-turn-1"), ("closed", None)]
+    assert evaluate_situation(output, config, output=tmp_path / "eval.json",
+                              provider_factory=Provider)["summary"]["observed"] == 2
+
+
+def test_website_situation_rejects_multi_turn_before_opening_browser(tmp_path):
+    config = tmp_path / "situation.json"
+    create_situation(instructions="Observe", stop_criteria="Stop", max_turns=2,
+                     knowledge=[], output=config, skill_agent_factory=AuthoringAgent)
+    with pytest.raises(ValueError, match="max_turns = 1"):
+        run_situation(config, tmp_path / "out.jsonl", page_url="http://localhost:8501",
+                      num_scenarios=1, browser_target_factory=lambda **_: pytest.fail("opened browser"))
 
 
 @pytest.mark.parametrize("verbose", [True, False])

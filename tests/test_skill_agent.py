@@ -88,11 +88,65 @@ def test_akasha_native_skill_reads_a_declared_resource_on_demand(tmp_path):
     assert "read_skill_resource" in model.offered[1]
 
 
+def test_builtin_situation_skill_can_read_authoring_guide_and_submit():
+    from pathlib import Path
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = Path(__file__).parents[1] / "src" / "lladar" / "skill_assets" / "create-situation"
+    received = []
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "create-situation"}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "read_skill_resource", "args": {"skill": "create-situation", "path": "AUTHORING.md"}, "id": "read"}]),
+        AIMessage(content="", tool_calls=[{"name": "submit_situation", "args": {"value": "fixture"}, "id": "submit"}]),
+        AIMessage(content="Done"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={"submit_situation": lambda value: received.append(value)},
+                             model=model, env_file="", max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    evidence = agent({"stage": "create_situation"})
+    assert received == ["fixture"]
+    assert evidence["loaded_skills"] == ["create-situation"]
+
+
+def test_missing_skill_resource_is_not_reported_as_provider_failure(tmp_path):
+    import pytest
+    from lladar.skill_agent import AkashaSkillAgent, SkillRuntimeError
+
+    skill = tmp_path / "missing-resource"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: missing-resource\ndescription: Test.\n---\nRead missing.md.", encoding="utf-8")
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "missing-resource"}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "read_skill_resource", "args": {"skill": "missing-resource", "path": "missing.md"}, "id": "read"}]),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="",
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    with pytest.raises(SkillRuntimeError, match="file not found during skill execution"):
+        agent({"stage": "fixture"})
+
+
 def test_adapter_has_no_lladar_specific_skill_middleware_or_agent_subclass():
     import lladar.skill_agent as skill_agent
 
     assert not hasattr(skill_agent, "DatasetSkillMiddleware")
     assert not hasattr(skill_agent, "DatasetAkashaAgent")
+
+
+def test_verbose_skill_agent_displays_akasha_trace(tmp_path, capsys):
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = tmp_path / "trace-example"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: trace-example\ndescription: Trace test.\n---\nRecord a fact.", encoding="utf-8")
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "trace-example"}, "id": "load"}]),
+        AIMessage(content="Done"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="",
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=True)
+    agent({"stage": "fixture"})
+    captured = capsys.readouterr()
+    assert "agent.trace" in captured.err or "load_skill" in captured.err
 
 
 def test_direct_adapter_limits_bound_host_tool_calls(tmp_path):

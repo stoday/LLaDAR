@@ -151,6 +151,10 @@ class AkashaSkillAgent:
         except (LladarError, RuntimeError) as error:
             error.skill_evidence = self._evidence()
             raise
+        except FileNotFoundError:
+            failure = SkillRuntimeError("file not found during skill execution; check skill resources and local configuration")
+            failure.skill_evidence = self._evidence()
+            raise failure from None
         except Exception as error:
             failure = ProviderError(f"skill model work failed ({type(error).__name__})")
             failure.skill_evidence = self._evidence()

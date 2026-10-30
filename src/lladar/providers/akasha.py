@@ -257,6 +257,7 @@ class AkashaProvider:
         verbose: bool = False,
         stream: bool = False,
         expected_destination: dict[str, str] | None = None,
+        stream_observer: Callable[[str, str], None] | None = None,
     ) -> None:
         self.env_file = env_file
         self._agent_factory = agent_factory
@@ -264,6 +265,7 @@ class AkashaProvider:
         self.max_output_tokens = max_output_tokens
         self.verbose = verbose
         self.stream = stream
+        self.stream_observer = stream_observer
         self.expected_destination = (
             copy_model_destination(expected_destination) if expected_destination is not None else None
         )
@@ -297,9 +299,17 @@ class AkashaProvider:
             sdk = getattr(client, name, None)
             if hasattr(sdk, 'max_retries'):
                 sdk.max_retries = 0
-        with redirect_stdout(sys.stderr):
-            return client.invoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)],
-                                 config={'callbacks': []})
+        try:
+            with redirect_stdout(sys.stderr):
+                return client.invoke([SystemMessage(content=system_prompt), HumanMessage(content=prompt)],
+                                     config={'callbacks': []})
+        except ProviderError:
+            raise
+        except Exception as error:
+            # Keep provider-specific SDK exceptions, including HTTP 429 rate
+            # limits, behind LLaDAR's safe provider boundary. The CLI can then
+            # report a concise failure instead of exposing an SDK traceback.
+            raise ProviderError("Akasha generation failed") from error
 
     def generate_structured(
         self,
@@ -319,6 +329,8 @@ class AkashaProvider:
         *,
         model: str,
         temperature: float,
+        system_prompt: str | None = None,
+        thinking: bool = False,
     ) -> str:
         factory = self._agent_factory
         if factory is None:
@@ -331,11 +343,11 @@ class AkashaProvider:
             max_output_tokens=self.max_output_tokens,
         )
         agent = factory(
-            system_prompt=current_language().instruction(),
+            system_prompt=system_prompt or current_language().instruction(),
             model=model,
             env_file=self.env_file,
             stream=self.stream,
-            thinking=False,
+            thinking=thinking,
             max_input_tokens=profile.max_input_tokens,
             max_output_tokens=profile.max_output_tokens,
             temperature=temperature,
@@ -351,8 +363,14 @@ class AkashaProvider:
                     parts = []
                     for event in response:
                         if isinstance(event, str):
+                            if self.stream_observer is not None:
+                                self.stream_observer("answer", event)
                             parts.append(event)
                         elif isinstance(event, dict):
+                            if (self.stream_observer is not None
+                                    and event.get("type") in {"thinking", "answer"}
+                                    and isinstance(event.get("data"), str)):
+                                self.stream_observer(event["type"], event["data"])
                             if event.get("type") == "answer":
                                 chunk = event.get("data")
                                 if not isinstance(chunk, str):

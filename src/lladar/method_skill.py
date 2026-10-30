@@ -39,6 +39,7 @@ def _invoke_skill(
     agent_factory: SkillAgentFactory | None = None,
     max_input_tokens: int | None = None,
     max_output_tokens: int | None = None,
+    debug: bool = False,
 ) -> dict[str, Any]:
     """Run one native Akasha local skill and require its recorded evidence."""
     if agent_factory is None:
@@ -50,6 +51,7 @@ def _invoke_skill(
         skills=[str(skill)], tools=tools, model=model, env_file=str(env_file),
         system_prompt=language_prompt(system_prompt), max_input_tokens=profile.max_input_tokens,
         max_output_tokens=profile.max_output_tokens,
+        **({"verbose": True} if debug else {}),
     )
     evidence = agent(request)
     if not isinstance(evidence, dict) or skill.name not in evidence.get("loaded_skills", []):

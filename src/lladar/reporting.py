@@ -91,9 +91,26 @@ class ReportWorkspace:
             "sections": results, "error": "report has unresolved sections"}
 
 
+def read_evaluation(source: str | Path) -> dict:
+    """Read and recognize report input without invoking models or writing files."""
+    try:
+        evaluation = json.loads(Path(source).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise EvaluationError(f"could not read evaluation JSON: {source}") from error
+    optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
+    situation = isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation"
+    required = ({"kind", "source", "situation_config", "situation_sha256", "evaluator_model", "method", "observe", "summary", "items"}
+                if situation else {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"})
+    if not isinstance(evaluation, dict) or not required <= set(evaluation) <= required | optional or not isinstance(evaluation["items"], list):
+        raise EvaluationError("evaluation JSON does not match the current contract")
+    objects = ("summary", "method", "observe") if situation else ("summary", "plan", "aggregates", "stability")
+    if any(not isinstance(evaluation[key], dict) for key in objects) or any(not isinstance(item, dict) for item in evaluation["items"]):
+        raise EvaluationError("evaluation JSON contains invalid field types")
+    return evaluation
+
+
 @language_stage
 @stage_session("report")
-
 def create_report(eval_output: str | Path, output: str | Path, *, skill: str | Path | None = None,
                   model: str = DEFAULT_REPORT_MODEL, env_file: str | Path = ".env",
                   skill_agent_factory: SkillAgentFactory | None = None, force: bool = False,
@@ -104,17 +121,10 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     source, target = Path(eval_output), Path(output)
     if target.exists() and not force:
         raise FileExistsError(f"output already exists: {target}")
-    try:
-        evaluation = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise EvaluationError(f"could not read evaluation JSON: {source}") from error
+    evaluation = read_evaluation(source)
     if isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation":
         return _situation_report(evaluation, target, skill=skill, model=model,
                                  env_file=env_file, skill_agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens, force=force)
-    required = {"source", "trials_source", "skill", "evaluator_model", "plan", "summary", "aggregates", "stability", "items"}
-    optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
-    if not isinstance(evaluation, dict) or not required <= set(evaluation) <= required | optional:
-        raise EvaluationError("evaluation JSON does not match the current contract")
     selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
     reporter = ProgressReporter(verbose)
     workspace = ReportWorkspace(evaluation, reporter)

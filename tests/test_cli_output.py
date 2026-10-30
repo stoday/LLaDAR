@@ -135,6 +135,20 @@ def test_situation_summary_is_logged(tmp_path, capsys):
     assert "Work summary" in log.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("turns", [1, 2])
+def test_situation_summary_suggests_only_supported_targets(tmp_path, capsys, turns):
+    output = tmp_path / "situation.json"
+    assert cli.main([
+        "create", "situation", "--instructions", "Observe", "--stop-criteria", "Done",
+        "--max-turns", str(turns), "--output", str(output), "--lang", "zh-TW",
+    ], skill_agent_factory=AuthoringAgent) == 0
+    terminal = capsys.readouterr().out
+    assert "執行前請將範例網址或專案路徑換成實際值" in terminal
+    assert "YOUR_PROJECT_PATH" in terminal
+    assert "--num-scenarios 1" in terminal
+    assert ("--page-url" in terminal) is (turns == 1)
+
+
 def test_failed_stage_does_not_display_a_success_summary(tmp_path, capsys):
     assert cli.main(["eval", str(tmp_path / "missing.jsonl"), "--no-verbose"]) == 2
     assert "Work summary" not in capsys.readouterr().out

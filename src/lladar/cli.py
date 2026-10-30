@@ -18,6 +18,7 @@ from .api import DEFAULT_DATASET_MODEL, create_test_dataset
 from .answer_extraction import DEFAULT_EXTRACTION_MODEL, MAX_CAPTURE_BYTES, MAX_INPUT_BYTES
 from .resource_limits import resource_limit
 from .command_log import command_log
+from .workflow_options import validate_workflow_options
 from .live_status import status_queries
 from .operation_report import OperationReport, current_operation, exception_exit_code, operation_scope
 from .controlled_variants import normalize_controlled_variant_topics, select_controlled_variant_topics
@@ -29,6 +30,7 @@ from .runner import DEFAULT_ADAPTER_MODEL, run_agent
 from .skill_templates import create_skill_template
 from .situation import create_situation, evaluate_situation, run_situation
 from .language import Language, current_language, language_scope, normalize_lang, resolve_language, localize_error, tr
+from .plan import DEFAULT_PLAN_MODEL, run_plan
 
 
 class _LanguageParser(argparse.ArgumentParser):
@@ -191,7 +193,7 @@ def _display_command(arguments: Sequence[str]) -> str:
 
 
 def _show_work_summary(stage: str, output: str | Path, *, situation: bool = False,
-                       situation_config: str | None = None) -> None:
+                       situation_config: str | None = None, max_turns: int | None = None) -> None:
     """Describe successful workflow artifacts using their actual absolute paths."""
     path = Path(output).resolve()
     descriptions = {
@@ -250,8 +252,16 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
     if stage == "test-dataset":
         next_step = ["lladar", "run-agent", str(path), "--project", "PROJECT"]
     elif stage == "situation":
-        next_step = ["lladar", "run-agent", "--situation-config", str(path),
-                     "--project", "PROJECT", "--num-scenarios", "N"]
+        print(tr('  Next: Choose your target; replace the example URL or project path before running.'))
+        if max_turns == 1:
+            website = ["lladar", "run-agent", "--situation-config", str(path), "--page-url",
+                       "https://example.com/chat", "--num-scenarios", "1", "--lang", current_language().lang]
+            print(tr('    Website (replace the example URL): {p0}', p0=_display_command(website)))
+        project = ["lladar", "run-agent", "--situation-config", str(path), "--project",
+                   "YOUR_PROJECT_PATH", "--num-scenarios", "1", "--lang", current_language().lang]
+        print(tr('    Project (replace YOUR_PROJECT_PATH): {p0}', p0=_display_command(project)))
+        print(tr('    Change --num-scenarios to run more than one scenario.'))
+        return
     elif stage == "run-agent":
         if isinstance(metadata, dict) and metadata.get("status") in {"blocked", "cancelled"}:
             print(tr('  Next: Inspect {p0}, then rerun from the beginning after correcting the blocker.',
@@ -294,6 +304,24 @@ def build_parser() -> argparse.ArgumentParser:
         dest="command", required=True, metavar="COMMAND",
         help="Choose a command (required; no default).",
     )
+
+    plan = commands.add_parser(
+        "plan",
+        help="Start an interactive conversation to plan a test.",
+        description="Clarify a test goal into a validated PlanSpec and compile existing workflows without running a target. Always saves plan.log and plan-events.jsonl; --log selects a custom text log path.",
+        formatter_class=_HelpFormatter,
+    )
+    plan.add_argument("--log", metavar="PATH", default=argparse.SUPPRESS,
+                      help="Save redacted lifecycle events to a new text log (default: OUTPUT/plan.log); JSONL events are always saved in the plan package.")
+    plan.add_argument("--lang", metavar="CODE", default=argparse.SUPPRESS,
+                      help="Language for the conversation and plan (default: en).")
+    plan.add_argument("requirement", nargs="?", help="Optional initial test request; the conversation starts immediately.")
+    plan.add_argument("--output", metavar="DIRECTORY", help="New plan package with Markdown, JSON, logs, diagnostics and, when ready, commands.ps1 (default: runs/plan-YYYYMMDD-HHMMSS).")
+    plan.add_argument("--model", default=DEFAULT_PLAN_MODEL, metavar="MODEL", help=f"Planning model (default: {DEFAULT_PLAN_MODEL}).")
+    plan.add_argument("--env-file", default=".env", metavar="PATH", help="Environment file for the planning model (default: .env).")
+    plan.add_argument("--debug", action="store_true", help="Show redacted planning lifecycle events, validation, compilation and exception details (default: off; logs are always saved).")
+    plan.add_argument("--max-input-tokens", type=int, metavar="N", help="Override planning model input budget.")
+    plan.add_argument("--max-output-tokens", type=int, metavar="N", help="Override planning model output budget.")
 
     workflow_commands = {
         "test-dataset": "Generate question and expected-answer records from knowledge.",
@@ -414,6 +442,8 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Override the situation-authoring model input budget; must be positive (default: selected model profile).")
     situation.add_argument("--max-output-tokens", type=int, metavar="N",
                            help="Override the situation-authoring model output budget; must be positive (default: selected model profile).")
+    situation.add_argument("--debug", action="store_true",
+                           help="Show Akasha verbose output and waiting progress (default: off).")
     situation.add_argument("--force", action="store_true",
                            help="Replace an existing situation JSON (default: off).")
 
@@ -423,7 +453,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fill actual_response by running a target Agent.",
         description=(
             "Run one-question DATASET records through an inspected project or an Agent-discovered website, "
-            "or use --situation-config for generated multi-turn conversations with a project session driver."
+            "or use --situation-config for generated situations with a project session driver or a website (one turn only)."
         ),
         epilog=(
             "Additional guidance:\n\n"
@@ -480,7 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="API usage and examples in TXT, MD, DOCX or text PDF; requires --service-url (default: project mode; no OCR).")
     target.add_argument(
         "--page-url", metavar="URL",
-        help="Question website: demonstrate one complete question and answer in a visible browser, then press Enter; after saving the recording, a material Agent selects evidence and a code Agent generates an HTTP, WebSocket or browser UI adapter for immediate website testing (default: project mode; unavailable with --situation-config).",
+        help="Question website: demonstrate one complete question and answer in a visible browser, then press Enter; the generated adapter tests the website (default: project mode; situation mode requires max_turns = 1).",
     )
     runner.add_argument('--demo-question', metavar='TEXT',
         help='Question to demonstrate once in the visible browser. Wait for the complete answer, then press Enter in this terminal; the program saves state and closes the browser before generating an adapter (default: ask what assistance the service provides; requires --page-url).')
@@ -632,6 +662,7 @@ def main(
     browser_target_factory: Callable[..., Any] | None = None,
     extraction_provider_factory: Callable[..., Any] | None = None,
     situation_provider_factory: Callable[..., Any] | None = None,
+    plan_agent_factory: Callable[..., Any] | None = None,
 ) -> int:
     operation = OperationReport()
     code = 2
@@ -640,7 +671,8 @@ def main(
             code = _main(argv, runs_root=runs_root, skill_agent_factory=skill_agent_factory,
                          browser_target_factory=browser_target_factory,
                          extraction_provider_factory=extraction_provider_factory,
-                         situation_provider_factory=situation_provider_factory)
+                         situation_provider_factory=situation_provider_factory,
+                         plan_agent_factory=plan_agent_factory)
             return code
         except BaseException as error:
             code = exception_exit_code(error)
@@ -658,6 +690,7 @@ def _main(
     browser_target_factory: Callable[..., Any] | None = None,
     extraction_provider_factory: Callable[..., Any] | None = None,
     situation_provider_factory: Callable[..., Any] | None = None,
+    plan_agent_factory: Callable[..., Any] | None = None,
 ) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -672,12 +705,13 @@ def _main(
         return _run_parsed(args, parser, runs_root=runs_root,
             skill_agent_factory=skill_agent_factory, browser_target_factory=browser_target_factory,
             extraction_provider_factory=extraction_provider_factory,
-            situation_provider_factory=situation_provider_factory)
+            situation_provider_factory=situation_provider_factory,
+            plan_agent_factory=plan_agent_factory)
 
 
 def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_factory,
-                extraction_provider_factory, situation_provider_factory):
-    if args.command == "run-agent" and args.page_url and not args.situation_config:
+                extraction_provider_factory, situation_provider_factory, plan_agent_factory):
+    if args.command == "run-agent" and args.page_url:
         if args.interactive is not None:
             parser.error(tr('--interactive and --no-interactive are project mode only; omit both with --page-url.'))
         if not (sys.stdin.isatty() and sys.stderr.isatty()):
@@ -688,7 +722,7 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
     try:
         with (
             language_scope(Language(args.lang)),
-            command_log(getattr(args, "log", None)),
+            command_log(None if args.command == "plan" else getattr(args, "log", None)),
             status_queries(getattr(args, "verbose", False)),
         ):
             # Announce after the log is installed; nested stage calls share this context.
@@ -702,6 +736,7 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
                     browser_target_factory=browser_target_factory,
                     extraction_provider_factory=extraction_provider_factory,
                     situation_provider_factory=situation_provider_factory,
+                    plan_agent_factory=plan_agent_factory,
                 )
             except BaseException as error:
                 code = exception_exit_code(error)
@@ -784,8 +819,23 @@ def _execute(
     browser_target_factory,
     extraction_provider_factory,
     situation_provider_factory,
+    plan_agent_factory,
 ) -> int:
     try:
+        if args.command == "plan":
+            if not (sys.stdin.isatty() or plan_agent_factory is not None):
+                parser.error(tr('lladar plan requires terminal input; start it directly in an interactive terminal.'))
+            destination = run_plan(
+                requirement=args.requirement, output=args.output, model=args.model,
+                env_file=args.env_file, agent_factory=plan_agent_factory,
+                debug=args.debug, log=getattr(args, "log", None),
+                max_input_tokens=args.max_input_tokens,
+                max_output_tokens=args.max_output_tokens,
+            )
+            current_operation().set_output(destination)
+            saved = json.loads((destination / "plan.json").read_text(encoding="utf-8"))
+            current_operation().record(status=saved["plan"]["status"])
+            return 2 if saved["plan"]["status"] == "failed" else 0
         resume = getattr(args, "resume", None)
         if resume is not None:
             if args.force:
@@ -842,10 +892,10 @@ def _execute(
                     model=args.model, env_file=args.env_file,
                     max_input_tokens=args.max_input_tokens,
                     max_output_tokens=args.max_output_tokens,
-                    skill_agent_factory=skill_agent_factory, force=args.force,
+                    skill_agent_factory=skill_agent_factory, force=args.force, debug=args.debug,
                 )
                 print(tr('Created situation configuration at {p0}', p0=args.output))
-                _show_work_summary("situation", args.output)
+                _show_work_summary("situation", args.output, max_turns=args.max_turns)
                 return 0
             if args.controlled_variant_probes and args.controlled_variant_topics:
                 parser.error(tr('--controlled-variant-probes and --controlled-variant-topics cannot be used together'))
@@ -908,32 +958,15 @@ def _execute(
             _show_work_summary("test-dataset", output)
             return 0
         if args.command == "run-agent":
-            if args.api_guide is not None and (not args.service_url or args.situation_config is not None):
-                parser.error(tr('--api-guide requires --service-url in single-question mode'))
-            if args.export_adapter is not None and ((args.project is None and args.api_guide is None) or not args.service_url
-                    or args.page_url is not None or args.situation_config is not None):
-                parser.error(tr('--export-adapter requires --service-url and explicit --project or --api-guide in single-question mode'))
-            if args.adapt is not None and args.project is None and args.page_url is None and args.api_guide is None:
-                parser.error(tr('--adapt requires an explicit --project, --api-guide or --page-url'))
-            if args.demo_question is not None and (args.page_url is None or not args.demo_question.strip()):
-                parser.error(tr('--demo-question requires --page-url and a non-empty question'))
-            if args.adapter is not None and args.page_url is None:
-                parser.error('--adapter requires --page-url')
-            if args.adapt is not None and args.page_url is not None:
-                parser.error('--adapt is project mode only; use --adapter with --page-url')
+            try:
+                validate_workflow_options(args)
+            except ValueError as error:
+                parser.error(tr(str(error)))
             if args.situation_config:
-                if args.dataset is not None or args.skill is not None:
-                    parser.error(tr('--situation-config cannot be combined with DATASET or --skill'))
-                if args.num_scenarios is None:
-                    parser.error(tr('--num-scenarios is required with --situation-config'))
-                if args.page_url is not None:
-                    parser.error(tr('multi-turn browser sessions are not supported yet'))
-                if any((args.confirm_browser_run,
-                        args.fresh_browser_profile, args.allow_response_model_transfer)):
-                    parser.error(tr('browser options do not apply to situation mode'))
                 completed = run_situation(
                     args.situation_config, args.output,
-                    project=args.project or ".", num_scenarios=args.num_scenarios,
+                    project=(args.project or ".") if args.page_url is None else None,
+                    num_scenarios=args.num_scenarios,
                     model=args.model or DEFAULT_ADAPTER_MODEL, env_file=args.env_file,
                     target_python=args.target_python, timeout=args.timeout,
                     runs_root=runs_root, force=args.force,
@@ -942,17 +975,18 @@ def _execute(
                     max_input_tokens=args.max_input_tokens, max_output_tokens=args.max_output_tokens,
                     max_tool_calls=args.max_tool_calls, graphify=args.graphify,
                     graphify_python=args.graphify_python, interactive=args.interactive,
-                    adapt=args.adapt,
+                    adapt=args.adapter if args.page_url else args.adapt,
+                    **({"page_url": args.page_url, "browser_target_factory": browser_target_factory,
+                        "extraction_provider_factory": extraction_provider_factory,
+                        "probe_question": args.demo_question,
+                        "fresh_browser_profile": args.fresh_browser_profile,
+                        "provider_factory": situation_provider_factory} if args.page_url else {}),
                 )
                 print(tr('Completed {p0} situation trial(s) at {p1}', p0=completed, p1=args.output))
                 current_operation().record(count=completed)
                 _show_work_summary("run-agent", args.output, situation=True,
                                    situation_config=args.situation_config)
                 return 0
-            if args.dataset is None:
-                parser.error(tr('DATASET is required unless --situation-config is set'))
-            if args.num_scenarios is not None:
-                parser.error(tr('--num-scenarios requires --situation-config'))
             project = args.project if args.project is not None else (None if args.page_url or args.api_guide else ".")
             completed = run_agent(
                 args.dataset,

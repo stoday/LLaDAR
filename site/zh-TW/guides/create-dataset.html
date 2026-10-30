@@ -15,7 +15,7 @@
     <section class="hero compact"><p class="eyebrow">使用指南</p><h1>建立測試資料</h1><p class="lead">把你想讓 Agent 遵守的文件交給 LLaDAR，讓它產生一組可以實際拿去問 Agent 的題目。</p></section>
     <section>
       <h2>這一步在做什麼？</h2>
-      <p>測試資料不是隨便列幾個問題。主要 JSONL 的每一題包含問題、預期答案和待填入的實際回答；生成來源與方法記錄在旁邊的 sidecar。後面評估時，LLaDAR 會用這些內容判斷 Agent 的回答是否符合文件。</p>
+      <p>測試資料不是隨便列幾個問題。主要 JSONL 的每一題包含問題、預期答案和待填入的實際回答；生成來源與方法記錄在旁邊的 sidecar。後面評估時，LLaDAR 會用這些內容判斷 Agent 的回答是不是真的出自知識文件裡的正確答案。這一步不等於完整檢查所有額外或捏造的內容。</p>
     </section>
     <section>
       <h2>基本用法</h2>
