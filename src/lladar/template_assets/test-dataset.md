@@ -26,15 +26,10 @@ intentionally maintaining a compatible custom method.
 Replace the policy bullets in `SKILL.md` with rules that match your domain.
 These are useful, safe examples:
 
-```markdown
-## Question policy
-
-- Generate one standalone question for each meaningful passage.
-- Ask only for facts stated in the source; do not require outside knowledge.
-- Keep quantities, units, conditions, exceptions, and negation in the answer.
-- Prefer short natural questions. Do not repeat the same question.
-- Every expected answer must be supported by an exact source quote.
-```
+Example rules for that section: generate one standalone question for each
+meaningful passage; ask only for facts stated in the source; keep quantities,
+units, conditions, exceptions, and negation; avoid duplicate questions; and
+require an exact source quote for every expected answer.
 
 Common changes include:
 
