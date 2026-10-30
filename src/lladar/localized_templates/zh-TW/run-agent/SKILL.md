@@ -7,6 +7,11 @@ description: 可編輯的 LLaDAR 階段方法與提交契約。
 
 # 穩定性執行
 
+## 這個 Skill 做什麼、要改哪裡
+
+它決定哪些資料集案例要執行，以及每個案例重複幾次。要客製化時，修改下面的選題與
+`repeats` 規則；主程式仍負責呼叫受測 Agent 與寫入回答。`AUTHORING.md` 提供全量、抽樣與聚焦範例。
+
 先使用 read_dataset()，再以 write_strategy(content) 提交完整 Python 原始碼，入口為 select_cases(cases, schedule)。每個原始案例只排定一次，repeats=3；不篩選、不呼叫受測 Agent、不寫入策略以外的檔案。
 
 cases 是不可變物件的 tuple，含 record_index（從一開始）、question、expected_answer；使用 case.question。schedule(case, repeats=1) 接受原始案例與正整數重複次數，回傳 None；重複排定會累加，入口的回傳值不使用。

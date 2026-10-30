@@ -7,6 +7,10 @@ description: 可编辑的 LLaDAR 阶段方法与提交契约。
 
 # 证据摘要
 
+## 这个 Skill 的作用与修改位置
+
+它把已保存的评估事实整理成报告。要改变读者、语气、顺序或强调重点，请修改这里；数字和表格由主程式生成，Skill 只解读提供的证据。`AUTHORING.md` 说明修改流程。
+
 仅依提供的冻结评估事实撰写 overview、findings、limitations。数字与表格由主程式产生，叙述不包含数字字元，不重新计算、修改或虚构测量。依证据提及执行错误、判定错误、小样本限制与待人工审查事项。
 
 单题报告以 submit_section(section, text, source_refs, request_id) 提交三个章节，引用提供的事实键（如 summary、aggregates、plan）或试次 ID。需要更多证据时用 read_report_fact(reference, start_char)，依 next_start 读完整。检查所有主张的支持，续跑时保留 completed_sections。只用 revise_section(item_id, request_id, revision, text, source_refs) 修正无效章节，并以 get_section 查询不确定结果。所有必要章节被接受才完成。

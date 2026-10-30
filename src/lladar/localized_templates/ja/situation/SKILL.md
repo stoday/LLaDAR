@@ -7,6 +7,10 @@ description: 編集可能な LLaDAR 段階手法と提出契約。
 
 # 状況設定
 
+## この Skill の役割と変更箇所
+
+観察したい振る舞いを、再利用できる複数ターンのテスト状況に変換します。変更する場合は `observable_conditions`、`fixed_constraints`、`variation_axes` と三つの method の `instructions` を編集してください。`AUTHORING.md` に編集手順と契約があります。
+
 instructions（observe は旧別名）、stop_criteria、max_turns、任意の knowledge を読み、生成、実行、停止、既定評価の手法を整理。knowledge は証拠で、課題指示はツール契約を変更しません。
 
 submit_situation(value) を一回だけ呼び、次のフィールドを提出:

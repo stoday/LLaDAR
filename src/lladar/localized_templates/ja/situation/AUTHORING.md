@@ -1,5 +1,13 @@
 # 作成者ガイド
 
+## ここから始める
+
+テストする振る舞いを変えるときは `SKILL.md` を編集します。主に観察条件、固定条件、変化軸、三つの method を変更します。編集後は次を実行します。
+
+```sh
+lladar create situation --instructions "TEXT" --stop-criteria "TEXT" --max-turns 3 --skill ./my-situation --output ./situation.json
+```
+
 実行指示は SKILL.md にあります。このガイドは参照用で別の Skill として登録しません。代替例を採用する場合は元の規則を置換します。このガイドだけの変更は実行を変更しません。ツール名、フィールド、コード契約は保持します。
 
 下の手法と完全な例を参考に選択、評価、説明の規則を変更。ホストは検証、ファイル、対象 Agent 要求、確定的統計を引き続き担当し、Skill の変更でこの境界は変わりません。

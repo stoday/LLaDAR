@@ -1,18 +1,26 @@
 ---
 name: test-dataset
-description: 可編輯的 LLaDAR 階段方法與提交契約。
+description: 依來源規則產生可驗證的測試問答資料集。
 ---
 
-此檔案定義有效方法。AUTHORING.md 是工具與修改指南，替代範例不會自動成為額外執行指示。完成條件是主程式接受所需提交；純文字回覆不代表完成。新生成敘述使用執行時的 --lang；工具名稱、資料欄位、程式碼與逐字引文保持原值。
+# 先理解這個 Skill
 
-# 來源支持的問題生成
+本 Skill 的工作是：讀取指定知識來源，產生問題、預期答案與原文證據，讓下游可以測試 Agent 是否回答正確。問題不能靠來源以外的知識回答。
 
-讀取指定來源，依請求選擇直接 QA、語意圖譜或兩者。使用來源中的事實、註解或可證明推導的準則；保留來源證據，區分來源事實、推論概念與合成控制。問題須獨立可回答，預期答案須由來源支持。
+`SKILL.md` 是實際執行的方法；`AUTHORING.md` 是修改指南與工具契約。如果要改變題目風格，請修改下面的「題目規則」；不要只修改 `AUTHORING.md` 的範例。
 
-直接自由問答：先 read_source，針對指定批次精確讀取 assigned_start 至 assigned_end 並跟隨 next_start。透過 submit_question 一次提交 question、expected_answer、source_refs、answer_basis、rationale 與唯一 request_id。answer_basis 使用 source_answer、source_annotation 或 derived_criterion。確認 status 與 issues。若被拒絕，以 revise_question 使用 item_id、目前 revision、新 request_id 與完整修正版；最多修正三次。提交結果不確定時用 get_question_request 查詢原 request_id，只對相同內容重用該 ID。
+## 題目規則
 
-相容知識點路徑：先 submit_knowledge_points，使用 read_id 與逐字 quote 提交 statement、topic、evidence；以 list_knowledge_points／read_knowledge_point 讀取已接受知識點。submit_qa 使用 knowledge_point_id、question、expected_answer。自由題不加入 id、actual_response 或 question_type。選擇／排序題依請求的 typed contract。
+- 先讀取所有指定來源，保留能獨立回答的完整段落。
+- 每個問題都要獨立、自然，而且預期答案必須由來源支持。
+- 保留主體、數字、單位、條件、例外與否定語意。
+- 優先使用直接問答；只有來源確實支持比較或概念映射時才使用圖譜。
+- 每個最終問題都要有可定位的原文引用；不要重複問題或捏造選項。
 
-若圖譜支持概念或對照問題：先提交有證據的 nodes、edges、facts 至 submit_semantic_graph；使用 read_semantic_graph 確認，再 submit_test_plans。direct_fact 的答案為事實值與單位；concept_mapping 的答案涵蓋完整候選集合。controlled_invariance 一組只改變一個已宣告 control_dimension 的 control_value，保留任務、概念、候選、答案契約與問題骨架。宣告維度 ID、標籤、語意範圍、值關係與相容維度；關係不明時不可使用。
+若請求指定了選擇、排序或受控變體，遵守該請求的契約；不能用普通自由問答代替。
 
-主程式負責驗證、選擇維度、去重、筆數上限、完整配對與最終寫入。依 validation_errors 與 existing_results 修正既有結果，不重送已完成的圖譜與計畫。Python 可探索、計算與修正；內建自由題使用原子提交工具，主程式負責序列化。若自訂相容方法提供 candidate_path，候選檔是完整且具權威性的快照，須遵守 candidate_contract。完成條件是候選證據與契約全部有效。
+## 執行與完成條件
+
+使用 `list_sources`、`read_source` 讀完來源；長來源依 `next_start` 繼續讀取。使用 `submit_question` 產生自由問答，或使用 `submit_qa` 產生相容的知識點／題型化問答。需要比較題時，依序使用 `submit_semantic_graph`、`read_semantic_graph`、`submit_test_plans`。所有提交都必須保留實際的來源讀取 ID 與逐字引用。
+
+主程式會負責驗證、去重、題數上限、完整配對與最終寫檔；文字回覆本身不算完成。重試時先查看 `validation_errors` 與 `existing_results`，修正未完成結果，不重送已完成工作。

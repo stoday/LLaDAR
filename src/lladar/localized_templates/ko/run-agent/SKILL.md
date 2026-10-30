@@ -7,6 +7,10 @@ description: 편집 가능한 LLaDAR 단계 방법 및 제출 계약.
 
 # 안정성 실행
 
+## 이 Skill의 역할과 수정 위치
+
+데이터셋에서 실행할 사례와 각 사례의 반복 횟수를 정합니다. 수정할 때는 아래 선택 규칙과 `repeats`를 편집하세요. 대상 Agent 실행과 응답 저장은 호스트가 담당합니다. `AUTHORING.md`에 전체 실행, 샘플링, 범위 선택 예제가 있습니다.
+
 read_dataset()으로 확인한 뒤 write_strategy(content)에 전체 Python 소스를 제출합니다. 진입점은 select_cases(cases, schedule)입니다. 각 원본 사례를 한 번만 repeats=3으로 등록합니다. 필터링, 대상 Agent 호출 및 전략 외 파일 쓰기는 하지 않습니다.
 
 cases는 불변 객체의 tuple이며 record_index(1부터 시작), question, expected_answer를 포함합니다. case.question을 사용합니다. schedule(case, repeats=1)은 원래 사례와 양의 정수를 받고 None을 반환합니다. 재등록은 반복 횟수를 더하며 진입점 반환 값은 무시됩니다.

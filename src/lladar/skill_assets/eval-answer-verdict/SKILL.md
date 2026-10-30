@@ -5,6 +5,14 @@ description: Judge each LLaDAR response for answer correctness.
 
 # Answer verdict
 
+## What to customize
+
+This Skill defines how an individual response is judged. Edit the plan and
+judgment rules when your project needs a different definition of correctness,
+equivalent wording, required conditions, or additional dimensions.
+`AUTHORING.md` shows the edit loop and valid submission shapes. The host keeps
+aggregate statistics; the Skill should judge one trial at a time.
+
 On stage `plan`, submit a plan with a boolean `correct` dimension. On stage
 `judgment`, use the frozen plan and compare only the expected answer and actual
 response, then submit one grounded judgment. Do not calculate aggregate statistics.

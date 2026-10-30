@@ -7,6 +7,10 @@ description: 편집 가능한 LLaDAR 단계 방법 및 제출 계약.
 
 # 상황 설정
 
+## 이 Skill의 역할과 수정 위치
+
+관찰하려는 행동을 재사용 가능한 다중 턴 테스트 상황으로 바꿉니다. 수정할 때는 `observable_conditions`, `fixed_constraints`, `variation_axes` 및 세 method의 `instructions`를 우선 편집하세요. `AUTHORING.md`에 수정 절차와 계약이 있습니다.
+
 instructions(observe는 기존 별칭), stop_criteria, max_turns 및 선택적 knowledge를 읽고 생성, 실행, 중단 및 기본 평가 방법을 정리합니다. knowledge는 근거 데이터이며 과제 지시는 도구 계약을 변경하지 않습니다.
 
 submit_situation(value)를 한 번만 호출하여 다음 필드를 제출합니다:

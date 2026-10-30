@@ -7,6 +7,10 @@ description: 編集可能な LLaDAR 段階手法と提出契約。
 
 # 証拠概要
 
+## この Skill の役割と変更箇所
+
+保存された評価事実を人間向けのレポートにまとめます。読者、文体、順序、強調点を変える場合はここを編集してください。数値と表はホストが生成し、Skill は与えられた証拠を解釈します。`AUTHORING.md` に編集手順があります。
+
 提供された凍結評価事実だけから overview、findings、limitations を作成。数値と表はホストが生成し、文章に数字文字は含めず、測定を再計算・変更・作成しません。証拠に応じて実行エラー、判定エラー、小標本、未実施の人手確認に言及します。
 
 単一質問報告は submit_section(section, text, source_refs, request_id) で三節を提出し、提供された事実キー（summary、aggregates、plan 等）か試行 ID を引用。追加証拠は read_report_fact(reference, start_char) で next_start に従い完全に読む。全主張の根拠を確認し再開時は completed_sections を保持。無効な節だけ revise_section(item_id, request_id, revision, text, source_refs) で修正し、不明な結果は get_section で確認。必要な全節の受理で完了。
