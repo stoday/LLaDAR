@@ -236,8 +236,15 @@ def test_live_rest_script_uses_current_runner_contract(monkeypatch, tmp_path, hi
     monkeypatch.setattr(sys, "argv", [str(script), "--target-python", "fixture-python"])
 
     if history in {"last_verification_failed", "dataset_failed", "wrong_candidate"}:
-        with pytest.raises(AssertionError):
+        with pytest.raises(SystemExit) as caught:
             module.main()
+        assert caught.value.code == 1
+        summaries = list((tmp_path / '.lladar').glob('live-rest-graph-*/verification.json'))
+        assert len(summaries) == 1
+        failed = json.loads(summaries[0].read_text(encoding='utf-8'))
+        assert failed['status'] == 'failed'
+        assert failed['error_type'] == 'AssertionError'
+        assert summaries[0].with_name('diagnostics.json').is_file()
         return
 
     module.main()
