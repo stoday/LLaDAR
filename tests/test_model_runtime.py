@@ -106,3 +106,23 @@ def test_unknown_process_timeout_is_not_claimed_as_provider_failure(tmp_path):
     assert not repairs
     row = json.loads((adapter.evidence / 'observations.jsonl').read_text().splitlines()[-1])
     assert row['failure_kind'] == 'target_execution_timeout'
+
+
+def test_real_akasha_tool_failure_exits_graph_instead_of_asking_model_to_repair():
+    import akasha
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.messages import AIMessage
+    from lladar.model_runtime import call_agent
+    class Client(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+    def run_harness() -> str:
+        raise ProviderError('target_provider_timeout')
+    client = Client(responses=[AIMessage(content='', tool_calls=[{
+        'name': 'run_harness', 'args': {}, 'id': 'local-call', 'type': 'tool_call'}]),
+        AIMessage(content='must not ask the model to repair the provider')])
+    agent = akasha.agents(model=client, tools=[akasha.create_tool('Run fixture', run_harness, 'run_harness')],
+                          stream=False, thinking=False, verbose=False, keep_logs=False)
+    with pytest.raises(ProviderError, match='target_provider_timeout'):
+        call_agent(agent, 'run the local fixture')
+    assert client.i == 1
