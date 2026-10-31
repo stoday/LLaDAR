@@ -30,6 +30,8 @@ from .validation_retry import run_validated
 from .model_profiles import resolve_model_profile
 from .resource_limits import resource_limit
 from .live_status import status_activity
+from .model_runtime import configure_agent, call_agent, target_provider_failure, stop_unrepairable
+from .exceptions import ProviderError
 
 
 MAX_ADAPTER_REPAIR_ATTEMPTS = resource_limit('AUTO_ADAPTER_REPAIR_ATTEMPTS')
@@ -353,6 +355,7 @@ class AutoAdapter:
         for question in probes:
             result = self.execute(self.source, question, phase="verification")
             self.report["verification"].append(result)
+            stop_unrepairable(result)
             if not result["ok"]:
                 failures.append({"question": question, "error": result["error"]})
         if not failures:
@@ -471,6 +474,8 @@ class AutoAdapter:
             self._save()
             try:
                 repair(failure, repair_attempt)
+            except ProviderError:
+                raise
             except Exception as error:
                 failure = {
                     "phase": "repair",
@@ -529,6 +534,15 @@ class AutoAdapter:
                     request=json.dumps(request, ensure_ascii=False),
                     environment=environment, timeout=self.timeout,
                 )
+                target_log = cwd / 'lladar-service.log'
+                provider_diagnostic = completed.stderr
+                if target_log.is_file() and not target_log.is_symlink():
+                    with target_log.open('rb') as log:
+                        log.seek(max(0, target_log.stat().st_size - 65536))
+                        provider_diagnostic += '\n' + log.read().decode('utf-8', errors='replace')
+                kind = target_provider_failure(provider_diagnostic, request_id)
+                if kind and completed.returncode:
+                    result['failure_kind'] = kind
                 result["exit_code"] = completed.returncode
                 if completed.returncode:
                     diagnostic = _runtime_diagnostic(completed.stderr, environment)
@@ -572,6 +586,8 @@ class AutoAdapter:
                     raise ValueError("Adapter changed target source during execution")
                 result.update(ok=True, output=payload["output"], observation=payload["observation"])
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            if isinstance(error, subprocess.TimeoutExpired):
+                result['failure_kind'] = 'target_execution_timeout'
             result["error"] = _redact_secrets(
                 f"{type(error).__name__}: {error}", environment
             )
@@ -607,6 +623,7 @@ class AutoAdapter:
                 raise ValueError("message must be one of the exact plain-text probe questions supplied")
             result = self.execute(self._path(path).read_bytes(), message, phase="exploration")
             self.explorer._record("run_harness", {"path": path}, "success" if result["ok"] else "failed")
+            stop_unrepairable(result)
             return json.dumps({"verification": result,
                                "adapter_runtime_protocol": self.runtime_protocol,
                                "run_harness_tool_argument": self.run_harness_guidance}, ensure_ascii=False)
@@ -736,7 +753,9 @@ class AutoAdapter:
                                 max_output_tokens=self.model_profile.max_output_tokens,
                                 max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
                                 verbose=self.verbose, keep_logs=False)
-                            return _stream_answer(discovery(prompt))
+                            configure_agent(discovery, timeout=min(self.timeout, 180),
+                                            events=self.evidence / 'model-events.jsonl', stage='discovery')
+                            return _stream_answer(call_agent(discovery, prompt))
 
                     def validate_discovery(response: str) -> dict:
                         if api_guide is not None:
@@ -816,7 +835,7 @@ class AutoAdapter:
             def new_coding_agent():
                 self.explorer.start_agent_turn()
                 with redirect_stdout(sys.stderr):
-                    return agent_factory(
+                    agent = agent_factory(
                         system_prompt=current_language().instruction(),
                         model=self.model, env_file=self.env_file, tools=tools,
                         max_input_tokens=self.model_profile.max_input_tokens,
@@ -824,6 +843,8 @@ class AutoAdapter:
                         max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
                         verbose=self.verbose, keep_logs=False,
                     )
+                    return configure_agent(agent, timeout=min(self.timeout, 180),
+                                           events=self.evidence / 'model-events.jsonl', stage='generation_or_repair')
 
             initial_failure = None
             pending_source = self.evidence / "adapter.py"
@@ -839,7 +860,7 @@ class AutoAdapter:
                 else:
                     agent = new_coding_agent()
                     with redirect_stdout(sys.stderr), status_activity("Waiting for adapter generation model"):
-                        response = _stream_answer(agent(self.coding_prompt + coding_context))
+                        response = _stream_answer(call_agent(agent, self.coding_prompt + coding_context))
                     self._accept_proposal(_json_object(str(response)))
                     if guide_session:
                         guide_session.put("guide_candidate", {"path": str(pending_source), "sha256": self.report["adapter_sha256"]})
@@ -854,7 +875,7 @@ class AutoAdapter:
                 context = self._repair_context()
                 agent = new_coding_agent()
                 with redirect_stdout(sys.stderr), status_activity("Waiting for adapter repair model"):
-                    response = _stream_answer(agent(
+                    response = _stream_answer(call_agent(agent,
                         self.repair_prompt + coding_context
                         + f"\nRepair attempt: {attempt}/{MAX_ADAPTER_REPAIR_ATTEMPTS}"
                         + "\nComplete repair evidence: "
@@ -934,6 +955,7 @@ class AutoAdapter:
         if self.source is None or self.report["status"] != "verified":
             raise RuntimeError("Adapter has not passed independent verification")
         result = self.execute(self.source, question, phase="dataset", case_id=case_id)
+        stop_unrepairable(result)
         if not result["ok"]:
             raise RuntimeError(result["error"])
         return result["output"]
