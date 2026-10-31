@@ -198,6 +198,8 @@ Add `--adapt PATH_TO_ADAPTER.py --project PATH` to reuse an existing adapter in 
 
 Adapter discovery, generation and repair use a model request timeout of up to 180 seconds (or the shorter target timeout), without SDK retries. Model timing, safe token usage and finish reasons are saved in `adapter/model-events.jsonl`. Explicit, request-correlated target provider failures and overall target execution timeouts stop the run instead of triggering adapter repair; a process timeout alone does not establish a provider failure.
 
+For `gemini-3.8-flash`, adapter-model calls use `LOW` thinking with thought summaries disabled. This model cannot turn reasoning off completely; `LOW` is its minimum supported effort. Input and output token ceilings are unchanged.
+
 Run the target Agent. LLaDAR inspects a copied project and creates a temporary
 adapter for its real public workflow:
 

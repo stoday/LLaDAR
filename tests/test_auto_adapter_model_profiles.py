@@ -81,7 +81,7 @@ def test_discovery_generation_and_repair_receive_same_budget(tmp_path, monkeypat
     for options in calls:
         assert options["model"] == "gemini:gemini-3.8-flash"
         assert (options["max_input_tokens"], options["max_output_tokens"]) == expected
-        assert options["thinking"] is True and options["stream"] is True
+        assert options["thinking"] is False and options["stream"] is True
     report = json.loads((adapter.evidence / "run.json").read_text(encoding="utf-8"))
     assert report["status"] == "verified"
     assert (report["max_input_tokens"], report["max_output_tokens"]) == expected

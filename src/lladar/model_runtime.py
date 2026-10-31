@@ -13,6 +13,10 @@ PROVIDER_CODES = {'provider_timeout', 'provider_transport_error', 'provider_rate
                   'provider_authentication_failed', 'provider_model_unavailable', 'provider_unavailable'}
 
 
+def uses_low_thinking(model: str) -> bool:
+    return model.lower().split(':')[-1].split('/')[-1] == 'gemini-3.8-flash'
+
+
 def provider_error_code(error: BaseException) -> str | None:
     seen = set()
     while error is not None and id(error) not in seen:
@@ -48,6 +52,13 @@ def configure_agent(agent, *, timeout: float, events: Path, stage: str):
     from langchain_core.callbacks import BaseCallbackHandler
     from .providers.akasha import disable_model_retries, _client_nodes
 
+    # Gemini 3.8 cannot disable reasoning. False in Akasha only hides thoughts;
+    # explicitly set the actual SDK request to its lowest supported effort.
+    if 'google' in str(getattr(client, '_llm_type', '')).lower() and uses_low_thinking(str(getattr(client, 'model', ''))):
+        field = 'reasoning_effort' if 'reasoning_effort' in type(client).model_fields else 'thinking_level'
+        setattr(client, field, 'low')
+        client.include_thoughts = False
+
     configured = False
     for name in ('timeout', 'request_timeout'):
         if hasattr(client, name):
@@ -76,7 +87,13 @@ def configure_agent(agent, *, timeout: float, events: Path, stage: str):
 
         def on_chat_model_start(self, _serialized, _messages, *, run_id, **_kwargs):
             self.started[run_id] = monotonic()
-            self.write('start', run_id, timeout_seconds=timeout)
+            fields = {'timeout_seconds': timeout}
+            level = getattr(client, 'thinking_level', None)
+            if level in {'minimal', 'low', 'medium', 'high'}:
+                fields['thinking_level'] = level
+            if type(getattr(client, 'include_thoughts', None)) is bool:
+                fields['include_thoughts'] = client.include_thoughts
+            self.write('start', run_id, **fields)
 
         def elapsed(self, run_id):
             return round(monotonic() - self.started.pop(run_id, monotonic()), 3)

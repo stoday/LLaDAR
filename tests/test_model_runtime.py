@@ -53,6 +53,24 @@ def test_google_timeout_and_attempt_count_reach_request_config(tmp_path):
     config = client._prepare_request([HumanMessage(content='local config probe')])['config']
     assert config.http_options.timeout == 90000
     assert config.http_options.retry_options.attempts == 1
+    assert config.thinking_config.thinking_level == 'LOW'
+    assert config.thinking_config.include_thoughts is False
+
+
+def test_akasha_false_flag_is_followed_by_explicit_low_sdk_configuration(tmp_path):
+    import akasha
+    from langchain_core.messages import HumanMessage
+    from lladar.model_runtime import configure_agent
+    env_file = tmp_path / 'fixture.env'
+    env_file.write_text('GEMINI_API_KEY=fixture\nGOOGLE_GENAI_USE_VERTEXAI=true\n', encoding='utf-8')
+    agent = akasha.agents(model='gemini:gemini-3.8-flash', env_file=str(env_file),
+                          thinking=False, stream=True, verbose=False, keep_logs=False)
+    configure_agent(agent, timeout=180, events=tmp_path / 'events.jsonl', stage='generation')
+    config = agent.model_obj._prepare_request([HumanMessage(content='local config probe')])['config']
+    assert config.thinking_config.thinking_level == 'LOW'
+    assert config.thinking_config.include_thoughts is False
+    assert config.http_options.timeout == 180000
+    assert config.http_options.retry_options.attempts == 1
 
 
 def test_real_model_timeout_and_no_hidden_retries(tmp_path):

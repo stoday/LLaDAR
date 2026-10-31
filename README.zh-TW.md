@@ -171,6 +171,8 @@ lladar run-agent dataset.jsonl --project ../my-agent --output responses.jsonl
 
 Adapter 探索、生成與修復的模型請求最多等待 180 秒（若目標逾時設定更短則沿用較短值），不進行 SDK 自動重試。模型耗時、安全的 token 用量與完成原因會存入 `adapter/model-events.jsonl`。目標若明確回報可對應本次請求的模型錯誤，或整體目標執行逾時，會停止執行而非觸發 adapter 修復；單憑程序逾時不會判定為模型供應商故障。
 
+使用 `gemini-3.8-flash` 時，adapter 模型呼叫會明確設定 `LOW` 思考強度並關閉思考摘要輸出。此模型不能完全關閉內部思考；`LOW` 是它支援的最低強度。輸入與輸出 token 上限不變。
+
 該選哪個目標參數？
 
 - `--project PATH`：從專案程式碼與文件理解對外入口。只有專案也可能足夠：啟動資訊與必要執行環境設定完整時，LLaDAR 可以在隔離的專案副本中啟動服務、測試，最後只關閉自己啟動的服務。

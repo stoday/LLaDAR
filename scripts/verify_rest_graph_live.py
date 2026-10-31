@@ -104,6 +104,10 @@ def collect_diagnostics(output):
                         safe[key] = row[key]
                 if row.get('error_code') in allowed_errors:
                     safe['error_code'] = row['error_code']
+                if row.get('thinking_level') in {'minimal', 'low', 'medium', 'high'}:
+                    safe['thinking_level'] = row['thinking_level']
+                if type(row.get('include_thoughts')) is bool:
+                    safe['include_thoughts'] = row['include_thoughts']
                 if row.get('finish_reason') in {'STOP', 'MAX_TOKENS', 'SAFETY', 'stop', 'length', 'tool_calls'}:
                     safe['finish_reason'] = row['finish_reason']
                 usage = row.get('usage')

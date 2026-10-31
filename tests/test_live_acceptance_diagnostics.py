@@ -20,7 +20,8 @@ def load_script(monkeypatch):
 
 def test_diagnostic_export_drops_untrusted_content(tmp_path, monkeypatch):
     script = load_script(monkeypatch)
-    rows = [{'event': 'start', 'prompt': 'private prompt', 'api_key': 'private credential'},
+    rows = [{'event': 'start', 'thinking_level': 'low', 'include_thoughts': False,
+             'prompt': 'private prompt', 'api_key': 'private credential'},
             {'event': 'end', 'usage': {'input_tokens': 7, 'output_tokens': 3, 'private': 'private usage'},
              'thinking_tokens': 2, 'finish_reason': 'STOP', 'answer': 'private answer'},
             {'event': 'error', 'error_code': 'private error response'}, ['private malformed record']]
@@ -31,6 +32,7 @@ def test_diagnostic_export_drops_untrusted_content(tmp_path, monkeypatch):
     text = (tmp_path / 'diagnostics.json').read_text()
     assert 'private' not in text
     events = json.loads(text)['model_events']
+    assert events[0]['thinking_level'] == 'low' and events[0]['include_thoughts'] is False
     assert any(row.get('thinking_tokens') == 2 for row in events)
     assert any(row.get('error_code') == 'provider_timeout' for row in events)
 

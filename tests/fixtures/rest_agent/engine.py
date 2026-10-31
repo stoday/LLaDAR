@@ -18,7 +18,8 @@ def answer(question: str, knowledge: str) -> str:
 
     model = ChatGoogleGenerativeAI(model=os.getenv("EXAMPLE_MODEL", "gemini-3-flash-preview"),
                                    api_key=os.environ["GEMINI_API_KEY"],
-                                   timeout=90, max_retries=1, callbacks=[ModelEvents()])
+                                   timeout=90, max_retries=1, thinking_level='low',
+                                   include_thoughts=False, callbacks=[ModelEvents()])
     agent = create_agent(model=model, tools=[shop_policy],
                          system_prompt="你是商店客服，回答前必須使用 shop_policy 查詢。依政策用繁體中文簡短回答；資料不足時請說明。")
     response = agent.invoke({"messages": [{"role": "user", "content": question}]})

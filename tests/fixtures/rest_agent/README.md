@@ -23,7 +23,9 @@ This project has no browser frontend. client.ts is an example API client only;
 it does not add reference data or business logic. Use the existing API unchanged.
 trace.jsonl is an append-only lifecycle log for acceptance testing; preserve it.
 
-Each model request has a 90-second timeout and one SDK attempt. Answering may
+Each model request has a 90-second timeout and one SDK attempt. It uses
+`LOW` thinking with thought summaries disabled; Gemini 3.8 does not support
+fully disabling reasoning. Model and token ceilings stay unchanged. Answering may
 require a model call to choose shop_policy and another to produce the answer.
 Allow 240 seconds for the HTTP response, within the acceptance runner's
 300-second process deadline. Do not retry the POST inside the adapter. Model

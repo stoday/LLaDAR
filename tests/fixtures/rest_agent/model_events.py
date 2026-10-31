@@ -19,7 +19,7 @@ class ModelEvents(BaseCallbackHandler):
 
     def on_chat_model_start(self, _serialized, _messages, *, run_id, **_kwargs):
         self.started[run_id] = monotonic()
-        self.emit('start', timeout_seconds=90, attempts=1)
+        self.emit('start', timeout_seconds=90, attempts=1, thinking_level='low', include_thoughts=False)
 
     def elapsed(self, run_id):
         return round(monotonic() - self.started.pop(run_id, monotonic()), 3)

@@ -30,7 +30,7 @@ from .validation_retry import run_validated
 from .model_profiles import resolve_model_profile
 from .resource_limits import resource_limit
 from .live_status import status_activity
-from .model_runtime import configure_agent, call_agent, target_provider_failure, stop_unrepairable
+from .model_runtime import configure_agent, call_agent, target_provider_failure, stop_unrepairable, uses_low_thinking
 from .exceptions import ProviderError
 
 
@@ -279,6 +279,7 @@ class AutoAdapter:
             raise FileNotFoundError(f"Target Python not found: {self.python}")
         self.env_file = str(Path(env_file).resolve()) if env_file else ""
         self.model, self.timeout, self.verbose = model, timeout, verbose
+        self.thinking = not uses_low_thinking(model)
         self.agent_factory = agent_factory
         self.resume_evidence = resume_evidence
         self.graphify, self.graphify_python = graphify, graphify_python
@@ -751,7 +752,7 @@ class AutoAdapter:
                                 model=self.model, env_file=self.env_file, tools=discovery_tools,
                                 max_input_tokens=self.model_profile.max_input_tokens,
                                 max_output_tokens=self.model_profile.max_output_tokens,
-                                max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
+                                max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=self.thinking, stream=True,
                                 verbose=self.verbose, keep_logs=False)
                             configure_agent(discovery, timeout=min(self.timeout, 180),
                                             events=self.evidence / 'model-events.jsonl', stage='discovery')
@@ -840,7 +841,7 @@ class AutoAdapter:
                         model=self.model, env_file=self.env_file, tools=tools,
                         max_input_tokens=self.model_profile.max_input_tokens,
                         max_output_tokens=self.model_profile.max_output_tokens,
-                        max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=True, stream=True,
+                        max_round=resource_limit('PROJECT_AGENT_ROUNDS'), thinking=self.thinking, stream=True,
                         verbose=self.verbose, keep_logs=False,
                     )
                     return configure_agent(agent, timeout=min(self.timeout, 180),
