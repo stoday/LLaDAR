@@ -20,6 +20,9 @@
         <li>已設定可用的 LLaDAR provider。它會用在產生題目和評估回答。</li>
         <li>這個範例 Agent 只使用 Python 標準函式庫，不必另外安裝 Agent 的相依套件。</li>
       </ul>
+      <p>如果還不確定要測什麼或需要哪些階段，可以先使用互動式規劃器：</p>
+      <pre><code>lladar plan "我想測客服是否依退款文件回答" --lang zh-TW --debug</code></pre>
+      <p>它只會追問尚未提供、且會影響規劃的必要資訊，接著產生經驗證的計畫與後續命令。規劃不會呼叫受測 Agent，也不會執行出題、測試、評估或報告。詳見<a href="reference/cli.html#plan">plan 命令參考</a>。</p>
     </section>
 
     <section>

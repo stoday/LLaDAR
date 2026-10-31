@@ -113,6 +113,7 @@ jobs:
           "$RUNNER_TEMP/lladar-live-target/bin/python" -m pip install "langchain>=1,<2" "langchain-google-genai>=4,<5"
 
       - name: Verify real REST and graph workflow
+        timeout-minutes: 15
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -131,16 +132,34 @@ jobs:
           if actual != expected:
               raise RuntimeError("Gemini backend does not match GOOGLE_GENAI_USE_VERTEXAI")
           PY
-          python scripts/verify_rest_graph_live.py \
+          python -u scripts/verify_rest_graph_live.py \
             --target-python "$RUNNER_TEMP/lladar-live-target/bin/python" \
             --model "gemini:$EXAMPLE_MODEL"
+
+      - name: Collect safe model diagnostics
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'scripts')
+          from verify_rest_graph_live import collect_diagnostics
+          for output in Path('.lladar').glob('live-rest-graph-*'):
+              collect_diagnostics(output)
+              summary = output / 'verification.json'
+              if summary.is_file() and json.loads(summary.read_text()).get('status') == 'running':
+                  summary.write_text(json.dumps({'status': 'failed', 'error_code': 'acceptance_interrupted'}))
+          PY
 
       - name: Upload acceptance summaries
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-vibe-testing-summary
-          path: .lladar/live-*/verification.json
+          path: |
+            .lladar/live-*/verification.json
+            .lladar/live-*/diagnostics.json
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7
