@@ -22,3 +22,11 @@ directly bypasses the public request processing and final answer formatting.
 This project has no browser frontend. client.ts is an example API client only;
 it does not add reference data or business logic. Use the existing API unchanged.
 trace.jsonl is an append-only lifecycle log for acceptance testing; preserve it.
+
+Each model request has a 90-second timeout and one SDK attempt. Answering may
+require a model call to choose shop_policy and another to produce the answer.
+Allow 240 seconds for the HTTP response, within the acceptance runner's
+300-second process deadline. Do not retry the POST inside the adapter. Model
+start/end/error events include safe timing, usage and finish metadata in
+trace.jsonl and the service log. A correlated provider error is a blocker,
+not permission to rewrite target source or regenerate the adapter.
