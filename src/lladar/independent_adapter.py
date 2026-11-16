@@ -60,8 +60,10 @@ def question_forms(value):
 class IndependentAdapter:
     """Public run/recover seam. Generated source has no environmental authority."""
     def __init__(self, *, source, state, allowed_origins, workspace, timeout=60,
-                 conversation_policy='independent', debit=None, browser_profile_dir=None):
+                 conversation_policy='independent', debit=None, browser_profile_dir=None, http_auth=None):
         self.source = source
+        from .browser_http_auth import BrowserHttpAuth
+        self.http_auth = http_auth or BrowserHttpAuth()
         self.state = json.loads(json.dumps(state))
         self.allowed_origins = {origin(url) for url in allowed_origins}
         self.workspace = Path(workspace)
@@ -114,6 +116,7 @@ class IndependentAdapter:
         atomic_json(self.workspace / 'state.integrity.json', {'sha256': digest(self.state)})
 
     def _event(self, turn, kind, **value):
+        value = self.http_auth.redact(value)
         event = dict(value, kind=kind, event_id=f"{turn['request_id']}-event-{len(turn['events']) + 1}",
                      request_id=turn['request_id'], monotonic_seconds=time.monotonic(), source='host_transport')
         turn['events'].append(event)
@@ -189,8 +192,13 @@ class IndependentAdapter:
                 self.debit()
             remaining = max(0.01, deadline - time.monotonic())
             if kind == 'http':
+                headers = dict(action.get('headers', {}))
+                authorization = self.http_auth.authorization(url)
+                if authorization:
+                    headers = {key: value for key, value in headers.items() if key.lower() != 'authorization'}
+                    headers['Authorization'] = authorization
                 request = self.http.prepare_request(requests.Request(action.get('method', 'GET'), url,
-                    headers=action.get('headers', {}), data=action.get('body')))
+                    headers=headers, data=action.get('body')))
                 request_event = self._event(turn, 'http_request', url=url, method=request.method, body=request.body, submit=submit)
                 with self.http.send(request, timeout=remaining, stream=True, allow_redirects=False) as response:
                     self._event(turn, 'http_response', url=url, status=response.status_code,
@@ -203,7 +211,7 @@ class IndependentAdapter:
                                     request_event_id=request_event['event_id'])
                         self._event(turn, 'http_end', url=url, status=response.status_code,
                                     request_event_id=request_event['event_id'])
-                    if response.status_code == 401 and submit:
+                    if response.status_code == 401:
                         raise IndependentAdapterError('adapter_authentication_required')
                     if not 200 <= response.status_code < 300:
                         raise IndependentAdapterError('adapter_http_status')
@@ -236,6 +244,10 @@ class IndependentAdapter:
                 from websockets.sync.client import connect
                 key = action.get('connection_id', 'main')
                 headers = dict(action.get('headers', {}))
+                authorization = self.http_auth.authorization(url)
+                if authorization:
+                    headers = {key: value for key, value in headers.items() if key.lower() != 'authorization'}
+                    headers['Authorization'] = authorization
                 cookie_request = self.http.prepare_request(requests.Request('GET', url.replace('wss:', 'https:').replace('ws:', 'http:')))
                 if cookie_request.headers.get('Cookie') and 'Cookie' not in headers:
                     headers['Cookie'] = cookie_request.headers['Cookie']
@@ -265,11 +277,11 @@ class IndependentAdapter:
                                     headless=False, timeout_seconds=remaining,
                                     on_retry=self.debit)
                 try:
-                    result = BrowserUiAdapter(browser_plan).run(turn['question'])
+                    result = BrowserUiAdapter(browser_plan, http_auth=self.http_auth).run(turn['question'])
                 except Exception as error:
                     self.last_diagnostic = {'phase': 'browser_ui',
                                             'exception_type': type(error).__name__,
-                                            'reason': str(error)[:4000]}
+                                            'reason': self.http_auth.redact(str(error)[:4000])}
                     raise IndependentAdapterError('adapter_execution_failed') from error
                 status = result.get('submission_status')
                 confirmed = bool(ui.get('confirmation') or ui.get('retry')) and \

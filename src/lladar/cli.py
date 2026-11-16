@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from ._startup import announce_startup
+
+    announce_startup()
+
 import argparse
 import json
 import os
@@ -193,7 +198,8 @@ def _display_command(arguments: Sequence[str]) -> str:
 
 
 def _show_work_summary(stage: str, output: str | Path, *, situation: bool = False,
-                       situation_config: str | None = None, max_turns: int | None = None) -> None:
+                       situation_config: str | None = None, max_turns: int | None = None,
+                       coverage_report: bool = False) -> None:
     """Describe successful workflow artifacts using their actual absolute paths."""
     path = Path(output).resolve()
     descriptions = {
@@ -227,6 +233,9 @@ def _show_work_summary(stage: str, output: str | Path, *, situation: bool = Fals
             (".run.json", tr('Run configuration, selected cases, target evidence and execution metadata.')),
         ]),
     }
+    if coverage_report:
+        descriptions["report"] = tr('Rendered the saved inventory and question coverage into a Markdown report.')
+        main_descriptions["report"] = tr('Question coverage rates, outstanding gaps and reviewed exclusions.')
     print(tr('\nWork summary'))
     print(tr('  Work: {p0}', p0=descriptions[stage]))
     print(tr('  Output directory: {p0}', p0=path.parent))
@@ -632,8 +641,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Render an evidence-bounded Markdown report.",
         formatter_class=_HelpFormatter,
     )
-    report.add_argument("eval_output", metavar="EVALUATION",
-                        help="Evaluation JSON produced by eval (required; no default).")
+    report.add_argument("eval_output", metavar="INPUT",
+                        help="Evaluation JSON or dataset generation JSON (required; no default).")
     report.add_argument("--output", default="runs/report.md", metavar="PATH",
                         help="Output directory or Markdown file path; a directory gets report.md (default: runs/report.md).")
     report.add_argument("--skill", action=_SingleSkill, metavar="DIRECTORY",
@@ -659,6 +668,7 @@ def main(
     *,
     runs_root: str | Path | None = None,
     skill_agent_factory: Callable[..., Any] | None = None,
+    coverage_agent_factory: Callable[..., Any] | None = None,
     browser_target_factory: Callable[..., Any] | None = None,
     extraction_provider_factory: Callable[..., Any] | None = None,
     situation_provider_factory: Callable[..., Any] | None = None,
@@ -669,6 +679,7 @@ def main(
     with operation_scope(operation):
         try:
             code = _main(argv, runs_root=runs_root, skill_agent_factory=skill_agent_factory,
+                         coverage_agent_factory=coverage_agent_factory,
                          browser_target_factory=browser_target_factory,
                          extraction_provider_factory=extraction_provider_factory,
                          situation_provider_factory=situation_provider_factory,
@@ -687,6 +698,7 @@ def _main(
     *,
     runs_root: str | Path | None = None,
     skill_agent_factory: Callable[..., Any] | None = None,
+    coverage_agent_factory: Callable[..., Any] | None = None,
     browser_target_factory: Callable[..., Any] | None = None,
     extraction_provider_factory: Callable[..., Any] | None = None,
     situation_provider_factory: Callable[..., Any] | None = None,
@@ -703,13 +715,14 @@ def _main(
     args._working_directory = str(Path.cwd().resolve())
     with language_scope(Language(args.lang)):
         return _run_parsed(args, parser, runs_root=runs_root,
+            coverage_agent_factory=coverage_agent_factory,
             skill_agent_factory=skill_agent_factory, browser_target_factory=browser_target_factory,
             extraction_provider_factory=extraction_provider_factory,
             situation_provider_factory=situation_provider_factory,
             plan_agent_factory=plan_agent_factory)
 
 
-def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_factory,
+def _run_parsed(args, parser, *, runs_root, skill_agent_factory, coverage_agent_factory, browser_target_factory,
                 extraction_provider_factory, situation_provider_factory, plan_agent_factory):
     if args.command == "run-agent" and args.page_url:
         if args.interactive is not None:
@@ -730,8 +743,25 @@ def _run_parsed(args, parser, *, runs_root, skill_agent_factory, browser_target_
                 print(tr('Language {p0}: model-generated content uses this code; interface, fixed headings and offline templates use English.', p0=args.lang), file=sys.stderr)
             code = 2
             try:
+                if hasattr(args, "env_file"):
+                    from .environment_settings import environment_settings
+                    from .progress import ProgressReporter
+
+                    model = getattr(args, "model", None) or (
+                        DEFAULT_EXTRACTION_MODEL if getattr(args, "page_url", None)
+                        and not getattr(args, "situation_config", None) else DEFAULT_ADAPTER_MODEL
+                    )
+                    reporter = ProgressReporter(getattr(args, "verbose", True))
+                    if reporter.enabled:
+                        for key, value in environment_settings(
+                            model, args.env_file,
+                            include_target=args.command == "run-agent" and not getattr(args, "page_url", None)
+                            and not getattr(args, "api_guide", None),
+                        ).items():
+                            reporter.emit("CONFIG", f"{key:<20} {value}")
                 code = _execute(
                     args, parser, runs_root=runs_root,
+                    coverage_agent_factory=coverage_agent_factory,
                     skill_agent_factory=skill_agent_factory,
                     browser_target_factory=browser_target_factory,
                     extraction_provider_factory=extraction_provider_factory,
@@ -816,6 +846,7 @@ def _execute(
     *,
     runs_root,
     skill_agent_factory,
+    coverage_agent_factory,
     browser_target_factory,
     extraction_provider_factory,
     situation_provider_factory,
@@ -922,6 +953,7 @@ def _execute(
                 model=args.model,
                 skill=args.skill,
                 skill_agent_factory=skill_agent_factory,
+                coverage_agent_factory=coverage_agent_factory,
                 env_file=args.env_file,
                 temperature=args.temperature,
                 max_input_tokens=args.max_input_tokens,
@@ -951,6 +983,24 @@ def _execute(
                 f"provenance={output}.generation.json)"
             )
             print(tr('Generated {p0} record(s) at {p1}{p2}', p0=len(records), p1=output, p2=status))
+            coverage = metadata.get("coverage")
+            if isinstance(coverage, dict):
+                summary = coverage["summary"]
+                for label, denominator, rate_key in (
+                    ("All inventoried points", "total_points", "all_coverage"),
+                    ("Question-eligible points", "eligible_points", "eligible_coverage"),
+                ):
+                    rate = summary[rate_key]
+                    percentage = tr("Not applicable") if rate is None else format(rate, ".1%")
+                    print(f"{tr(label)}: {summary['covered_points']} / {summary[denominator]} ({percentage})")
+                print(f"{tr('Points needing questions')}: {summary['pending_points']}; "
+                      f"{tr('Excluded points')}: {summary['excluded_points']}; "
+                      f"{tr('Points awaiting review')}: {summary['pending_review_points']}")
+                if metadata["inventory"]["status"] != "complete" or coverage["audit_status"] != "complete" or summary["pending_review_points"]:
+                    print(tr("Provisional: inventory or review requires attention."))
+                report_command = _display_command(["lladar", "report", str(output) + ".generation.json",
+                    "--output", str(output.parent / "report.md"), "--lang", args.lang])
+                print(tr("Question coverage report: {p0}", p0=report_command))
             if args.from_github:
                 from .github_dataset import artifact_paths
                 report_path, _ = artifact_paths(output)
@@ -1089,8 +1139,10 @@ def _execute(
             resume=resume, verbose=args.verbose, skill_agent_factory=skill_agent_factory,
             max_input_tokens=args.max_input_tokens,max_output_tokens=args.max_output_tokens,
         )
-        print(tr('Created evaluation report at {p0}', p0=destination))
-        _show_work_summary("report", destination)
+        report_metadata = Path(str(destination) + ".report.json")
+        coverage_report = report_metadata.is_file() and json.loads(report_metadata.read_text(encoding="utf-8")).get("kind") == "question_coverage_report"
+        print(tr('Created question coverage report at {p0}' if coverage_report else 'Created evaluation report at {p0}', p0=destination))
+        _show_work_summary("report", destination, coverage_report=coverage_report)
         return 0
     except NeedsConfirmation as error:
         current_operation().error(error)
@@ -1108,7 +1160,10 @@ def _execute(
         return 130
     except Exception as error:
         current_operation().error(error)
-        if isinstance(error, ValueError) and str(error) == "--resume and --force cannot be combined":
+        output_conflict = isinstance(error, FileExistsError) and str(error).startswith('output already exists: ')
+        if output_conflict:
+            message = str(error)
+        elif isinstance(error, ValueError) and str(error) == "--resume and --force cannot be combined":
             message = str(error)
         elif args.command == "run-agent" and args.page_url:
             if isinstance(error, AssertionError) and (
@@ -1123,7 +1178,10 @@ def _execute(
         else:
             raise
         print(tr('lladar: {p0}', p0=localize_error(message)), file=sys.stderr)
-        _show_resume_instructions(args, error)
+        if output_conflict:
+            print(tr('Use --resume with the original work session, or choose a different --output path. --force starts a new run and allows existing output files to be replaced.'), file=sys.stderr)
+        else:
+            _show_resume_instructions(args, error)
         return 2
 
 

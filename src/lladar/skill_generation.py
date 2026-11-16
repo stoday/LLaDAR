@@ -856,7 +856,7 @@ def _plan_submission(plan: dict) -> dict:
     return result
 
 
-def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path: Path) -> GenerationWorkspace:
+def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path: Path, *, require_questions: bool = True) -> GenerationWorkspace:
     """Freeze and revalidate either a declared file or the Python-accessible workspace."""
     with workspace.tool_lock:
         if candidate_path.exists():
@@ -923,11 +923,13 @@ def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path:
     if not isinstance(reason, str):
         raise ValueError("method_reason must be a string")
     checked.method_reason = reason
-    if not checked.qa and not checked.test_plans:
+    if require_questions and not checked.qa and not checked.test_plans:
         raise ValueError("no valid question records were generated")
     required = workspace.assigned_ranges or {key: [0, len(source["text"])] for key, source in checked.sources.items()}
     for key, (start, end) in required.items():
         if any(unread_start < end and unread_end > start for unread_start, unread_end in checked.coverage(key)["unread_ranges"]):
+            if not checked.qa and not checked.test_plans:
+                raise ValueError("no valid question records were generated; sources have unread ranges")
             raise ValueError("sources have unread ranges; finish reading this assigned batch before completion")
     checked.assigned_ranges = deepcopy(workspace.assigned_ranges)
     # Historical tool rejections remain in the audit log, but a corrected final
@@ -1020,6 +1022,13 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 "plan_count": len(workspace.test_plans),
                 "source_coverage": {key: workspace.coverage(key) for key in workspace.sources},
             }
+            if (request_context or {}).get("independent_inventory"):
+                existing = work["existing_results"]
+                existing["source_coverage"] = {key: workspace.coverage(key)
+                    for key in workspace.assigned_ranges}
+                budget = max(256, min(6000, profile.max_input_tokens // 4))
+                while existing["questions"] and len(json.dumps(existing, ensure_ascii=False).encode("utf-8")) > budget:
+                    existing["questions"].pop(0)
             if not allow_candidate_files:
                 work.pop("candidate_path", None)
                 work.pop("candidate_contract", None)
@@ -1039,7 +1048,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                                    "host_tool_events": workspace.events[event_start:]})
                 if skill.name in evidence.get("loaded_skills", []):
                     try:
-                        workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot")
+                        workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot",
+                            require_questions=not (request_context or {}).get("independent_inventory", False))
                         if candidate_validator is not None:
                             candidate_validator(workspace)
                     except (ValueError, KeyError, TypeError, OSError) as validation_error:
@@ -1057,7 +1067,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             executions.append({**request, "attempt": attempt, **result,
                                "host_tool_events": workspace.events[event_start:]})
             try:
-                workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot")
+                workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot",
+                    require_questions=not (request_context or {}).get("independent_inventory", False))
                 if candidate_validator is not None:
                     candidate_validator(workspace)
             except (ValueError, KeyError, TypeError, OSError) as error:
@@ -1071,18 +1082,23 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
 
     with tempfile.TemporaryDirectory(prefix="lladar-generation-") as candidate_dir:
         session = current_session()
-        generation_work = session.data["state"].get("generation_work") if session else None
+        round_suffix = f"_coverage_{request_context['coverage_round']}" if request_context and "coverage_round" in request_context else ""
+        work_key, batches_key = "generation_work" + round_suffix, "generation_batches" + round_suffix
+        generation_work = session.data["state"].get(work_key) if session else None
         if generation_work is None:
             batch_chars = max(1, profile.max_input_tokens // 4)
+            independent_inventory = (request_context or {}).get("independent_inventory", False)
+            if independent_inventory:
+                batch_chars = min(12000, batch_chars)
             total_chars = sum(len(source["text"]) for source in workspace.sources.values())
             assignments = []
-            if allow_candidate_files or total_chars <= batch_chars:
+            if allow_candidate_files and not independent_inventory or total_chars <= batch_chars:
                 assignments = [{key: [0, len(source["text"])] for key, source in workspace.sources.items()}]
             else:
                 for key, source in workspace.sources.items():
                     assignments.extend({key: [start, min(len(source["text"]), start + batch_chars)]}
                         for start in range(0, len(source["text"]), batch_chars))
-            completed_batches = dict(session.data["state"].get("generation_batches", {})) if session else {}
+            completed_batches = dict(session.data["state"].get(batches_key, {})) if session else {}
             errors = []
             for batch_index, assigned in enumerate(assignments, 1):
                 batch_id = str(batch_index)
@@ -1102,7 +1118,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                     break
                 completed_batches[batch_id] = generation_work
                 if session:
-                    session.put("generation_batches", completed_batches)
+                    session.put(batches_key, completed_batches)
                 reporter.group(batch_index, len(assignments), tr('Generated batches'))
             else:
                 generation_work = {"status": "complete", "attempts": sum(item["attempts"] for item in completed_batches.values()),
@@ -1110,7 +1126,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 workspace.assigned_ranges = {}
     workspace.checkpoint()
     if session and generation_work["status"] == "complete":
-        session.put("generation_work", generation_work)
+        session.put(work_key, generation_work)
     if generation_work["status"] != "complete":
         details = "; ".join(generation_work.get("validation_errors", []))
         raise DatasetValidationError("dataset generation did not produce complete valid questions" +

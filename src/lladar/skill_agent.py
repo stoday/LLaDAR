@@ -71,7 +71,10 @@ class AkashaSkillAgent:
                     if self.calls > self.tool_call_limit:
                         raise RuntimeError("skill tool call budget exceeded")
                 try:
-                    result = function(*args, **kwargs)
+                    if skill_name not in self.agent.skill_middleware.loaded_skill_names:
+                        result = {"error": f"Call load_skill(reference='{skill_name}') before using {name}, then retry this tool."}
+                    else:
+                        result = function(*args, **kwargs)
                 except (ValueError, KeyError, TypeError, DatasetValidationError, EvaluationError) as error:
                     result = {"error": str(error)}
                 except Exception as error:
@@ -97,6 +100,15 @@ class AkashaSkillAgent:
             "submit_knowledge_points": "Submit points: each has statement, topic, evidence [{read_id, quote}]. Fix rejected items.",
             "list_knowledge_points": "List every validated source-grounded knowledge point.",
             "read_knowledge_point": "Read one accepted knowledge point by its ID.",
+            "list_inventory_points": "Read independent facts: optional query searches statement/topic words; start is a zero-based cursor, limit is 1 to 5. Follow next_start. Use related facts for reconciliation, source-grounded questions and coverage repairs.",
+            "finish_inventory_reconciliation": "After checking every assigned fact against related inventory points for semantic duplicates and consistent granularity, confirm reason and issues [{knowledge_point_id,reason}]. Use an empty issues list when all assigned facts are resolved. Never generate questions during reconciliation.",
+            "replace_inventory_point": "Split a compound fact: knowledge_point_id, points [{statement,topic,evidence:[{source_id,start_char,quote}]}], reason. Provide at least two independently testable facts with exact source evidence. The host retires the old ID and preserves replacement lineage. Merge equivalent children with existing inventory facts.",
+            "read_inventory_point": "Read a complete independent inventory point and its original evidence by knowledge_point_id and start_char; follow next_start. Use read_source to obtain host reference IDs when submitting its question.",
+            "revise_inventory_point": "After inventorying the assigned source page, revise a stored fact: knowledge_point_id, statement, topic, exact evidence [{source_id,start_char,quote}], reason, optional merge_ids. Merge only equivalent facts and retain conditions, exceptions and original citations. The host preserves ID and revision history.",
+            "submit_inventory_batch": "Inventory only: submit points [{statement,topic,evidence:[{source_id,start_char,quote}]}], pending ranges [{source_id,start_char,end_char,reason}], reason, optional context citations [{source_id,start_char,quote}]. Positions are absolute. Partial submissions use complete=False; finish the whole page with complete=True. Retain incomplete endings as pending and named subjects or headings as context.",
+            "submit_coverage_review": "Review every assigned point as [{knowledge_point_id,answerability:eligible|unresolved|excluded,question_ids,reason}]. Eligible means a natural question CAN be asked, even when question_ids=[] because none was generated. Unresolved means source/context ambiguity prevents deciding answerability, not just missing questions. Map only questions explicitly testing the fact. Exclusions need concrete scenario-based reasons.",
+            "list_coverage_questions": "Read published questions by zero-based start and limit 1 to 5; follow next_start. Text may be shortened: use read_coverage_item for the complete question and answer.",
+            "read_coverage_item": "Read a complete inventory point with original evidence or a published question with its expected answer by item_id and start_char; follow next_start.",
             "submit_qa": "Submit one QA record. For free questions use exactly {knowledge_point_id, question, expected_answer}, all strings; no id, actual_response, or question_type fields. Graph not required. For choice/ranking questions follow the typed contract in AUTHORING.md.",
             "record_method": "Record a short reason for selecting direct QA, graph generation, or a mixture.",
             "submit_semantic_graph": "Submit {nodes, edges, facts}. Nodes: {id, type: entity|attribute|concept, label, origin: source|inferred, evidence_refs: [knowledge point IDs]}; concepts also need member_ids. Edges: {from, relation, to, origin, evidence_refs}. Facts: {entity_id, label, value, unit, evidence_ref}, all strings; label must exactly match the entity node label, not the attribute name. One fact per entity; evidence_ref must be in that entity's evidence_refs. Nodes and facts must be non-empty; edges may be [].",
@@ -113,8 +125,8 @@ class AkashaSkillAgent:
             "revise_section": "Repair one report section: item_id, request_id, revision, text and source_refs.",
             "get_section": "Query one report section by item_id.",
             "read_report_fact": "Read frozen report facts or a trial by reference and start_char; follow next_start for complete evidence.",
-            "submit_plan": "Submit the evaluation plan; accepted plans are frozen.",
-            "submit_judgment": "Submit one evidence-bounded evaluation judgment.",
+            "submit_plan": "Submit plan with title, approach, dimensions, limitations. Each dimension requires name, description, kind (boolean|categorical|numeric). Follow plan_contract. Inspect status and repair issues. Accepted plans are frozen.",
+            "submit_judgment": "Submit judgment with values for every frozen plan dimension and a nonempty evidence-grounded reason. Follow judgment_contract and inspect acceptance status.",
             "submit_report": "Submit the narrative sections for the report.",
             "submit_situation": "Submit the situation plan with variation axes, methods, and rubric.",
             "read_dataset": "Read the scheduled dataset cases.",
@@ -146,8 +158,15 @@ class AkashaSkillAgent:
     def __call__(self, request: dict) -> dict:
         try:
             self._check_unchanged()
-            with redirect_stdout(sys.stderr):
-                self.agent(json.dumps(request, ensure_ascii=False))
+            attempt_request = request
+            for attempt in range(3):
+                with redirect_stdout(sys.stderr):
+                    self.agent(json.dumps(attempt_request, ensure_ascii=False))
+                skill_name = self.agent.skill_context.names[0]
+                if skill_name in self.agent.skill_middleware.loaded_skill_names:
+                    break
+                attempt_request = {**request, "required_next_action":
+                    f"The preceding attempt ended without loading the selected skill. Call load_skill(reference='{skill_name}') first, then complete this work item using its tools."}
         except (LladarError, RuntimeError) as error:
             error.skill_evidence = self._evidence()
             raise

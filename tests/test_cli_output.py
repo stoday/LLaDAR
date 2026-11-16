@@ -156,6 +156,7 @@ def test_failed_stage_does_not_display_a_success_summary(tmp_path, capsys):
 
 def test_interrupted_generation_prints_executable_resume_command_and_locations(tmp_path, monkeypatch, capsys):
     import shlex
+    from coverage_test_support import SourceCoverageAgent
     from test_agent_selected_generation import DirectAgent
     monkeypatch.chdir(tmp_path)
     knowledge=tmp_path/'source notes.md'
@@ -165,7 +166,7 @@ def test_interrupted_generation_prints_executable_resume_command_and_locations(t
             raise KeyboardInterrupt()
     argv=['create','test-dataset','--knowledge',str(knowledge),'--output','results folder',
           '--count','1','--seed','7','--no-verbose']
-    assert cli.main(argv,skill_agent_factory=Interrupted)==130
+    assert cli.main(argv,skill_agent_factory=Interrupted,coverage_agent_factory=SourceCoverageAgent)==130
     captured=capsys.readouterr()
     command=next((line.strip() for line in captured.err.splitlines() if line.strip().startswith('lladar ')),None)
     assert command is not None
@@ -175,7 +176,7 @@ def test_interrupted_generation_prints_executable_resume_command_and_locations(t
     assert Path(tokens[tokens.index('--output')+1]).is_absolute()
     assert str(tmp_path) in captured.err and str(knowledge) in captured.err
     assert '--seed' in tokens and tokens[tokens.index('--seed')+1]=='7'
-    assert cli.main(tokens[1:],skill_agent_factory=DirectAgent)==0
+    assert cli.main(tokens[1:],skill_agent_factory=DirectAgent,coverage_agent_factory=SourceCoverageAgent)==0
 
 
 def test_provider_interruption_prints_resume_without_force_and_reuses_original_overwrite_authorization(tmp_path, monkeypatch, capsys):

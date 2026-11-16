@@ -7,6 +7,31 @@ from lladar.cli import build_parser, main
 from fixture_extraction import browser_cli_terminal
 
 
+@pytest.mark.parametrize('lang,expected', [('en', 'output already exists:'), ('zh-TW', '輸出已存在：')])
+def test_browser_output_conflict_reports_the_file_and_original_resume_option(tmp_path, monkeypatch, capsys, lang, expected):
+    import json
+    monkeypatch.chdir(tmp_path)
+    dataset = tmp_path / 'dataset.jsonl'
+    dataset.write_text(json.dumps({'question': 'Question', 'expected_answer': 'Answer',
+        'actual_response': None}) + '\n', encoding='utf-8')
+    output = tmp_path / 'responses.jsonl'
+    run_report = tmp_path / 'responses.jsonl.run.json'
+    run_report.write_text('{"status":"blocked"}', encoding='utf-8')
+    with browser_cli_terminal():
+        code = main(['run-agent', str(dataset), '--page-url', 'https://fixture.test/chat',
+            '--output', str(output), '--lang', lang],
+            browser_target_factory=lambda **_: pytest.fail('A file conflict must stop before browser startup.'),
+            extraction_provider_factory=lambda **_: pytest.fail('A file conflict must stop before model startup.'))
+    assert code == 2
+    message = capsys.readouterr().err
+    assert expected in message
+    assert 'responses.jsonl.run.json' in message
+    assert '--resume' in message and '--output' in message and '--force' in message
+    assert 'browser_failed' not in message
+    assert 'Session directory:' not in message and '工作階段目錄' not in message
+    assert run_report.read_text(encoding='utf-8') == '{"status":"blocked"}'
+
+
 def test_browser_resume_force_conflict_is_not_hidden_as_browser_failure(tmp_path, capsys):
     import json
     from lladar.work_session import digest

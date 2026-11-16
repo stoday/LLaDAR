@@ -29,7 +29,7 @@ classifiers = [
 ]
 
 [project.scripts]
-lladar = "lladar.cli:main"
+lladar = "lladar._startup:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "websockets>=15,<16"]

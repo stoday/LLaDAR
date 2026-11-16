@@ -3,6 +3,9 @@ name: test-dataset
 description: 편집 가능한 LLaDAR 단계 방법 및 제출 계약.
 ---
 
+요청의 stage와 제공 도구에 따릅니다. inventory 및 inventory_audit는 source 원문에서 완전한 사실을 추출하고 submit_inventory_batch(points,pending,reason)에 원문 인용과 절대 위치를 제출합니다. 미완성 끝부분은 pending으로 유지합니다. 제출 후 list_inventory_points, read_inventory_point, revise_inventory_point로 중복을 병합하고 후속 조건을 반영합니다. generation은 독립 목록과 할당 범위로 출제하며 coverage_repair는 지정 지식점을 보완합니다. coverage_review는 list_coverage_questions와 read_coverage_item으로 전체 질문과 증거를 읽고 submit_coverage_review에 각 점의 knowledge_point_id, answerability(eligible,unresolved,excluded), question_ids, reason을 제출합니다. 질문이 실제로 요구하는 사실만 집계하고 제외에는 구체적인 상황 사유가 필요합니다. 개수와 예산 제한은 미출제로 유지합니다. next_start를 따라 페이지를 읽습니다.
+
+
 이 파일이 실행 방법을 정의합니다. AUTHORING.md는 도구 및 수정 안내이며 대체 예제는 추가 실행 지시가 아닙니다. 필요한 제출을 호스트가 수락해야 완료됩니다. 텍스트 응답만으로 완료되지 않습니다. 새 설명은 실행 시 --lang을 따르며 도구 이름, 필드, 코드 및 원문 인용은 유지합니다.
 
 # 출처에 기반한 질문 생성
@@ -20,3 +23,5 @@ description: 편집 가능한 LLaDAR 단계 방법 및 제출 계약.
 개념 또는 비교에 그래프가 필요하면 근거 있는 nodes, edges, facts를 submit_semantic_graph에 제출하고 read_semantic_graph로 확인한 뒤 submit_test_plans를 제출합니다. direct_fact는 값과 단위, concept_mapping은 전체 후보 집합을 답변으로 사용합니다. controlled_invariance는 한 쌍에서 선언된 control_dimension 하나의 control_value만 바꾸고 과제, 개념, 후보, 답변 계약 및 질문 골격을 유지합니다. 차원 ID, 이름, 의미 범위, 값 관계 및 호환 차원을 선언하며 관계가 불명확한 값은 사용하지 않습니다.
 
 호스트는 검증, 차원 선택, 중복 제거, 수량 제한, 완전한 쌍 및 저장을 담당합니다. validation_errors와 existing_results를 확인해 수정하며 완료된 그래프와 계획은 다시 제출하지 않습니다. Python은 탐색, 계산 및 수정에 사용할 수 있습니다. 내장 자유 답변은 원자적 제출 도구를 사용하며 직렬화는 호스트가 담당합니다. 호환 candidate_path를 사용하는 경우 해당 파일은 전체 후보의 정확한 스냅샷이며 candidate_contract를 따라야 합니다. 근거와 계약이 모두 유효하면 완료됩니다.
+
+stage에 따릅니다. inventory_reconciliation은 의미 중복과 사실 단위를 확인하고 revise_inventory_point로 병합, replace_inventory_point로 분할한 후 finish_inventory_reconciliation으로 완료와 미해결 사항을 제출합니다. inventory의 부분 제출은 complete=False, 페이지 전체 처리 후 complete=True입니다. context에는 뒤에 필요한 주체와 제목의 원문 인용을 보관합니다. coverage_review에서 eligible은 출제 가능을 뜻하며 미출제는 question_ids=[]입니다. unresolved는 원문이나 상황 부족으로 출제 가능성을 판단하지 못할 때만 사용합니다.

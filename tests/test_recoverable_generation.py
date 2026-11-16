@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from lladar.api import create_test_dataset
+from coverage_test_support import create_test_dataset
 from test_github_dataset import CorpusAgent, CorpusClient
 
 
@@ -124,7 +124,7 @@ def test_repair_limit_rejects_only_the_unresolved_draft(tmp_path):
 
 def test_verbose_cli_shows_source_progress_without_logging_terminal_redraws(tmp_path, monkeypatch):
     import io
-    from lladar.cli import main
+    from coverage_test_support import main
     from test_agent_selected_generation import DirectAgent
 
     class Terminal(io.StringIO):
@@ -233,7 +233,7 @@ def test_interrupted_generation_resumes_saved_question_and_request(tmp_path):
 
 
 def test_cli_resume_uses_the_original_output_and_rejects_force(tmp_path, capsys):
-    from lladar.cli import main
+    from coverage_test_support import main
     from test_agent_selected_generation import DirectAgent
     source, output = tmp_path / 'notes.md', tmp_path / 'qa.jsonl'
     source.write_text('Service A keeps data for 30 days.', encoding='utf-8')

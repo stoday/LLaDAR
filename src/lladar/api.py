@@ -44,6 +44,7 @@ def create_test_dataset(
     verbose: bool = True,
     skill: str | Path | None = None,
     skill_agent_factory: Callable[..., Any] | None = None,
+    coverage_agent_factory: Callable[..., Any] | None = None,
     lang: str | None = None,
 ) -> list[dict[str, Any]]:
     """Generate source-grounded QA with the bundled or selected local skill."""
@@ -78,8 +79,18 @@ def create_test_dataset(
                          controlled_variant_selector=controlled_variant_selector, seed=seed,
                          model=model, env_file=env_file, temperature=temperature, profile=profile, verbose=verbose),
         )
-    result = generate_with_skill(
-        knowledge,
+    from .knowledge_coverage import KnowledgeCoverage
+    from .loaders import load_knowledge
+    from .method_skill import resolve_skill
+
+    selected_skill = resolve_skill(skill, BUILTIN_SKILL_DIR)
+    coverage = KnowledgeCoverage(load_knowledge(knowledge), skill=selected_skill,
+        agent_factory=coverage_agent_factory or skill_agent_factory, model=model, env_file=env_file,
+        profile=profile, verbose=verbose)
+    coverage.inventory_sources()
+    coverage.reconcile("initial")
+    generation_options = dict(
+        knowledge=knowledge,
         skill=Path(skill) if skill is not None else BUILTIN_SKILL_DIR,
         agent_factory=skill_agent_factory,
         count=count,
@@ -93,7 +104,26 @@ def create_test_dataset(
         profile=profile,
         verbose=verbose,
         allow_candidate_files=skill is not None,
+        extra_tools_factory=coverage.generation_tools,
     )
+    result = generate_with_skill(**generation_options, request_context={"independent_inventory": True})
+    coverage.inventory_sources(audit=True)
+    coverage.reconcile("audit")
+    coverage.review(result)
+    for repair in range(1, 3):
+        missing = coverage.missing_points(result)
+        if not missing or count and len(result.records) >= count:
+            break
+        prior_covered = result.provenance["coverage"]["summary"]["covered_points"]
+        result = generate_with_skill(**generation_options, request_context={
+            "independent_inventory": True, "coverage_repair": True,
+            "coverage_round": repair, "coverage_targets": missing[:20]})
+        coverage.review(result)
+        if result.provenance["coverage"]["summary"]["covered_points"] <= prior_covered:
+            break
+    result.provenance["coverage"]["stop_reason"] = (
+        "covered" if not coverage.missing_points(result) else
+        "count_limit" if count and len(result.records) >= count else "repair_budget_or_no_progress")
     if output is not None:
         result.publish(Path(output), force=force)
     return result.records

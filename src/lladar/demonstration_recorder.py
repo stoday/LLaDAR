@@ -118,7 +118,7 @@ class DemonstrationRecorder:
                     if not events['has_more']:
                         break
                     events = self.store.query_recording(page_id=page_id, after=events['next_after'], limit=200)
-                snapshot = selected.locator('body').inner_text()
+                snapshot = self.browser.http_auth.redact(selected.locator('body').inner_text())
                 self.store.append({'kind': 'demonstration_final_snapshot', 'page_id': page_id,
                                    'text': snapshot, 'question': question, 'manual_complete': True})
                 try:
@@ -150,6 +150,8 @@ class DemonstrationRecorder:
                             storage['session_storage'].append({'origin': origin(frame.url),
                                 'items': frame.evaluate('Object.fromEntries(Object.entries(sessionStorage))')})
                 storage.update(page_url=selected.url, captured_at=time.time(), allowed_origins=sorted(allowed))
+                storage['http_basic_auth_origins'] = self.browser.http_auth.required_origins()
+                storage = self.browser.http_auth.redact(storage)
                 atomic_json(self.workspace / 'state' / 'initial.json', storage)
                 atomic_json(self.workspace / 'state' / 'initial.integrity.json', {'sha256': digest(storage)})
                 atomic_json(self.workspace / 'recording' / 'demonstration.json', {
@@ -235,6 +237,8 @@ class DemonstrationRecorder:
                         if frame.url.startswith(('http://','https://')) and origin(frame.url) in allowed:
                             updated['session_storage'].append({'origin': origin(frame.url),
                                 'items': frame.evaluate('Object.fromEntries(Object.entries(sessionStorage))')})
+                updated['http_basic_auth_origins'] = self.browser.http_auth.required_origins()
+                updated = self.browser.http_auth.redact(updated)
                 atomic_json(self.workspace / 'state' / 'initial.json', updated)
                 atomic_json(self.workspace / 'state' / 'initial.integrity.json', {'sha256': digest(updated)})
                 return updated

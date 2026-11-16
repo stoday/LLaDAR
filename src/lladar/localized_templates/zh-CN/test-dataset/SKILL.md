@@ -3,6 +3,9 @@ name: test-dataset
 description: 可编辑的 LLaDAR 阶段方法与提交契约。
 ---
 
+按请求 stage 使用提供的工具。inventory 与 inventory_audit 先从 source 原文页盘点，调用 submit_inventory_batch(points,pending,reason)，保存完整事实、逐字证据与绝对位置，未完片段保留 pending。提交后用 list_inventory_points、read_inventory_point、revise_inventory_point 合并重复事实及补充后文条件。generation 按独立清单和指定来源范围出题，coverage_repair 优先补指定点。coverage_review 用 list_coverage_questions、read_coverage_item 阅读完整题目及证据，调用 submit_coverage_review 提交每点的 knowledge_point_id、answerability（eligible、unresolved、excluded）、question_ids、reason。只计入问题实际要求的事实，排除须有具体情境理由，题数和预算限制记为缺口。分页均跟随 next_start。
+
+
 此档案定义有效方法。AUTHORING.md 是工具与修改指南，替代范例不会自动成为额外执行指示。完成条件是主程式接受所需提交；纯文字回覆不代表完成。新生成叙述使用执行时的 --lang；工具名称、资料栏位、程式码与逐字引文保持原值。
 
 # 来源支持的问题生成
@@ -20,3 +23,5 @@ description: 可编辑的 LLaDAR 阶段方法与提交契约。
 若图谱支持概念或对照问题：先提交有证据的 nodes、edges、facts 至 submit_semantic_graph；使用 read_semantic_graph 确认，再 submit_test_plans。direct_fact 的答案为事实值与单位；concept_mapping 的答案涵盖完整候选集合。controlled_invariance 一组只改变一个已宣告 control_dimension 的 control_value，保留任务、概念、候选、答案契约与问题骨架。宣告维度 ID、标签、语意范围、值关系与相容维度；关系不明时不可使用。
 
 主程式负责验证、选择维度、去重、笔数上限、完整配对与最终写入。依 validation_errors 与 existing_results 修正既有结果，不重送已完成的图谱与计画。Python 可探索、计算与修正；内建自由题使用原子提交工具，主程式负责序列化。若自订相容方法提供 candidate_path，候选档是完整且具权威性的快照，须遵守 candidate_contract。完成条件是候选证据与契约全部有效。
+
+按 stage 执行。inventory_reconciliation 分批检查同义重复和粒度，用 revise_inventory_point 合并、replace_inventory_point 拆分，最后用 finish_inventory_reconciliation 确认并记录未解决问题。inventory 部分提交用 complete=False，完整处理页面后用 complete=True；context 保存后文需要的主体或标题原文引用。coverage_review 的 eligible 表示可出题，无题目时 question_ids=[]；unresolved 仅表示来源或情境不足，无法判定可出题性。

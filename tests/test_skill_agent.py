@@ -107,6 +107,89 @@ def test_builtin_situation_skill_can_read_authoring_guide_and_submit():
     assert evidence["loaded_skills"] == ["create-situation"]
 
 
+def test_host_tool_requests_skill_loading_before_accepting_a_submission(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+    skill = tmp_path / 'fixture-method'
+    skill.mkdir()
+    (skill / 'SKILL.md').write_text('---\nname: fixture-method\ndescription: fixture\n---\nSubmit the result.', encoding='utf-8')
+    received = []
+    model = ToolScriptModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'submit_judgment', 'args': {'value': 'early'}, 'id': 'early'}]),
+        AIMessage(content='', tool_calls=[{'name': 'load_skill', 'args': {'reference': 'fixture-method'}, 'id': 'load'}]),
+        AIMessage(content='', tool_calls=[{'name': 'submit_judgment', 'args': {'value': 'loaded'}, 'id': 'accepted'}]),
+        AIMessage(content='Done'),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={'submit_judgment': lambda value: received.append(value)},
+        model=model, env_file='', max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    evidence = agent({'stage': 'judgment'})
+    assert received == ['loaded']
+    assert 'load_skill' in evidence['tool_events'][0]['result']['error']
+    assert evidence['loaded_skills'] == ['fixture-method']
+
+
+def test_model_that_finishes_without_loading_skill_gets_a_bounded_retry(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+    skill = tmp_path / 'retry-method'
+    skill.mkdir()
+    (skill / 'SKILL.md').write_text('---\nname: retry-method\ndescription: fixture\n---\nSubmit the result.', encoding='utf-8')
+    received = []
+    model = ToolScriptModel(replies=[
+        AIMessage(content='Done'),
+        AIMessage(content='', tool_calls=[{'name': 'load_skill', 'args': {'reference': 'retry-method'}, 'id': 'load'}]),
+        AIMessage(content='', tool_calls=[{'name': 'submit_judgment', 'args': {'value': 'loaded'}, 'id': 'submit'}]),
+        AIMessage(content='Done'),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={'submit_judgment': lambda value: received.append(value)},
+        model=model, env_file='', max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    evidence = agent({'stage': 'judgment'})
+    assert received == ['loaded']
+    assert evidence['loaded_skills'] == ['retry-method']
+
+
+def test_builtin_evaluation_skill_reads_authoring_and_submits_valid_plan():
+    import json
+    from pathlib import Path
+    from lladar.evaluation import EvaluationWorkspace
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = Path(__file__).parents[1] / 'src' / 'lladar' / 'skill_assets' / 'eval-answer-verdict'
+    workspace = EvaluationWorkspace()
+    plan = {'title': 'Answer correctness', 'approach': 'Compare the supplied answers.',
+        'dimensions': [{'name': 'correct', 'description': 'Matches the expected answer.', 'kind': 'boolean'}],
+        'limitations': ['Only the supplied evidence is judged.']}
+    model = ToolScriptModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'load_skill', 'args': {'reference': 'eval-answer-verdict'}, 'id': 'load'}]),
+        AIMessage(content='', tool_calls=[{'name': 'read_skill_resource', 'args': {'skill': 'eval-answer-verdict', 'path': 'AUTHORING.md'}, 'id': 'read'}]),
+        AIMessage(content='', tool_calls=[{'name': 'submit_plan', 'args': {'plan': plan}, 'id': 'submit'}]),
+        AIMessage(content='Done'),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={'submit_plan': workspace.submit_plan},
+        model=model, env_file='', max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    evidence = agent({'stage': 'plan'})
+    assert evidence['loaded_skills'] == ['eval-answer-verdict']
+    assert workspace.plan == plan
+    assert '"kind": "boolean"' in str(model.prompts[2])
+    # Keep the documented plan and judgment examples valid against the actual host validators.
+    from lladar.evaluation import _validate_plan, _validate_judgment
+    text = (skill / 'AUTHORING.md').read_text(encoding='utf-8')
+    examples = [json.loads(block.split('```', 1)[0]) for block in text.split('```json\n')[1:]]
+    documented_plan = _validate_plan(examples[0])
+    _validate_judgment(examples[1], documented_plan)
+
+
+def test_missing_skill_loading_retry_stops_after_three_attempts(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+    skill = tmp_path / 'unloaded-method'
+    skill.mkdir()
+    (skill / 'SKILL.md').write_text('---\nname: unloaded-method\ndescription: fixture\n---\nRead these rules.', encoding='utf-8')
+    model = ToolScriptModel(replies=[AIMessage(content='Done') for _ in range(3)])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file='',
+        max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    evidence = agent({'stage': 'fixture'})
+    assert evidence['loaded_skills'] == []
+    assert len(model.prompts) == 3
+
+
 def test_missing_skill_resource_is_not_reported_as_provider_failure(tmp_path):
     import pytest
     from lladar.skill_agent import AkashaSkillAgent, SkillRuntimeError
@@ -157,6 +240,7 @@ def test_direct_adapter_limits_bound_host_tool_calls(tmp_path):
     skill.mkdir()
     (skill / "SKILL.md").write_text("---\nname: bounded\ndescription: Budget.\n---\nSubmit facts.")
     model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "bounded"}, "id": "load"}]),
         AIMessage(content="", tool_calls=[{"name": "record", "args": {"value": str(i)}, "id": f"call-{i}"}
                                           for i in range(41)]),
     ])
@@ -173,6 +257,7 @@ def test_default_skill_budget_allows_work_past_the_old_forty_call_limit(tmp_path
     skill.mkdir()
     (skill / 'SKILL.md').write_text('---\nname: larger-budget\ndescription: Budget.\n---\nSubmit facts.', encoding='utf-8')
     model = ToolScriptModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'load_skill', 'args': {'reference': 'larger-budget'}, 'id': 'load'}]),
         AIMessage(content='', tool_calls=[{'name': 'record', 'args': {'value': str(i)}, 'id': f'call-{i}'} for i in range(41)]),
         AIMessage(content='Done'),
     ])

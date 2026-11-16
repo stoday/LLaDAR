@@ -119,6 +119,11 @@ class IndependentTarget:
         key = hashlib.sha256(origin(page_url).encode()).hexdigest()[:20]
         profile = Path(runs_root or '.lladar') / 'browser-profiles' / (key + ('-' + secrets.token_hex(6) if fresh_profile else ''))
         self.recorder = recorder or DemonstrationRecorder(page_url=page_url, workspace=self.workspace, profile_dir=profile)
+        from .browser_http_auth import BrowserHttpAuth
+        self.http_auth = BrowserHttpAuth(input_fn=self._input,
+            password_fn=self._password_input, output_fn=self.output_fn)
+        if hasattr(self.recorder, 'browser'):
+            self.recorder.browser.http_auth = self.http_auth
         self.store = self.recorder.store
         self.demo_question = (probe_question if probe_question is not None else
             'Please describe what assistance this service provides. [DEMO-' +
@@ -147,13 +152,17 @@ class IndependentTarget:
         self._last_progress = time.monotonic()
         self.progress = ProgressReporter(enabled=verbose)
 
-    def _input(self, prompt):
+    def _password_input(self, prompt):
+        from getpass import getpass
+        return self._input(prompt, input_fn=getpass)
+
+    def _input(self, prompt, *, input_fn=None):
         with ExitStack() as stack:
             stack.enter_context(self.progress.user_input())
             session = current_session()
             for reporter in session.reporters if session else ():
                 stack.enter_context(reporter.user_input())
-            return read_user_input(prompt, input_fn=self.input_fn)
+            return read_user_input(prompt, input_fn=input_fn or self.input_fn)
 
     def _record(self):
         self.evidence['stage'] = 'demonstration'
@@ -232,6 +241,8 @@ class IndependentTarget:
                 integrity = json.loads(state_path.with_suffix('.integrity.json').read_text(encoding='utf-8'))
                 if integrity.get('sha256') != digest(self.state):
                     raise IndependentAdapterError('state_integrity_failed')
+                self.http_auth.restore(self.state.get('http_basic_auth_origins', []),
+                    self.state['allowed_origins'])
                 demonstration = self.workspace / 'recording' / 'demonstration.json'
                 if not demonstration.is_file() and self.adapter_path is None:
                     self.recorder.recover_completed_capture(self.state)
@@ -296,6 +307,7 @@ class IndependentTarget:
             allowed_origins=self.state['allowed_origins'], workspace=self.workspace / 'runtime',
             timeout=self.timeout, conversation_policy=self.policy,
             browser_profile_dir=getattr(browser, 'profile_dir', None),
+            http_auth=self.http_auth,
             debit=lambda: self.ledger.debit('website_requests', resource_limit('BROWSER_DISCOVERY_REQUESTS')))
 
     def _verify(self, turn):
@@ -327,7 +339,7 @@ class IndependentTarget:
         from .browser_discovery_driver import GenericBrowserDriver
         self.output_fn(tr('Same-turn full-answer review is needed. The program temporarily opens the website; find the preceding question and complete answer. Do not submit it again.'))
         browser = GenericBrowserDriver(page_url=turn.get('reference_url') or self.state['page_url'],
-            profile_dir=self.recorder.browser.profile_dir, timeout=self.timeout)
+            profile_dir=self.recorder.browser.profile_dir, timeout=self.timeout, http_auth=self.http_auth)
         with browser.manual_interaction():
             try:
                 browser.open()
@@ -694,3 +706,4 @@ class IndependentTarget:
             self.adapter.close()
         self.recorder.close()
         self.progress.close()
+        self.http_auth.clear()

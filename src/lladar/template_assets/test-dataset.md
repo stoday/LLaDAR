@@ -165,3 +165,7 @@ directory.
 With `--from-github`, the selected Skill must also handle `github_discovery`
 and `github_review`; see the repository GitHub-generation documentation for
 that advanced workflow.
+
+## Independent inventory and coverage stages
+
+The host schedules independent `inventory`, `inventory_audit`, `generation`, and `coverage_review` work. Customize fact scope and granularity as well as question style in SKILL.md. In inventory work, submit complete facts and exact evidence with `submit_inventory_batch`. Use `complete=False` for partial submissions and `complete=True` when the page is fully processed. Carry incomplete ranges as `pending` and retain necessary subject or heading citations in `context`. After source extraction, use paged inventory tools and `revise_inventory_point` to merge duplicates or add later conditions. In generation, read the independent points and assigned source ranges. During coverage review, inspect complete published questions and evidence before accepting mappings or exclusions. The host computes both coverage denominators from the final inventory and publishes all records in the existing `.generation.json`. `lladar report` renders the saved results on demand.

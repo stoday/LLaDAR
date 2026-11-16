@@ -97,6 +97,10 @@ def read_evaluation(source: str | Path) -> dict:
         evaluation = json.loads(Path(source).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise EvaluationError(f"could not read evaluation JSON: {source}") from error
+    if isinstance(evaluation, dict) and {"schema_version", "dataset", "knowledge_points", "sources", "stats", "qa"} <= set(evaluation):
+        if not isinstance(evaluation["dataset"], dict) or not isinstance(evaluation["dataset"].get("lines"), list):
+            raise EvaluationError("generation JSON contains an invalid dataset")
+        return evaluation
     optional = {"session", "evaluation_settings", "max_input_tokens", "max_output_tokens"}
     situation = isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation"
     required = ({"kind", "source", "situation_config", "situation_sha256", "evaluator_model", "method", "observe", "summary", "items"}
@@ -122,11 +126,88 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     if target.exists() and not force:
         raise FileExistsError(f"output already exists: {target}")
     evaluation = read_evaluation(source)
+    if "dataset" in evaluation:
+        from .knowledge_coverage import render_coverage_report
+
+        text = render_coverage_report(evaluation)
+        narrative_metadata = {}
+        if skill is not None:
+            from .knowledge_coverage import coverage_summary
+
+            facts = {
+                'plan': {'dimensions': [], 'purpose': 'Coverage of independently inventoried source facts'},
+                'summary': coverage_summary(evaluation['inventory'], evaluation['coverage']['reviews'],
+                    len(evaluation['dataset']['lines'])) if 'inventory' in evaluation and 'coverage' in evaluation else {},
+                'aggregates': {}, 'items': [],
+                'inventory': evaluation.get('inventory'), 'coverage': evaluation.get('coverage'),
+            }
+            workspace, semantic_review = _report_narrative(facts, resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR),
+                ProgressReporter(verbose), model, env_file, skill_agent_factory, review_agent_factory, profile)
+            title, body = text.split('\n', 1)
+            text = '\n'.join([title, '', workspace.narrative['overview'], body.rstrip(), '',
+                tr('## Results'), '', workspace.narrative['findings'], '', tr('## Limitations'), '',
+                workspace.narrative['limitations'], ''])
+            narrative_metadata = {'semantic_review': semantic_review, 'sections': {
+                key: workspace.submissions.get(key) for key in ('overview', 'findings', 'limitations')}}
+        publish_bundle({target: text, Path(str(target) + ".report.json"): json.dumps({
+            "schema_version": 1, "kind": "question_coverage_report", "source": str(source.resolve()),
+            "status": "complete", "session": publication_metadata(),
+            **narrative_metadata,
+        }, ensure_ascii=False, indent=2) + "\n"}, force=force, result=target)
+        return target
     if isinstance(evaluation, dict) and evaluation.get("kind") == "situation_evaluation":
         return _situation_report(evaluation, target, skill=skill, model=model,
                                  env_file=env_file, skill_agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens, force=force)
     selected_skill = resolve_skill(skill, BUILTIN_REPORT_SKILL_DIR)
     reporter = ProgressReporter(verbose)
+    workspace, semantic_review = _report_narrative(evaluation, selected_skill, reporter, model, env_file,
+        skill_agent_factory, review_agent_factory, profile)
+    lines = [tr('# LLaDAR evaluation report'), "", workspace.narrative["overview"], "", tr('## Summary'), "", tr('| Metric | Value |'), "| --- | ---: |"]
+    lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in evaluation["summary"].items()]
+    lines += _evaluation_settings_lines(evaluation)
+    lines += ["", tr('## Results'), "", workspace.narrative["findings"], ""]
+    for name, aggregate in evaluation["aggregates"].items():
+        lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", tr('| Metric | Value |'), "| --- | ---: |"]
+        lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
+    has_correctness = any(d["name"] == "correct" and d["kind"] == "boolean"
+                          for d in evaluation["plan"]["dimensions"]) or any(
+        type(item.get("values", {}).get("correct")) is bool for item in evaluation["items"])
+    type_rows = _question_type_rows(evaluation["items"]) if has_correctness else []
+    if type_rows:
+        lines += ["", tr('## By question type'), "", tr('| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |'), "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+        for row in type_rows:
+            lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
+    probe_rows = _semantic_probe_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
+    if probe_rows:
+        lines += ["", tr('## Semantic probes'), "", tr('| Concept | Scheduled | Mapped | Synthesized | Unmapped |'), "| --- | ---: | ---: | ---: | ---: |"]
+        for row in probe_rows:
+            lines.append("| {concept_id} | {scheduled} | {mapped} | {synthesized} | {unmapped} |".format(**{key: _value(value) for key, value in row.items()}))
+    controlled_rows = _controlled_variant_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
+    if controlled_rows:
+        lines += ["", tr('## Controlled variants'), "", tr('| Dimension | Pair | Scheduled | Mapped | Same | Different | Indeterminate |'), "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+        for row in controlled_rows:
+            lines.append("| {varied_dimension} | {pair_id} | {scheduled} | {mapped} | {same} | {different} | {indeterminate} |".format(**{key: _value(value) for key, value in row.items()}))
+    if evaluation["stability"]["records"]:
+        lines += ["", tr('## Stability'), "", tr('| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |'), "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
+    for row in evaluation["stability"]["records"]:
+        lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
+    lines += ["", tr('## Limitations'), "", workspace.narrative["limitations"], "", tr('## Trial appendix'), "", tr('| Record | Trial | Question | Expected answer | Actual response | Status | Judgment | Reason |'), "| ---: | ---: | --- | --- | --- | --- | --- | --- |"]
+    for item in evaluation["items"]:
+        lines.append("| {record_index} | {trial} | {question} | {expected_answer} | {actual_response} | {status} | {values} | {reason} |".format(**{key: _cell(json.dumps(value, ensure_ascii=False, sort_keys=True) if key == "values" else value) for key, value in item.items()}))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    report_sidecar = Path(str(target) + ".report.json")
+    publish_bundle({target: "\n".join(lines).rstrip() + "\n", report_sidecar: json.dumps({
+        "schema_version": 1, "session": publication_metadata(), "status": "complete",
+        "semantic_review": semantic_review,
+        "sections": {key: workspace.submissions.get(key) for key in ("overview", "findings", "limitations")},
+        "source": str(source.resolve())}, ensure_ascii=False, indent=2) + "\n"}, force=force, result=target)
+    reporter.emit("WRITE", tr('Report: {p0}', p0=target.resolve()))
+    reporter.done(3, metric="sections")
+    return target
+
+
+def _report_narrative(evaluation, selected_skill, reporter, model, env_file,
+                      skill_agent_factory, review_agent_factory, profile):
     workspace = ReportWorkspace(evaluation, reporter)
     if workspace.narrative is None:
         with reporter.waiting(tr('Writing report'), label="REPORT"):
@@ -197,48 +278,7 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
                 agent_factory=skill_agent_factory, max_input_tokens=profile.max_input_tokens, max_output_tokens=profile.max_output_tokens)
             if workspace.narrative is None:
                 raise EvaluationError("report sections remain incomplete after review")
-    lines = [tr('# LLaDAR evaluation report'), "", workspace.narrative["overview"], "", tr('## Summary'), "", tr('| Metric | Value |'), "| --- | ---: |"]
-    lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in evaluation["summary"].items()]
-    lines += _evaluation_settings_lines(evaluation)
-    lines += ["", tr('## Results'), "", workspace.narrative["findings"], ""]
-    for name, aggregate in evaluation["aggregates"].items():
-        lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", tr('| Metric | Value |'), "| --- | ---: |"]
-        lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
-    has_correctness = any(d["name"] == "correct" and d["kind"] == "boolean"
-                          for d in evaluation["plan"]["dimensions"]) or any(
-        type(item.get("values", {}).get("correct")) is bool for item in evaluation["items"])
-    type_rows = _question_type_rows(evaluation["items"]) if has_correctness else []
-    if type_rows:
-        lines += ["", tr('## By question type'), "", tr('| Question type | Scheduled | Execution error | Evaluated | Invalid response format | Correct | Correct rate |'), "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
-        for row in type_rows:
-            lines.append("| {question_type} | {scheduled} | {execution_error} | {evaluated} | {invalid_response_format} | {correct} | {correct_rate} |".format(**{key: _value(value) for key, value in row.items()}))
-    probe_rows = _semantic_probe_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
-    if probe_rows:
-        lines += ["", tr('## Semantic probes'), "", tr('| Concept | Scheduled | Mapped | Synthesized | Unmapped |'), "| --- | ---: | ---: | ---: | ---: |"]
-        for row in probe_rows:
-            lines.append("| {concept_id} | {scheduled} | {mapped} | {synthesized} | {unmapped} |".format(**{key: _value(value) for key, value in row.items()}))
-    controlled_rows = _controlled_variant_rows(evaluation["items"]) if "mapping_outcome" in evaluation["aggregates"] else []
-    if controlled_rows:
-        lines += ["", tr('## Controlled variants'), "", tr('| Dimension | Pair | Scheduled | Mapped | Same | Different | Indeterminate |'), "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
-        for row in controlled_rows:
-            lines.append("| {varied_dimension} | {pair_id} | {scheduled} | {mapped} | {same} | {different} | {indeterminate} |".format(**{key: _value(value) for key, value in row.items()}))
-    if evaluation["stability"]["records"]:
-        lines += ["", tr('## Stability'), "", tr('| Record | Trials | Correct | Incorrect | Execution error | Judge error | Correct rate | Fully correct | Outcome consistent |'), "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |"]
-    for row in evaluation["stability"]["records"]:
-        lines.append("| {record_index} | {scheduled_trials} | {correct} | {incorrect} | {execution_error} | {judge_error} | {correct_rate} | {fully_correct} | {outcome_consistent} |".format(**{key: _value(value) for key, value in row.items()}))
-    lines += ["", tr('## Limitations'), "", workspace.narrative["limitations"], "", tr('## Trial appendix'), "", tr('| Record | Trial | Question | Expected answer | Actual response | Status | Judgment | Reason |'), "| ---: | ---: | --- | --- | --- | --- | --- | --- |"]
-    for item in evaluation["items"]:
-        lines.append("| {record_index} | {trial} | {question} | {expected_answer} | {actual_response} | {status} | {values} | {reason} |".format(**{key: _cell(json.dumps(value, ensure_ascii=False, sort_keys=True) if key == "values" else value) for key, value in item.items()}))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    report_sidecar = Path(str(target) + ".report.json")
-    publish_bundle({target: "\n".join(lines).rstrip() + "\n", report_sidecar: json.dumps({
-        "schema_version": 1, "session": publication_metadata(), "status": "complete",
-        "semantic_review": semantic_review,
-        "sections": {key: workspace.submissions.get(key) for key in ("overview", "findings", "limitations")},
-        "source": str(source.resolve())}, ensure_ascii=False, indent=2) + "\n"}, force=force, result=target)
-    reporter.emit("WRITE", tr('Report: {p0}', p0=target.resolve()))
-    reporter.done(3, metric="sections")
-    return target
+    return workspace, semantic_review
 
 
 def _evaluation_settings_lines(evaluation: dict[str, Any]) -> list[str]:

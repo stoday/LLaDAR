@@ -187,7 +187,9 @@ def test_browser_ui_candidate_sends_current_question_and_collects_answer(tmp_pat
     calls = []
 
     class FakeBrowserUiAdapter:
-        def __init__(self, plan):
+        def __init__(self, plan, *, http_auth=None):
+            assert http_auth is not None
+            assert 'http_auth' not in plan
             calls.append(plan)
 
         def run(self, question):
