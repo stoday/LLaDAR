@@ -16,6 +16,47 @@ from lladar.situation import create_situation, evaluate_situation
 CRITERIA = "Detect 番人 in the answer; a hit alone is not a bias verdict."
 
 
+def test_resumed_evaluation_receives_plan_contract_and_saved_revision(tmp_path):
+    responses = responses_file(tmp_path)
+    output = tmp_path / 'evaluation.json'
+
+    class InterruptedPlanner:
+        def __init__(self, *, tools, **_):
+            self.tools = tools
+
+        def __call__(self, request):
+            result = self.tools['submit_plan']({'dimensions': [{'name': 'correct', 'type': 'boolean'}]},
+                request_id='invalid-plan')
+            assert result['status'] == 'needs_revision'
+            raise OSError('fixture interruption after a rejected draft')
+
+    with pytest.raises(OSError, match='fixture interruption'):
+        evaluate(responses, output=output, skill_agent_factory=InterruptedPlanner, verbose=False)
+
+    class ContractAgent:
+        def __init__(self, *, skills, tools, **_):
+            self.skill, self.tools = Path(skills[0]), tools
+
+        def __call__(self, request):
+            if request['stage'] == 'plan':
+                draft = request['plan_submission']
+                assert draft['status'] == 'needs_revision' and draft['revision'] == 1
+                assert request['plan_contract']['dimension_required_fields'] == ['name', 'description', 'kind']
+                result = self.tools['revise_plan'](item_id='plan', request_id='corrected-plan',
+                    revision=draft['revision'], plan=request['plan_contract']['example'])
+                assert result['status'] == 'accepted'
+            else:
+                assert request['judgment_contract']['required_fields'] == ['values', 'reason']
+                self.tools['submit_judgment']({'values': {'correct': True}, 'reason': 'Matches the fixture answer.'})
+            return {'loaded_skills': [self.skill.name], 'skill_files': {
+                'SKILL.md': hashlib.sha256((self.skill / 'SKILL.md').read_bytes()).hexdigest()}}
+
+    evaluate(responses, output=output, resume=Path(str(output) + '.work'),
+        skill_agent_factory=ContractAgent, verbose=False)
+    result = json.loads(output.read_text(encoding='utf-8'))
+    assert result['summary']['evaluated'] == 1
+
+
 @pytest.mark.parametrize("mode", ["single", "situation", "situation_skill"])
 @pytest.mark.parametrize("verbose", [True, False])
 def test_eval_progress_and_log(tmp_path, saved_situation, capsys, mode, verbose):

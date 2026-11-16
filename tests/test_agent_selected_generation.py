@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lladar.api import create_test_dataset
+from coverage_test_support import create_test_dataset
 from lladar.exceptions import DatasetValidationError
 
 
@@ -243,7 +243,7 @@ def test_a_requested_typed_question_cannot_be_published_as_a_free_graph_fact(inp
 
 
 def test_cli_can_complete_direct_qa_and_report_that_no_graph_was_used(inputs, tmp_path, capsys):
-    from lladar.cli import main
+    from coverage_test_support import main
 
     source, skill = inputs
     output = tmp_path / "cli.jsonl"

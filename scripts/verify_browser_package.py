@@ -27,7 +27,7 @@ def verify(path: Path) -> None:
         with tarfile.open(path, "r:gz") as archive:
             names = archive.getnames()
             metadata = [archive.extractfile(name).read().decode("utf-8") for name in names if name.endswith("/PKG-INFO")]
-        for required in ("scripts/cleanup_generated.py", "tests/conftest.py"):
+        for required in ("scripts/cleanup_generated.py", "tests/conftest.py", "tests/coverage_test_support.py"):
             if not any(name.endswith("/" + required) for name in names):
                 raise ValueError("Source archive is missing " + required)
     sources = {Path(name).name for name in names if name.startswith("lladar/") or "/lladar/" in name}

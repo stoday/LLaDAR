@@ -193,7 +193,7 @@ def stage_session(stage):
             if resource_overrides:
                 configuration['resource_limits'] = resource_overrides
             ignored = {"output", "resume", "force", "verbose", "env_file", "github_client",
-                "skill_agent_factory", "review_agent_factory", "strategy_agent_factory", "browser_target_factory",
+                "skill_agent_factory", "coverage_agent_factory", "review_agent_factory", "strategy_agent_factory", "browser_target_factory",
                 "extraction_provider_factory", "interface_selector", "controlled_variant_selector",
                 "interactive", "confirm_browser_run", "runs_root", "extend_model_calls"}
             for key, value in values.items():

@@ -6,7 +6,7 @@ import pytest
 from lladar import cli
 from lladar.language import Language, current_language, language_scope, normalize_lang
 from lladar.skill_templates import create_skill_template
-from lladar.api import create_test_dataset
+from coverage_test_support import create_test_dataset
 from lladar.evaluation import evaluate
 from lladar.reporting import create_report
 from lladar.runner import run_agent

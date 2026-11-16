@@ -43,6 +43,11 @@ Configure your model provider's credentials in `.env` or the process environment
 Your target Agent also needs its own runtime configuration. Check the installed
 version with `lladar --version`.
 
+Every CLI invocation immediately prints a short startup message to stderr before
+loading application components, including help, version, invalid arguments, and
+`--no-verbose`. `--lang` selects its display language. The message does not change
+stdout data or the command's exit status.
+
 To clarify a goal before testing, start an interactive planning conversation:
 
 ```bash
@@ -75,6 +80,15 @@ lladar report evaluation.json --output report.md
 This takes you from **documents → test questions → actual responses → evaluation
 → report**. Open `report.md` to review the results and individual test evidence.
 You can also use an existing question set or reevaluate saved responses.
+
+Document generation inventories facts in batches, reconciles duplicates and fact
+boundaries, and independently audits the source. The existing
+`dataset.jsonl.generation.json` saves the inventory, reviewed question mappings,
+exclusions and both coverage rates. To read coverage and outstanding gaps, run:
+
+```bash
+lladar report dataset.jsonl.generation.json --output coverage-report.md
+```
 
 ### Have a chat website instead?
 
@@ -294,6 +308,7 @@ The discovery Agents do not read future dataset questions or expected answers, o
 
 Authorized raw recordings and scoped service state can include URLs, headers, Cookie/Authorization, bodies, client scripts, binary material and necessary storage items.
 Provider keys, `.env`, full browser profiles and unrelated website storage remain host-owned. Sign-in and MFA/CAPTCHA are manual; DOM password/OTP values are not recorded.
+For an HTTP Basic Auth entrance, the terminal asks for a username and a hidden password, with at most three credential attempts. Credentials remain in memory for this run, are scoped to that origin, and are excluded from recordings and model input. Reopened browsers and formal HTTP/WebSocket requests reuse them; resuming or reusing an adapter asks again.
 Verbose Agent traces may contain authorized raw material; treat saved logs as private. `--no-verbose` retains necessary user instructions.
 
 Every turn checks source and completion. Without an independent full-answer reference, a temporary browser permits same-turn review: `MATCH` if identical, `MISMATCH` if different, `WAIT` if unfinished.
@@ -455,6 +470,23 @@ The file includes emitted progress, Agent traces, summaries, and errors without
 ANSI color codes. `--no-verbose` suppresses detailed output in both the terminal
 and the log. Parent directories are created automatically; use a new filename
 for each run because existing logs are preserved.
+
+Before workflow execution, the CLI also shows the environment file location,
+whether it exists, and the selected model's required credential variables with
+their set/unset status and effective source. Values and key fragments are never
+printed. Paths within the working directory are relative; files outside it use
+`<external>/FILENAME` to avoid exposing parent directories. `--no-verbose` hides
+this diagnostic summary along with other detailed progress.
+
+Akasha uses an existing `--env-file` exclusively; when it is missing, it reads
+the process environment. A credential absent from an existing file is therefore
+reported as unset even if the process has it. For project `run-agent` commands,
+separate `target_env` rows show how those same variables reach the target:
+process variables win and the file only fills missing variables. An empty
+process value still takes precedence. These rows describe inherited inputs,
+not configuration loaded later by the target application. Interpolated file
+entries are marked explicitly. This summary checks credential presence, not
+credential validity, SDK endpoint configuration, or every target-specific variable.
 
 With `--page-url`, progress shows the current discovery stage, safe tool names and
 ledger counts, with periodic waiting messages. Tool arguments/results and model

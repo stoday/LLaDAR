@@ -1,5 +1,6 @@
 """Command logging preserves terminal behavior and output files."""
 
+import re
 import sys
 
 import pytest
@@ -50,9 +51,14 @@ def test_existing_log_is_preserved_before_workflow_starts(tmp_path, capsys):
     assert "lladar:" in capsys.readouterr().err
 
 
-def test_browser_terminal_detection_and_cancellation_survive_logging(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("no_color", [False, True])
+def test_browser_terminal_detection_and_cancellation_survive_logging(tmp_path, monkeypatch, capsys, no_color):
     import lladar.cli as cli
 
+    if no_color:
+        monkeypatch.setenv("NO_COLOR", "1")
+    else:
+        monkeypatch.delenv("NO_COLOR", raising=False)
     log = tmp_path / "browser.log"
     original_streams = sys.stdout, sys.stderr
 
@@ -71,5 +77,8 @@ def test_browser_terminal_detection_and_cancellation_survive_logging(tmp_path, m
     error = capsys.readouterr().err
     assert "Review remains visible" in error
     assert "Cancelled" in error
-    assert error == log.read_text(encoding="utf-8")
+    logged = log.read_text(encoding="utf-8")
+    assert "\x1b[" not in logged
+    assert ("\x1b[" in error) is not no_color
+    assert re.sub(r"\x1b\[[0-9;]*m", "", error) == logged
     assert (sys.stdout, sys.stderr) == original_streams

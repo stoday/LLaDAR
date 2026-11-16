@@ -37,6 +37,10 @@ python -m pip install lladar
 在 `.env` 或程序環境設定模型供應者的憑證；受測 Agent 也須備妥自己的執行環境設定。
 使用 `lladar --version` 查看已安裝版本。
 
+每次執行 CLI 都會先立即在 stderr 顯示啟動提示，再載入功能元件，包括查看說明、
+版本、引數錯誤與使用 `--no-verbose` 時。提示語言由 `--lang` 選擇；
+不影響 stdout 的資料輸出與指令結束代碼。
+
 想先釐清測試目標，可啟動互動式規劃：
 
 ```powershell
@@ -65,6 +69,13 @@ lladar report evaluation.json --output report.md
 
 這四步串起 **文件 → 測試問題 → 真實回答 → 評估 → 報告**。
 開啟 `report.md` 檢視結果與逐筆測試證據。也可以使用既有題庫，或重新評估已保存的回答。
+
+文件出題會先分批盤點知識點、整理重複與粒度，再獨立覆核原文。知識清單、題目對應、
+排除原因與兩種覆蓋率集中保存於既有 `dataset.jsonl.generation.json`。需要閱讀覆蓋與待補題明細時執行：
+
+```bash
+lladar report dataset.jsonl.generation.json --output coverage-report.md
+```
 
 注意：從文件出題主要是檢查回答是否符合知識文件裡的正確答案，不等於完整的幻覺或超出文件內容偵測。
 
@@ -256,6 +267,7 @@ lladar run-agent dataset.jsonl --page-url https://example.test/chat --output res
 
 已授權的網站原文與選定服務必要狀態，包括 headers、Cookie／Authorization、body、客戶端 JavaScript、binary 及需要的 storage 項目，可供模型查閱。
 原文與狀態放在本機私有工作產物；`.env`、provider key、完整瀏覽器設定檔及其他網站 storage 不交給 Agent。登入、MFA／CAPTCHA 由你處理，DOM 密碼／OTP 值不錄製。
+若網站入口要求 HTTP Basic Auth，終端會提示帳號與隱藏輸入的密碼；錯誤帳密最多重試三次。入口帳密僅留在本次執行記憶體，限同一網站來源使用，錄製資料不保存或提供模型查閱。示範後重開瀏覽器與正式 HTTP／WebSocket 請求會沿用本次帳密；`--resume` 或重用 adapter 時須重新輸入。
 `--verbose` 顯示 Agent 工具 trace，可能包含已授權原文，保存的日誌應視為私有資料；`--no-verbose` 仍保留必須操作的提示。
 
 每題都檢查來源與完成。若無獨立全文基準，程式會暫時開網站供你核對同回合原文：符合輸入 `MATCH`，不符輸入 `MISMATCH`，未完成輸入 `WAIT`。

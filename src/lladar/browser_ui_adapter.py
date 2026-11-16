@@ -12,13 +12,15 @@ import time
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import sync_playwright
+from .browser_http_auth import BasicAuthChallenge, BrowserHttpAuth
 
 
 class BrowserUiAdapter:
     """Run a recording-derived UI plan against a saved browser profile."""
 
-    def __init__(self, plan: dict):
+    def __init__(self, plan: dict, *, http_auth=None):
         self.plan = dict(plan)
+        self.http_auth = http_auth or BrowserHttpAuth()
         required = ('page_url', 'profile_dir', 'input_selector', 'submit', 'answer_selector')
         missing = [key for key in required if not self.plan.get(key)]
         if missing:
@@ -70,19 +72,29 @@ class BrowserUiAdapter:
         return question in posted
 
     def run(self, question: str) -> dict:
+        for attempt in range(4):
+            try:
+                return self._run_once(question)
+            except BasicAuthChallenge:
+                if attempt == 3:
+                    raise RuntimeError('browser_authentication_required') from None
+                self.http_auth.prompt(self.plan['page_url'])
+
+    def _run_once(self, question: str) -> dict:
         if not isinstance(question, str) or not question.strip():
             raise ValueError('browser_ui_question_invalid')
         timeout_ms = int(self.plan.get('timeout_seconds', 90) * 1000)
         with sync_playwright() as playwright:
             context = playwright.chromium.launch_persistent_context(
                 self.plan['profile_dir'], headless=self.plan.get('headless', False),
-                timeout=min(timeout_ms, 30000))
+                timeout=min(timeout_ms, 30000),
+                **self.http_auth.launch_options(self.plan['page_url']))
             try:
                 page = context.pages[0] if context.pages else context.new_page()
                 post_responses = []
                 page.on('response', lambda response: post_responses.append(response)
                         if response.request.method == 'POST' else None)
-                page.goto(self.plan['page_url'], wait_until='domcontentloaded',
+                self.http_auth.navigate(page, self.plan['page_url'], wait_until='domcontentloaded',
                           timeout=timeout_ms)
                 if self.plan.get('open'):
                     page.locator(self.plan['open']['selector']).click(timeout=timeout_ms)

@@ -23,6 +23,7 @@ from typing import Any
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 from .resource_limits import resource_limit
+from .browser_http_auth import BasicAuthChallenge, BrowserHttpAuth
 
 
 class BrowserDiscoveryError(RuntimeError):
@@ -267,7 +268,7 @@ class GenericBrowserDriver:
     def __init__(self, *, page_url: str, profile_dir: str | Path, timeout: float = 60,
                  headless: bool = False, allowed_origins: list[str] | None = None,
                  capture_byte_limit: int | None = None, dom_node_limit: int | None = None,
-                 dom_character_limit: int | None = None, recording_store=None):
+                 dom_character_limit: int | None = None, recording_store=None, http_auth=None):
         if not isinstance(timeout, (float, int)) or not math.isfinite(timeout) or timeout <= 0:
             raise BrowserDiscoveryError("browser_timeout_invalid")
         for limit in (capture_byte_limit, dom_node_limit, dom_character_limit):
@@ -278,6 +279,7 @@ class GenericBrowserDriver:
         self.dom_character_limit = dom_character_limit or resource_limit("DOM_CAPTURE_CHARS")
         self.page_url, self.profile_dir = page_url, Path(profile_dir)
         self.recording_store = recording_store
+        self.http_auth = http_auth or BrowserHttpAuth()
         self._recording_prefix = ('capture-' + uuid.uuid4().hex + '-') if recording_store is not None else ''
         self.timeout, self.headless = timeout, headless
         self.allowed_origins = {_origin(page_url), *(_origin(u) for u in (allowed_origins or []))}
@@ -502,6 +504,18 @@ class GenericBrowserDriver:
         page.route_web_socket("**/*",intercept)
 
     def open(self, page_url: str | None = None) -> dict[str, Any]:
+        for attempt in range(4):
+            try:
+                return self._open_once(page_url)
+            except BasicAuthChallenge:
+                if attempt == 3:
+                    raise BrowserDiscoveryError('browser_authentication_required') from None
+                try:
+                    self.http_auth.prompt(page_url or self.page_url)
+                except BasicAuthChallenge:
+                    raise BrowserDiscoveryError('browser_authentication_required') from None
+
+    def _open_once(self, page_url: str | None = None) -> dict[str, Any]:
         if self.context is not None:
             return self.inspect()
         from playwright.sync_api import sync_playwright
@@ -511,6 +525,7 @@ class GenericBrowserDriver:
             self.context = self._engine.chromium.launch_persistent_context(
                 str(self.profile_dir), headless=self.headless,
                 timeout=resource_limit("BROWSER_STARTUP_TIMEOUT_SECONDS") * 1000,
+                **self.http_auth.launch_options(page_url or self.page_url),
             )
             if self._manual_depth:
                 self._install_manual_dialog_listener()
@@ -542,9 +557,12 @@ class GenericBrowserDriver:
             self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             for page in self.context.pages:
                 self._new_page(page)
-            self.page.goto(page_url or self.page_url, wait_until="domcontentloaded",
+            self.http_auth.navigate(self.page, page_url or self.page_url, wait_until="domcontentloaded",
                            timeout=resource_limit("BROWSER_NAVIGATION_TIMEOUT_SECONDS") * 1000)
             return self.inspect()
+        except BasicAuthChallenge:
+            self.close()
+            raise
         except Exception:
             self.close()
             raise BrowserDiscoveryError("browser_open_failed") from None
@@ -721,6 +739,7 @@ class GenericBrowserDriver:
     def _record(self, kind: str, data: dict[str, Any], *, turn_id: Any = _CURRENT_TURN) -> str:
         if self._overflow:
             return ""
+        data = self.http_auth.redact(data)
         if isinstance(data.get("binary_b64"), str):
             try:
                 data = {**data, "payload_sha256": hashlib.sha256(base64.b64decode(data["binary_b64"],validate=True)).hexdigest()}
@@ -894,7 +913,7 @@ class GenericBrowserDriver:
                   "event_count": len(self._events), "capture_over_limit": self._overflow}
         if len(json.dumps(result, ensure_ascii=False)) > self.dom_character_limit:
             raise BrowserDiscoveryError("browser_dom_limit")
-        return result
+        return self.http_auth.redact(result)
 
     def begin_turn(self, turn_id: str) -> dict[str, Any]:
         self._check()

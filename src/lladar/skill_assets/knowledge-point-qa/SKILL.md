@@ -34,6 +34,15 @@ rather than waiting for mandatory extraction, graph, or planning stages.
 
 ## Read meaningful knowledge passages
 
+Follow the request's stage and use its available tools.
+
+- For `inventory` and `inventory_audit`, read the supplied source page and submit complete facts with `submit_inventory_batch(points, pending, reason)`. Each point has `statement`, `topic`, and `evidence` with `source_id`, absolute `start_char`, and exact `quote`. Preserve incomplete endings as pending ranges. Submit facts before using paged inventory lookups to reconcile duplicates or later conditions with `revise_inventory_point`. The audit starts from the original source. Question style affects answerability after facts are inventoried.
+- For `generation`, read the assigned source range. Use `list_inventory_points` and `read_inventory_point` to plan questions from the independent inventory. During `coverage_repair`, focus on the requested inventory IDs. Follow `next_start` on every paged response and retain accepted work.
+- For `inventory_reconciliation`, check every assigned fact against related inventory points. Use `replace_inventory_point` to split independently testable facts and `revise_inventory_point` to merge semantic duplicates. Preserve citations, conditions and distinct events. Confirm completion with `finish_inventory_reconciliation` and report any unresolved issues.
+- For `coverage_review`, review every assigned point against published questions. Read complete evidence and question text with `read_coverage_item`, and browse questions with `list_coverage_questions`. Submit `knowledge_point_id`, `answerability` (`eligible`, `unresolved`, or `excluded`), `question_ids`, and a concrete `reason`. An eligible fact with no question uses `question_ids=[]`. Reserve unresolved for missing source/context information that prevents deciding answerability. Count only facts actually required by the question and expected answer. Exclusions require a scenario-based reason, and count or budget limits remain gaps.
+
+For inventory submissions, use `complete=False` for partial results and `complete=True` after the whole page is processed. Preserve needed subject and heading citations as `context`. During generation, follow these source-reading steps.
+
 1. Use `list_sources` and read every source with `read_source`.
    Follow `next_start` when a source spans multiple pages.
 2. Identify independently answerable passages. Keep subjects, quantities,

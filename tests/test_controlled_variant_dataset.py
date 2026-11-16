@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from lladar.api import create_test_dataset
+from coverage_test_support import create_test_dataset
 from lladar.exceptions import DatasetValidationError
 
 
