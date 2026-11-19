@@ -395,6 +395,26 @@ includes resume guidance when the failed invocation supplies a work-session hint
 Wrong answers are evaluation findings; execution or judging errors are operation
 issues. No extra model call is made, and the original exit code is preserved.
 
+`create test-dataset` also tracks provider-reported input and output tokens across
+inventory, reconciliation, generation, audit, coverage review, and repair attempts.
+With verbose enabled (the default), each model response prints a `[TOKENS]` update
+with cumulative input, output, total, and the number of calls without usage data.
+Usage does not update token by token while waiting for a response, and tracking
+does not make extra token-count API calls.
+
+Totals and per-stage counts are saved in `token_usage` in
+`<output>.generation.json`, in the work-session checkpoint, and in the operation
+report. A coverage report generated from that sidecar also includes the saved
+usage. `--no-verbose` hides the live updates but still saves the counts. Resume
+retains session totals; the operation report separately lists tokens added by
+the current invocation. Earlier runs cannot be reconstructed from their text.
+
+`total_tokens` is input plus output. Cached input and reasoning output, when
+provided, are subsets rather than additional tokens. Missing provider metadata
+is unknown usage, not zero; the report marks incomplete accounting as `partial`
+or `unavailable`. Failed calls and retries hidden inside a provider may not return
+usage. These counts describe reported model usage, not a billing statement.
+
 The report location remains visible with `--no-verbose` and is saved in `--log`
 when the log is active. These reports omit raw prompts, answers, URLs,
 credentials, and arbitrary exception messages. They complement the terminal log,

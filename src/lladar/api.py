@@ -18,10 +18,12 @@ QUESTION_TYPES = ("free", "auto", "single-choice", "multiple-choice", "ranking")
 
 
 from .work_session import stage_session
+from .token_usage import token_usage_stage
 
 
 @language_stage
 @stage_session("generation")
+@token_usage_stage
 def create_test_dataset(
     knowledge: KnowledgeInput | None = None,
     *,

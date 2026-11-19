@@ -257,6 +257,10 @@ def stage_session(stage):
                     for path, expected in session.data["artifacts"].items():
                         if file_identity(path) != expected:
                             raise ValueError("completed session artifact changed: " + path)
+                    if stage == "generation" and session.data["state"].get("token_usage"):
+                        from .operation_report import current_operation
+                        from .token_usage import TokenUsage
+                        TokenUsage(saved=session.data["state"]["token_usage"], operation=current_operation())
                     result = session.data["result"]
                     return Path(result) if stage == "report" else result
                 if resume is not None and session.data.get("replace_authorized"):

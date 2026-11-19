@@ -480,6 +480,9 @@ def render_coverage_report(generation):
         return tr("Not applicable") if value is None else f"{100 * value:.1f}".rstrip("0").rstrip(".") + "%"
 
     lines = [tr("# LLaDAR question coverage report"), ""]
+    if generation.get("token_usage") is not None:
+        from .token_usage import usage_report_lines
+        lines += usage_report_lines(generation["token_usage"]) + [""]
     inventory, coverage = generation.get("inventory"), generation.get("coverage")
     if not isinstance(inventory, dict) or not isinstance(coverage, dict):
         return "\n".join(lines + [tr("No independent inventory is available; coverage cannot be calculated."), ""])

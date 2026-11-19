@@ -77,6 +77,7 @@ class OperationReport:
         self.hint = None
         self.done = False
         self.issues = False
+        self.token_usage = None
 
     def identify(self, prog):
         parts = prog.split()
@@ -189,6 +190,9 @@ class OperationReport:
                     lines.append(f"- `{key}`: `{_safe(value)}`")
         lines += ["", "## " + tr("Statistics"), ""]
         lines += [f"- `{key}`: {value}" for key, value in self.statistics.items()] or [tr("No operation statistics available.")]
+        if self.stage == "test-dataset":
+            from .token_usage import usage_report_lines
+            lines += usage_report_lines(self.token_usage)
         lines += ["", "## " + tr("Artifacts"), ""]
         for path in self.artifacts():
             now = _stamp(path)

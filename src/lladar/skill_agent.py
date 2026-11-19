@@ -156,11 +156,12 @@ class AkashaSkillAgent:
             raise SkillRuntimeError("selected skill file changed before model work")
 
     def __call__(self, request: dict) -> dict:
+        from .token_usage import model_usage
         try:
             self._check_unchanged()
             attempt_request = request
             for attempt in range(3):
-                with redirect_stdout(sys.stderr):
+                with model_usage(request.get("stage", "generation")), redirect_stdout(sys.stderr):
                     self.agent(json.dumps(attempt_request, ensure_ascii=False))
                 skill_name = self.agent.skill_context.names[0]
                 if skill_name in self.agent.skill_middleware.loaded_skill_names:

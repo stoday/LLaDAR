@@ -11,7 +11,7 @@ REQUIRED = {"answer_extraction.py", "extraction_provider.py", "response_capture.
             "recording_store.py", "demonstration_recorder.py", "independent_adapter.py", "independent_target.py", "independent_reference.py",
             "browser_agent_loop.py", "browser_discovery_driver.py", "browser_provenance.py", "browser_inspection.py",
             "browser_reference.py", "browser_materials.py", "browser_protocol_projection.py",
-            "protocol_runtime.py", "protocol_resources.py", "resource_limits.py", "terminal_review.py",
+            "protocol_runtime.py", "protocol_resources.py", "resource_limits.py", "terminal_review.py", "token_usage.py",
             "live_status.py", "adapter_documentation.py", "portable_api.py", "api_runtime.py", "api_guide.py"}
 REMOVED = {"generated_parser.py", "parser_generation.py", "parser_runtime.py", "parser_recording.py",
            "parser_cache.py", "parser_provider.py", "response_decoder.py", "browser_operation.py",

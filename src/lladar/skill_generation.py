@@ -84,6 +84,10 @@ class GenerationResult:
         content = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in self.records)
         self.provenance["dataset"]["sha256"] = hashlib.sha256(content.encode("utf-8")).hexdigest()
         self.provenance["session"] = publication_metadata()
+        from .token_usage import usage_snapshot
+        usage = usage_snapshot()
+        if usage is not None:
+            self.provenance["token_usage"] = usage
         sidecar = json.dumps(self.provenance, ensure_ascii=False, indent=2) + "\n"
         preflight_output(output, force=force, extra_paths=self.artifacts)
         targets = [output]
