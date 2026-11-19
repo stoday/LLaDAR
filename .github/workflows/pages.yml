@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "site/**"
+      - "scripts/build_site_search.py"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -28,6 +29,8 @@ jobs:
         uses: actions/checkout@v6
       - name: Configure Pages
         uses: actions/configure-pages@v5
+      - name: Build documentation search index
+        run: python3 scripts/build_site_search.py
       - name: Upload user guide
         uses: actions/upload-pages-artifact@v4
         with:

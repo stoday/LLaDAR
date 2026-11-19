@@ -4,3 +4,5 @@ include tests/conftest.py
 include tests/coverage_test_support.py
 include scripts/cleanup_generated.py
 include scripts/verify_browser_package.py
+include scripts/build_site_search.py
+recursive-include site *.html *.css *.js

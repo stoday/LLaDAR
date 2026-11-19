@@ -421,6 +421,19 @@ credentials, and arbitrary exception messages. They complement the terminal log,
 generation evidence report, and evaluation analysis report. If neither location
 can be written, a warning is shown; forced termination cannot guarantee a report.
 
+## Documentation search
+
+The [documentation website](https://stoday.github.io/LLaDAR/) has browser-based
+full-text search on every English and Traditional Chinese page. Search the current
+language or choose all languages; results include matching excerpts and links to
+the relevant section. Press `/` to focus search and Escape to close the results.
+Search terms stay in the browser.
+
+After editing website HTML, run `python scripts/build_site_search.py` to refresh
+`site/assets/search-index.js`. GitHub Pages also rebuilds this index before each
+deployment. For local preview, run `python -m http.server 8000 --directory site`
+and open `http://localhost:8000/`.
+
 ## Language
 
 Use `--lang CODE` on any workflow or Skill-template command, including `--help`.
