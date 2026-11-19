@@ -28,6 +28,15 @@
     <section>
       <h2>產生後先檢查什麼？</h2>
       <p>打開 <code>dataset.jsonl</code>，看看題目是不是在測真正關心的事情、預期答案是否合理，以及是否有足夠的來源說明可回頭確認。若文件本身不完整，題目也無法憑空補齊規則。</p>
+      <p><code>.generation.json</code> 另存來源、選定 Skill、設定、跳過項目，以及 <code>token_usage</code> 的總量與各階段用量。用量也保存在工作階段檢查點和 <code>dataset.jsonl.operation.md</code>；還可以<a href="report.html#token-usage">將保存的用量納入覆蓋率報告</a>。</p>
+    </section>
+    <section id="token-usage"><h2>執行中查看 token 用量</h2>
+      <p>從 v0.17.0 起，<code>create test-dataset</code> 會累計模型供應商回報的輸入與輸出 token。預設開啟 verbose，每次模型回應後以 <code>[TOKENS]</code> 更新累計數字，包含工具多輪呼叫與重試；等待回應時不會逐 token 更新。</p>
+      <pre><code>lladar create test-dataset --knowledge policy/ --output dataset.jsonl --lang zh-TW --verbose --log logs/create.log</code></pre>
+      <p>以下是示意數字，實際輸出還會附上時間：</p>
+      <pre><code>[TOKENS] 階段=generation 累計輸入=4000 輸出=600 合計=4600 tokens；未回報用量的呼叫=0</code></pre>
+      <p>LLaDAR 透過 Akasha／LangChain 讀取同一次模型回應附帶的 usage，不會為了統計再送一次提示詞，也不會增加 token 計數 API 呼叫。知識盤點、知識點對齊、出題、複查、覆蓋率審查與補題，實際執行時都會納入累計。</p>
+      <p><code>--no-verbose</code> 隱藏即時更新，但仍保存用量。<code>--resume</code> 接續工作階段總量，作業報告另外列出本次執行新增的用量。供應商未回報的部分是未知，不代表零；舊紀錄也無法只靠文字重建用量。詳見<a href="../reference/cli.html#token-usage">用量欄位與統計限制</a>。</p>
     </section>
     <section>
       <h2>想讓題目更符合團隊需求？</h2>

@@ -30,6 +30,11 @@
       <h2>把報告用在改善工作</h2>
       <p>報告不是只用來給一個分數。把未通過的題目分成幾類：是知識文件不清楚、Agent 沒有遵守規則、還是題目沒有涵蓋真正的使用情境？找出原因後，修改文件、Agent 或測試資料，再跑一次同樣流程，就能比較改善前後的差異。</p>
     </section>
+    <section id="token-usage"><h2>檢視出題覆蓋率與 token 用量</h2>
+      <pre><code>lladar report dataset.jsonl.generation.json --output dataset-coverage.md</code></pre>
+      <p>將生成 sidecar 交給 <code>report</code>，可檢視獨立盤點的知識點與題目覆蓋率。從 v0.17.0 起，若檔案含有 <code>token_usage</code>，報告也會附上已保存的輸入／輸出總量、各階段用量與統計限制。使用預設方法整理這份已保存的覆蓋率報告，不會再呼叫模型。</p>
+      <p>原本的出題命令也會產生 <code>dataset.jsonl.operation.md</code>，列出工作階段 token 總量及該次執行新增的用量。續跑接續累計；缺少用量紀錄表示未知，不代表零。舊 sidecar 若未保存 token，無法事後重建總量。這些數字描述出題流程，與供應商帳單比對前，請先閱讀<a href="../reference/cli.html#token-usage">欄位與限制說明</a>。</p>
+    </section>
     <section>
       <h2>需要團隊自己的報告格式？</h2>
       <p>可以用 <code>SKILL.md</code> 指定報告要包含的章節、語氣或審核欄位。即使改了呈現方式，逐題結果和統計仍會保留，讓讀者知道每個結論從哪裡來。</p>
