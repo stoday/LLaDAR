@@ -46,10 +46,11 @@ def _sha256(content: bytes) -> str:
 
 
 class AkashaSkillAgent:
-    """Pass one selected local skill directly to ``akasha.agents(skills=...)``."""
+    """Run the selected Akasha skill or the instructions supplied for a host-scoped phase."""
 
     def __init__(self, *, skills: list[str], tools: dict, system_prompt: str = SYSTEM_PROMPT,
-                 tool_call_limit: int = MAX_TOOL_CALLS, round_limit: int = MAX_ROUNDS, **options):
+                 tool_call_limit: int = MAX_TOOL_CALLS, round_limit: int = MAX_ROUNDS,
+                 host_scoped: bool = False, **options):
         if len(skills) != 1:
             raise ValueError("LLaDAR requires exactly one selected skill")
         self.skill_root = Path(skills[0]).resolve()
@@ -57,6 +58,8 @@ class AkashaSkillAgent:
         if not self.skill_document.is_file():
             raise FileNotFoundError(f"skill is missing SKILL.md: {self.skill_root}")
         self.skill_sha256 = _sha256(self.skill_document.read_bytes())
+        self.skill_name = self.skill_root.name
+        self.host_scoped = host_scoped
         self.events: list[dict[str, Any]] = []
         self.calls = 0
         self.tool_call_limit = tool_call_limit
@@ -71,8 +74,8 @@ class AkashaSkillAgent:
                     if self.calls > self.tool_call_limit:
                         raise RuntimeError("skill tool call budget exceeded")
                 try:
-                    if skill_name not in self.agent.skill_middleware.loaded_skill_names:
-                        result = {"error": f"Call load_skill(reference='{skill_name}') before using {name}, then retry this tool."}
+                    if not self.host_scoped and self.skill_name not in self.agent.skill_middleware.loaded_skill_names:
+                        result = {"error": f"Call load_skill(reference='{self.skill_name}') before using {name}, then retry this tool."}
                     else:
                         result = function(*args, **kwargs)
                 except (ValueError, KeyError, TypeError, DatasetValidationError, EvaluationError) as error:
@@ -105,7 +108,7 @@ class AkashaSkillAgent:
             "replace_inventory_point": "Split a compound fact: knowledge_point_id, points [{statement,topic,evidence:[{source_id,start_char,quote}]}], reason. Provide at least two independently testable facts with exact source evidence. The host retires the old ID and preserves replacement lineage. Merge equivalent children with existing inventory facts.",
             "read_inventory_point": "Read a complete independent inventory point and its original evidence by knowledge_point_id and start_char; follow next_start. Use read_source to obtain host reference IDs when submitting its question.",
             "revise_inventory_point": "After inventorying the assigned source page, revise a stored fact: knowledge_point_id, statement, topic, exact evidence [{source_id,start_char,quote}], reason, optional merge_ids. Merge only equivalent facts and retain conditions, exceptions and original citations. The host preserves ID and revision history.",
-            "submit_inventory_batch": "Inventory only: submit points [{statement,topic,evidence:[{source_id,start_char,quote}]}], pending ranges [{source_id,start_char,end_char,reason}], reason, optional context citations [{source_id,start_char,quote}]. Positions are absolute. Partial submissions use complete=False; finish the whole page with complete=True. Retain incomplete endings as pending and named subjects or headings as context.",
+            "submit_inventory_batch": "Submit points [{statement,topic,evidence:[{source_id,quote,start_char?}]}], pending ranges [{source_id,start_char,end_char,reason}], reason and optional context citations. Omit start_char for a unique exact quote in the supplied text; otherwise use an absolute position. Use complete=False for partial results and complete=True for the whole page.",
             "submit_coverage_review": "Review every assigned point as [{knowledge_point_id,answerability:eligible|unresolved|excluded,question_ids,reason}]. Eligible means a natural question CAN be asked, even when question_ids=[] because none was generated. Unresolved means source/context ambiguity prevents deciding answerability, not just missing questions. Map only questions explicitly testing the fact. Exclusions need concrete scenario-based reasons.",
             "list_coverage_questions": "Read published questions by zero-based start and limit 1 to 5; follow next_start. Text may be shortened: use read_coverage_item for the complete question and answer.",
             "read_coverage_item": "Read a complete inventory point with original evidence or a published question with its expected answer by item_id and start_char; follow next_start.",
@@ -133,17 +136,18 @@ class AkashaSkillAgent:
             "write_strategy": "Write the constrained run strategy source.",
         }
         from akasha.agent.skills.loader import load_skill_directory
-        skill_name = load_skill_directory(self.skill_root).name
-        system_prompt += (f"\nThe selected skill name is {skill_name}. First call load_skill with "
-                          f"reference='{skill_name}', using this name exactly. "
-                          "Use a skill name, not a local path. Do not inspect unrelated local files.\n")
+        if not self.host_scoped:
+            self.skill_name = load_skill_directory(self.skill_root).name
+            system_prompt += (f"\nThe selected skill name is {self.skill_name}. First call load_skill with "
+                              f"reference='{self.skill_name}', using this name exactly. "
+                              "Use a skill name, not a local path. Do not inspect unrelated local files.\n")
         bound = [akasha.create_tool(descriptions.get(name, name), controlled(name, function), name)
                  for name, function in tools.items()]
         self.host_tool_names = sorted(tools)
         # Akasha owns DynamicSkillMiddleware here.  LLaDAR does not subclass,
         # replace, or inspect its loading decisions while the model is working.
         self.agent = akasha.agents(
-            skills=[str(self.skill_root)], tools=bound, system_prompt=system_prompt,
+            skills=None if self.host_scoped else [str(self.skill_root)], tools=bound, system_prompt=system_prompt,
             stream=False, thinking=False, keep_logs=False, max_round=self.round_limit, **options,
         )
 
@@ -163,11 +167,10 @@ class AkashaSkillAgent:
             for attempt in range(3):
                 with model_usage(request.get("stage", "generation")), redirect_stdout(sys.stderr):
                     self.agent(json.dumps(attempt_request, ensure_ascii=False))
-                skill_name = self.agent.skill_context.names[0]
-                if skill_name in self.agent.skill_middleware.loaded_skill_names:
+                if self.host_scoped or self.skill_name in self.agent.skill_middleware.loaded_skill_names:
                     break
                 attempt_request = {**request, "required_next_action":
-                    f"The preceding attempt ended without loading the selected skill. Call load_skill(reference='{skill_name}') first, then complete this work item using its tools."}
+                    f"The preceding attempt ended without loading the selected skill. Call load_skill(reference='{self.skill_name}') first, then complete this work item using its tools."}
         except (LladarError, RuntimeError) as error:
             error.skill_evidence = self._evidence()
             raise
@@ -182,12 +185,11 @@ class AkashaSkillAgent:
         return self._evidence()
 
     def _evidence(self) -> dict:
-        middleware = self.agent.skill_middleware
-        loaded = sorted(set(middleware.loaded_skill_names))
-        skill_name = self.agent.skill_context.names[0]
+        loaded = ([self.skill_name] if self.host_scoped else
+                  sorted(set(self.agent.skill_middleware.loaded_skill_names)))
         return {
             "loaded_skills": loaded,
-            "skill_files": {"SKILL.md": self.skill_sha256} if skill_name in loaded else {},
+            "skill_files": {"SKILL.md": self.skill_sha256} if self.skill_name in loaded else {},
             "tool_events": list(self.events),
             "tool_names": self.host_tool_names,
             "tool_call_limit": self.tool_call_limit,

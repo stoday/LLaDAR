@@ -41,17 +41,22 @@ def _invoke_skill(
     max_output_tokens: int | None = None,
     debug: bool = False,
     verbose: bool | None = None,
+    host_scoped: bool = False,
 ) -> dict[str, Any]:
-    """Run one native Akasha local skill and require its recorded evidence."""
+    """Run a local skill or host-scoped method and require its recorded evidence."""
+    runtime_options = {}
     if agent_factory is None:
         from .skill_agent import AkashaSkillAgent
         agent_factory = AkashaSkillAgent
+        if host_scoped:
+            runtime_options["host_scoped"] = True
     profile = resolve_model_profile(model, max_input_tokens=max_input_tokens,
                                     max_output_tokens=max_output_tokens)
     agent = agent_factory(
         skills=[str(skill)], tools=tools, model=model, env_file=str(env_file),
         system_prompt=language_prompt(system_prompt), max_input_tokens=profile.max_input_tokens,
         max_output_tokens=profile.max_output_tokens,
+        **runtime_options,
         **({"verbose": verbose} if verbose is not None else {"verbose": True} if debug else {}),
     )
     evidence = agent(request)
