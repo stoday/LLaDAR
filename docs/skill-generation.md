@@ -23,6 +23,24 @@ lladar create test-dataset --knowledge .\knowledge --skill .\my-skill --output d
 直接問答 Skill 可要求依文章順序閱讀、保留完整知識段落、每段一組自然問答；
 不必建立圖譜，也不必使用 Python。題數與知識段落的對應由方法定義。
 
+### 自訂文件盤點與覆蓋審查
+
+`--knowledge` 的盤點、原文覆核、知識點整理和對應審查使用各自的內建指令與工具。
+出題階段仍完整讀取 `SKILL.md` 正文。如果原本在正文寫了盤點範圍或可出題條件，
+請把適用規則補到同一份 `SKILL.md` 的 YAML frontmatter `metadata`。各欄位皆可省略。
+
+```yaml
+metadata:
+  lladar-inventory: 略過只有展件編號、沒有可驗證敘述的標題。
+  lladar-inventory-audit: 特別檢查圖說所述的年代是否有漏列。
+  lladar-inventory-reconciliation: 展覽日期和建築落成年份是不同事實。
+  lladar-coverage-review: 依現場訪客可辨識的展件判定能否自然提問。
+```
+
+初次盤點與原文覆核共用 `lladar-inventory`，原文覆核另讀自己的補充規則。
+盤點引用在指定來源範圍內唯一時，可省略 `start_char`，由程式定位原文；若有多處相同引用，仍須指定絕對位置。
+原文覆核完成後，知識清單與引用完全一致時可沿用初次整理；有新增或修訂時會重新整理。
+
 ## 可選工具與交付
 
 一次生成工作提供來源讀取、知識點、直接／題型化問答、圖譜與測試計畫工具。

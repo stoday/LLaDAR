@@ -120,17 +120,18 @@ def test_dataset_cli_sidecar_report_and_completed_resume(tmp_path, capsys, monke
     usage = sidecar["token_usage"]
     assert usage["status"] == "reported"
     assert set(usage["stages"]) == {"inventory", "inventory_reconciliation", "generation", "inventory_audit", "coverage_review"}
-    assert usage["reported_calls"] == 6  # Reconciliation before and after audit.
-    assert usage["total_tokens"] == 84
+    assert sidecar["inventory"]["reconciliation"]["audit"]["reused"] == "initial"
+    assert usage["reported_calls"] == 5
+    assert usage["total_tokens"] == 70
     report = Path(str(output) + ".operation.md").read_text(encoding="utf-8")
-    assert "`total_tokens`: 84" in report and "input=60, output=24, total=84" in report
-    assert "`total_tokens`: 84" in render_coverage_report(sidecar)
+    assert "`total_tokens`: 70" in report and "input=50, output=20, total=70" in report
+    assert "`total_tokens`: 70" in render_coverage_report(sidecar)
     assert ("[TOKENS]" in capsys.readouterr().err) is verbose
     checkpoint = json.loads(Path(str(output) + ".work/session.json").read_text(encoding="utf-8"))
-    assert checkpoint["data"]["state"]["token_usage"]["total_tokens"] == 84
+    assert checkpoint["data"]["state"]["token_usage"]["total_tokens"] == 70
     assert main([*args, "--resume", str(output) + ".work"], skill_agent_factory=MeteredAgent) == 0
     resumed_report = Path(str(output) + ".operation-2.md").read_text(encoding="utf-8")
-    assert "`total_tokens`: 84" in resumed_report
+    assert "`total_tokens`: 70" in resumed_report
     assert "input=0, output=0, total=0" in resumed_report
 
 

@@ -254,19 +254,21 @@ def test_semantic_duplicate_facts_merge_without_losing_source_evidence(tmp_path)
     class DuplicateAgent(CoverageAgent):
         def __call__(self, request):
             if request['stage'] == 'inventory_reconciliation':
+                points = request["points"]
+                assert request["all_points_assigned"]
+                assert all("evidence" in point for point in points)
+                if len(points) > 1:
+                    self.tools["revise_inventory_point"](knowledge_point_id=points[0]["id"],
+                        statement=statements[0], topic="Building", evidence=points[0]["evidence"],
+                        merge_ids=[point["id"] for point in points[1:]], reason="Both passages state the same previous use.")
                 return super().__call__(request)
             if request["stage"] in {"inventory", "inventory_audit"}:
+                assert set(self.tools) == {"submit_inventory_batch"}
                 page = request["source"]
                 points = [{"statement": fact, "topic": "Building", "evidence": [{
-                    "source_id": page["source_id"], "start_char": page["text"].index(fact), "quote": fact,
+                    "source_id": page["source_id"], "quote": fact,
                 }]} for fact in statements]
                 self.tools["submit_inventory_batch"](points=points, pending=[], reason="Read summary and body.", complete=True)
-                if "revise_inventory_point" in self.tools:
-                    stored = self.tools["list_inventory_points"]()["points"]
-                    if len(stored) > 1:
-                        self.tools["revise_inventory_point"](knowledge_point_id=stored[0]["id"],
-                            statement=statements[0], topic="Building", evidence=[p["evidence"][0] for p in points],
-                            merge_ids=[p["id"] for p in stored[1:]], reason="Both passages state the same previous use.")
             elif request["stage"] == "coverage_review":
                 self.tools["submit_coverage_review"]([{
                     "knowledge_point_id": p["id"], "answerability": "eligible",
@@ -283,6 +285,7 @@ def test_semantic_duplicate_facts_merge_without_losing_source_evidence(tmp_path)
     create_test_dataset(source, output=output, skill_agent_factory=DuplicateAgent, verbose=False)
     saved = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
     assert saved["coverage"]["summary"]["total_points"] == 1
+    assert "reused" not in saved["inventory"]["reconciliation"]["audit"]
     assert len(saved["inventory"]["points"][0]["evidence"]) == 2
     assert saved["inventory"]["changes"]
 
@@ -367,6 +370,50 @@ def test_no_verbose_reaches_the_inventory_model_provider(tmp_path):
                         coverage_agent_factory=QuietProvider, count=1, verbose=False)
 
 
+def test_native_inventory_limits_tools_and_loads_only_scoped_policy(tmp_path, monkeypatch):
+    import akasha
+    from langchain_core.messages import AIMessage
+
+    from lladar.knowledge_coverage import KnowledgeCoverage
+    from lladar.model_profiles import resolve_model_profile
+    from test_skill_agent import ToolScriptModel
+
+    skill = tmp_path / "scoped-example"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        "---\nname: scoped-example\ndescription: Example method.\nmetadata:\n"
+        "  lladar-inventory: INVENTORY-POLICY\n  lladar-inventory-audit: AUDIT-POLICY\n"
+        "  lladar-coverage-review: REVIEW-POLICY\n---\nGENERATION-POLICY\n", encoding="utf-8")
+    fact = "The archive is open."
+
+    def submit(call_id, **offset):
+        return AIMessage(content="", tool_calls=[{"name": "submit_inventory_batch", "id": call_id,
+            "args": {"points": [{"statement": fact, "topic": "Archive", "evidence": [
+                {"source_id": "source_001", "quote": fact, **offset}]}],
+                "pending": [], "reason": "One source fact.", "complete": True}}])
+
+    model = ToolScriptModel(replies=[submit("ambiguous"), submit("explicit", start_char=0), AIMessage(content="Done"),
+                                    submit("audit", start_char=0), AIMessage(content="Done")])
+    agent_factory = akasha.agents
+
+    def with_scripted_model(**options):
+        return agent_factory(**{**options, "model": model})
+
+    monkeypatch.setattr(akasha, "agents", with_scripted_model)
+    coverage = KnowledgeCoverage([(tmp_path / "source.md", f"{fact}\n{fact}")], skill=skill,
+        agent_factory=None, model="offline", env_file="", profile=resolve_model_profile("offline"), verbose=False)
+    coverage.inventory_sources()
+    coverage.inventory_sources(audit=True)
+
+    assert model.offered and all(names == ["submit_inventory_batch"] for names in model.offered)
+    assert "INVENTORY-POLICY" in str(model.prompts[0]) and "AUDIT-POLICY" not in str(model.prompts[0])
+    assert "quote must be unique" in str(model.prompts[1])
+    assert "INVENTORY-POLICY" in str(model.prompts[3]) and "AUDIT-POLICY" in str(model.prompts[3])
+    assert "GENERATION-POLICY" not in str(model.prompts) and "REVIEW-POLICY" not in str(model.prompts)
+    assert coverage.inventory["status"] == coverage.inventory["audit_status"] == "complete"
+    assert coverage.inventory["points"][0]["evidence"][0]["start_char"] == 0
+
+
 def test_legacy_generation_report_does_not_invent_a_coverage_denominator(tmp_path):
     source = tmp_path / "legacy.generation.json"
     source.write_text(json.dumps({"schema_version": 5, "sources": [], "knowledge_points": [],
@@ -425,8 +472,8 @@ def test_generation_does_not_resend_the_full_accumulated_question_history(tmp_pa
 
     class HistoryAgent(CoverageAgent):
         def __call__(self, request):
-            if request['stage'] == 'inventory_reconciliation':
-                return super().__call__(request)
+            if request["stage"] in {"inventory_reconciliation", "coverage_review"}:
+                assert len(json.dumps(request["points"], ensure_ascii=False).encode("utf-8")) <= 512
             if request["stage"] == "generation":
                 assert len(json.dumps(request["existing_results"]).encode("utf-8")) <= 1024
             return super().__call__(request)
