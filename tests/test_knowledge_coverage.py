@@ -263,7 +263,7 @@ def test_semantic_duplicate_facts_merge_without_losing_source_evidence(tmp_path)
                         merge_ids=[point["id"] for point in points[1:]], reason="Both passages state the same previous use.")
                 return super().__call__(request)
             if request["stage"] in {"inventory", "inventory_audit"}:
-                assert set(self.tools) == {"submit_inventory_batch"}
+                assert set(self.tools) == {"submit_inventory_batch", "finish_inventory_batch"}
                 page = request["source"]
                 points = [{"statement": fact, "topic": "Building", "evidence": [{
                     "source_id": page["source_id"], "quote": fact,
@@ -371,11 +371,13 @@ def test_no_verbose_reaches_the_inventory_model_provider(tmp_path):
 
 
 def test_native_inventory_limits_tools_and_loads_only_scoped_policy(tmp_path, monkeypatch):
-    import akasha
     from langchain_core.messages import AIMessage
+    from types import SimpleNamespace
 
     from lladar.knowledge_coverage import KnowledgeCoverage
     from lladar.model_profiles import resolve_model_profile
+    from lladar.skill_agent import AkashaSkillAgent
+    from lladar.token_usage import token_usage_stage, usage_snapshot
     from test_skill_agent import ToolScriptModel
 
     skill = tmp_path / "scoped-example"
@@ -386,32 +388,109 @@ def test_native_inventory_limits_tools_and_loads_only_scoped_policy(tmp_path, mo
         "  lladar-coverage-review: REVIEW-POLICY\n---\nGENERATION-POLICY\n", encoding="utf-8")
     fact = "The archive is open."
 
-    def submit(call_id, **offset):
+    def submit(call_id, *, complete=True, **offset):
         return AIMessage(content="", tool_calls=[{"name": "submit_inventory_batch", "id": call_id,
             "args": {"points": [{"statement": fact, "topic": "Archive", "evidence": [
                 {"source_id": "source_001", "quote": fact, **offset}]}],
-                "pending": [], "reason": "One source fact.", "complete": True}}])
+                "pending": [], "reason": "One source fact.", "complete": complete}}])
 
-    model = ToolScriptModel(replies=[submit("ambiguous"), submit("explicit", start_char=0), AIMessage(content="Done"),
-                                    submit("audit", start_char=0), AIMessage(content="Done")])
-    agent_factory = akasha.agents
+    finish_call = {"name": "finish_inventory_reconciliation", "id": "finish",
+                   "args": {"reason": "The fact is already atomic.", "issues": []}}
+    model = ToolScriptModel(replies=[
+        submit("ambiguous"), submit("partial", start_char=0, complete=False), submit("explicit", start_char=0),
+        AIMessage(content="", tool_calls=[finish_call,
+            {"name": "list_inventory_points", "id": "list", "args": {}}]),
+        AIMessage(content="", tool_calls=[{**finish_call, "id": "finish-alone"}]),
+        submit("audit", start_char=0),
+        AIMessage(content="", tool_calls=[{"name": "submit_coverage_review", "id": "review", "args": {
+            "judgments": [{"knowledge_point_id": "ikp_000001", "answerability": "eligible",
+                           "question_ids": ["q1"], "reason": "It asks whether the archive is open."}]}}]),
+    ])
+    for reply in model.replies:
+        reply.usage_metadata = {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
 
     def with_scripted_model(**options):
-        return agent_factory(**{**options, "model": model})
+        return AkashaSkillAgent(**{**options, "model": model})
 
-    monkeypatch.setattr(akasha, "agents", with_scripted_model)
+    monkeypatch.setattr("lladar.skill_agent.AkashaSkillAgent", with_scripted_model)
     coverage = KnowledgeCoverage([(tmp_path / "source.md", f"{fact}\n{fact}")], skill=skill,
         agent_factory=None, model="offline", env_file="", profile=resolve_model_profile("offline"), verbose=False)
-    coverage.inventory_sources()
-    coverage.inventory_sources(audit=True)
+    result = SimpleNamespace(records=[{"question": "Is the archive open?", "expected_answer": "Yes.",
+        "actual_response": None}], provenance={"sources": coverage.inventory["sources"],
+        "dataset": {"lines": [{"qa_id": "q1", "record_fingerprint": "saved-question"}]}})
 
-    assert model.offered and all(names == ["submit_inventory_batch"] for names in model.offered)
+    @token_usage_stage
+    def run_coverage(*, verbose):
+        coverage.inventory_sources()
+        coverage.reconcile("initial")
+        coverage.inventory_sources(audit=True)
+        coverage.reconcile("audit")
+        coverage.review(result)
+        return usage_snapshot()
+
+    usage = run_coverage(verbose=False)
+    assert usage["reported_calls"] == 7 and usage["unreported_calls"] == 0
+    assert len(model.prompts) == 7 and not model.replies
+    assert model.offered[:3] == [["submit_inventory_batch", "finish_inventory_batch"]] * 3
     assert "INVENTORY-POLICY" in str(model.prompts[0]) and "AUDIT-POLICY" not in str(model.prompts[0])
     assert "quote must be unique" in str(model.prompts[1])
-    assert "INVENTORY-POLICY" in str(model.prompts[3]) and "AUDIT-POLICY" in str(model.prompts[3])
-    assert "GENERATION-POLICY" not in str(model.prompts) and "REVIEW-POLICY" not in str(model.prompts)
+    assert "Submit the completed batch in a separate tool call" in str(model.prompts[4])
+    assert "INVENTORY-POLICY" in str(model.prompts[5]) and "AUDIT-POLICY" in str(model.prompts[5])
+    assert "REVIEW-POLICY" in str(model.prompts[6]) and "AUDIT-POLICY" not in str(model.prompts[6])
+    assert "GENERATION-POLICY" not in str(model.prompts)
     assert coverage.inventory["status"] == coverage.inventory["audit_status"] == "complete"
     assert coverage.inventory["points"][0]["evidence"][0]["start_char"] == 0
+    assert result.provenance["coverage"]["summary"]["covered_points"] == 1
+
+
+@pytest.mark.parametrize("completion", [{}, {"complete": False}, None], ids=["omitted", "false", "no-valid-submission"])
+def test_inventory_recovers_when_model_stops_after_partial_submission(tmp_path, monkeypatch, completion):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from lladar.knowledge_coverage import KnowledgeCoverage
+    from lladar.model_profiles import resolve_model_profile
+    from lladar.skill_agent import AkashaSkillAgent
+    from test_skill_agent import ToolScriptModel
+
+    skill = tmp_path / "scoped-example"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: scoped-example\ndescription: Example.\n---\nSource facts.\n", encoding="utf-8")
+    fact = "The archive is open."
+    finish = AIMessage(content="", tool_calls=[{"name": "finish_inventory_batch", "id": "finish", "args": {
+        "reason": "The whole assigned page was reviewed."}}])
+    replies = [finish, *[AIMessage(content="Done") for _ in range(3)]] if completion is None else [
+        AIMessage(content="", tool_calls=[{"name": "submit_inventory_batch", "id": "partial", "args": {
+            "points": [{"statement": fact, "topic": "Archive", "evidence": [
+                {"source_id": "source_001", "quote": fact}]}],
+            "pending": [], "reason": "One saved fact.", **completion}}]),
+        AIMessage(content="Done"),
+        finish,
+    ]
+    model = ToolScriptModel(replies=replies)
+
+    def with_scripted_model(**options):
+        return AkashaSkillAgent(**{**options, "model": model, "language": "en"})
+
+    monkeypatch.setattr("lladar.skill_agent.AkashaSkillAgent", with_scripted_model)
+    coverage = KnowledgeCoverage([(tmp_path / "source.md", fact)], skill=skill,
+        agent_factory=None, model="offline", env_file="", profile=resolve_model_profile("offline"), verbose=False)
+    if completion is None:
+        with pytest.raises(DatasetValidationError, match="inventory batch is incomplete after completion reminders"):
+            coverage.inventory_sources()
+        assert len(model.prompts) == 4 and not model.replies
+        assert "submit a valid inventory result" in str(model.prompts[1])
+        assert coverage.inventory["progress"]["source_001"]["cursor"] == 0
+        assert not coverage.inventory["batches"]
+        return
+
+    coverage.inventory_sources()
+    assert len(model.prompts) == 3 and not model.replies
+    assert any(isinstance(message, ToolMessage) and message.tool_call_id == "partial"
+               and json.loads(message.content)["complete"] is False for message in model.prompts[2])
+    assert isinstance(model.prompts[2][-1], HumanMessage)
+    assert "finish_inventory_batch" in model.prompts[2][-1].content
+    assert coverage.inventory["progress"]["source_001"]["cursor"] == len(fact)
+    assert len(coverage.inventory["points"]) == len(coverage.inventory["batches"]) == 1
 
 
 def test_legacy_generation_report_does_not_invent_a_coverage_denominator(tmp_path):
@@ -520,14 +599,56 @@ def test_partial_inventory_submission_is_saved_but_does_not_finish_the_page(tmp_
                 return self.evidence()
             return super().__call__(request)
 
+    class Resumed(CoverageAgent):
+        def __call__(self, request):
+            if request["stage"] == "inventory":
+                saved = request["saved_partial"]
+                assert saved["point_count"] == 1
+                assert saved["points"][0]["statement"] == request["source"]["text"]
+                assert self.tools["finish_inventory_batch"]("Verified the full page and its saved fact.")["complete"]
+                return self.evidence()
+            return super().__call__(request)
+
     output = tmp_path / "dataset.jsonl"
     with pytest.raises(DatasetValidationError, match="incomplete"):
         create_test_dataset(source, output=output, skill_agent_factory=Partial, verbose=False)
     assert not output.exists()
-    create_test_dataset(source, output=output, skill_agent_factory=CoverageAgent, verbose=False,
+    checkpoint = json.loads((Path(str(output) + ".work") / "session.json").read_text(encoding="utf-8"))
+    progress = checkpoint["data"]["state"]["knowledge_coverage"]["inventory"]["progress"]["source_001"]
+    assert progress["cursor"] == 0 and len(progress["partial"]["point_ids"]) == 1
+    create_test_dataset(source, output=output, skill_agent_factory=Resumed, verbose=False,
                         resume=Path(str(output) + ".work"))
     saved = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
     assert len(saved["inventory"]["points"]) == 1
+
+
+@pytest.mark.parametrize("stage", ["inventory", "inventory_reconciliation", "inventory_audit", "coverage_review"])
+def test_saved_coverage_batch_is_reused_after_interruption(tmp_path, stage):
+    source = tmp_path / "knowledge.md"
+    source.write_text("Service 1 retains data for 1 days.", encoding="utf-8")
+    output = tmp_path / "dataset.jsonl"
+
+    class Interrupted(CoverageAgent):
+        def __call__(self, request):
+            evidence = super().__call__(request)
+            if request["stage"] == stage:
+                raise RuntimeError("Interrupted immediately after saving the batch.")
+            return evidence
+
+    class Resumed(CoverageAgent):
+        def __call__(self, request):
+            assert request["stage"] != stage, "A saved batch must be reused"
+            return super().__call__(request)
+
+    with pytest.raises(RuntimeError, match="after saving"):
+        create_test_dataset(source, output=output, skill_agent_factory=Interrupted, verbose=False)
+    assert not output.exists()
+    create_test_dataset(source, output=output, skill_agent_factory=Resumed, verbose=False,
+                        resume=Path(str(output) + ".work"))
+    saved = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+    assert saved["coverage"]["summary"]["covered_points"] == 1
+    assert saved["coverage"]["audit_status"] == "complete"
+    assert len(saved["inventory"]["batches"]) == len(saved["inventory"]["audit_batches"]) == 1
 
 
 def test_report_explains_an_unresolved_source_ending_even_at_full_known_coverage(tmp_path):

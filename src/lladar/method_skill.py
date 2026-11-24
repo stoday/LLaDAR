@@ -42,6 +42,7 @@ def _invoke_skill(
     debug: bool = False,
     verbose: bool | None = None,
     host_scoped: bool = False,
+    batch_complete: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Run a local skill or host-scoped method and require its recorded evidence."""
     runtime_options = {}
@@ -49,7 +50,7 @@ def _invoke_skill(
         from .skill_agent import AkashaSkillAgent
         agent_factory = AkashaSkillAgent
         if host_scoped:
-            runtime_options["host_scoped"] = True
+            runtime_options.update(host_scoped=True, batch_complete=batch_complete)
     profile = resolve_model_profile(model, max_input_tokens=max_input_tokens,
                                     max_output_tokens=max_output_tokens)
     agent = agent_factory(
