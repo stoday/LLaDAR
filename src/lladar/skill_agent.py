@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any
 
 import akasha
+from akasha.agent.agents import agents as NativeAkashaAgent
 
 from .exceptions import DatasetValidationError, EvaluationError, LladarError, ProviderError
 
@@ -20,6 +21,7 @@ from .resource_limits import resource_limit
 
 MAX_TOOL_CALLS = resource_limit('SKILL_TOOL_CALLS')
 MAX_ROUNDS = resource_limit('SKILL_ROUNDS')
+INVENTORY_COMPLETION_REMINDERS = 2
 SYSTEM_PROMPT = """Generate the requested LLaDAR dataset using the selected skill.
 First call load_skill and follow that skill's active method. Choose direct QA or
 an evidence graph according to the skill, source content, and requested options.
@@ -45,12 +47,69 @@ def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+class _CoverageAgent(NativeAkashaAgent):
+    """Reuse Akasha's model configuration with a host-controlled end to the tool loop."""
+
+    def __init__(self, *, batch_complete, **options):
+        self.batch_complete = batch_complete
+        super().__init__(**options)
+
+    def _build_agent(self):
+        from akasha.agent.agents import _PROGRESS_PROMPT
+        from langchain.agents import create_agent
+        from langchain.agents.middleware import ModelResponse, wrap_model_call, wrap_tool_call
+        from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+        reminders_left = INVENTORY_COMPLETION_REMINDERS
+
+        @wrap_tool_call
+        async def submit_final_call_separately(request, handler):
+            call = request.tool_call
+            is_final = (call["name"] in {"finish_inventory_batch", "finish_inventory_reconciliation", "submit_coverage_review"}
+                        or call["name"] == "submit_inventory_batch" and call["args"].get("complete") is True)
+            if is_final and len(getattr(request.state["messages"][-1], "tool_calls", ())) > 1:
+                return ToolMessage(content="Submit the completed batch in a separate tool call after other work.",
+                                   tool_call_id=call["id"], name=call["name"], status="error")
+            return await handler(request)
+
+        @wrap_model_call
+        async def finish_saved_batch(request, handler):
+            nonlocal reminders_left
+            if self.batch_complete():
+                # Akasha expects a final message. The save receipt needs no model call.
+                return AIMessage(content="Batch saved.")
+            response = await handler(request)
+            if "finish_inventory_batch" not in self.tools:
+                return response
+
+            continuation = []
+            while not any(getattr(message, "tool_calls", ()) for message in response.result):
+                if not reminders_left:
+                    raise DatasetValidationError("inventory batch is incomplete after completion reminders; resume from the saved progress")
+                reminders_left -= 1
+                continuation.extend(message for message in response.result if message.content)
+                continuation.append(HumanMessage(content=(
+                    "The assigned inventory page is still incomplete. Review any remaining text and keep facts already accepted by the tools. "
+                    "Submit any missing facts and pending ranges with submit_inventory_batch. After processing the whole page, "
+                    "call finish_inventory_batch to confirm a saved submission, or submit_inventory_batch with complete=true. "
+                    "If there are no facts, submit an empty list and a reason. A text reply does not complete the page."
+                )))
+                response = await handler(request.override(messages=[*request.messages, *continuation]))
+            if continuation:
+                return ModelResponse(result=[*continuation, *response.result], structured_response=response.structured_response)
+            return response
+
+        return create_agent(model=self.model_obj, tools=list(self.tools.values()),
+            system_prompt="\n\n".join(part for part in (self.system_prompt.strip(), _PROGRESS_PROMPT) if part),
+            middleware=[submit_final_call_separately, finish_saved_batch])
+
+
 class AkashaSkillAgent:
     """Run the selected Akasha skill or the instructions supplied for a host-scoped phase."""
 
     def __init__(self, *, skills: list[str], tools: dict, system_prompt: str = SYSTEM_PROMPT,
                  tool_call_limit: int = MAX_TOOL_CALLS, round_limit: int = MAX_ROUNDS,
-                 host_scoped: bool = False, **options):
+                 host_scoped: bool = False, batch_complete=None, **options):
         if len(skills) != 1:
             raise ValueError("LLaDAR requires exactly one selected skill")
         self.skill_root = Path(skills[0]).resolve()
@@ -108,7 +167,8 @@ class AkashaSkillAgent:
             "replace_inventory_point": "Split a compound fact: knowledge_point_id, points [{statement,topic,evidence:[{source_id,start_char,quote}]}], reason. Provide at least two independently testable facts with exact source evidence. The host retires the old ID and preserves replacement lineage. Merge equivalent children with existing inventory facts.",
             "read_inventory_point": "Read a complete independent inventory point and its original evidence by knowledge_point_id and start_char; follow next_start. Use read_source to obtain host reference IDs when submitting its question.",
             "revise_inventory_point": "After inventorying the assigned source page, revise a stored fact: knowledge_point_id, statement, topic, exact evidence [{source_id,start_char,quote}], reason, optional merge_ids. Merge only equivalent facts and retain conditions, exceptions and original citations. The host preserves ID and revision history.",
-            "submit_inventory_batch": "Submit points [{statement,topic,evidence:[{source_id,quote,start_char?}]}], pending ranges [{source_id,start_char,end_char,reason}], reason and optional context citations. Omit start_char for a unique exact quote in the supplied text; otherwise use an absolute position. Use complete=False for partial results and complete=True for the whole page.",
+            "submit_inventory_batch": "Submit points [{statement,topic,evidence:[{source_id,quote,start_char?}]}], pending ranges [{source_id,start_char,end_char,reason}], reason and optional context citations. Omit start_char for a unique exact quote in the supplied text; otherwise use an absolute position. With complete=True, also confirm the whole page; otherwise the page remains open.",
+            "finish_inventory_batch": "Confirm the whole assigned page has been reviewed and its saved facts and pending ranges are complete for this page. Requires a previous accepted submission for this page and a reason. Call by itself after all other work. No need to resubmit saved facts.",
             "submit_coverage_review": "Review every assigned point as [{knowledge_point_id,answerability:eligible|unresolved|excluded,question_ids,reason}]. Eligible means a natural question CAN be asked, even when question_ids=[] because none was generated. Unresolved means source/context ambiguity prevents deciding answerability, not just missing questions. Map only questions explicitly testing the fact. Exclusions need concrete scenario-based reasons.",
             "list_coverage_questions": "Read published questions by zero-based start and limit 1 to 5; follow next_start. Text may be shortened: use read_coverage_item for the complete question and answer.",
             "read_coverage_item": "Read a complete inventory point with original evidence or a published question with its expected answer by item_id and start_char; follow next_start.",
@@ -146,7 +206,11 @@ class AkashaSkillAgent:
         self.host_tool_names = sorted(tools)
         # Akasha owns DynamicSkillMiddleware here.  LLaDAR does not subclass,
         # replace, or inspect its loading decisions while the model is working.
-        self.agent = akasha.agents(
+        agent_factory = akasha.agents
+        if self.host_scoped and batch_complete is not None:
+            agent_factory = _CoverageAgent
+            options["batch_complete"] = batch_complete
+        self.agent = agent_factory(
             skills=None if self.host_scoped else [str(self.skill_root)], tools=bound, system_prompt=system_prompt,
             stream=False, thinking=False, keep_logs=False, max_round=self.round_limit, **options,
         )
