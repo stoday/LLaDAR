@@ -35,6 +35,8 @@
   "## Gaps and exclusions": "## 未出題と除外の項目",
   "| Knowledge point | Statement | Status | Reason |": "| 知識点 | 事実 | 状態 | 理由 |",
   "100% means every inventoried point in this version has a reviewed question mapping.": "100% は、この版で棚卸しした全知識点に審査済みの対応問題があることを表します。",
+  "100% means every inventoried point in this version has a mapped question.": "100% は、この版で棚卸しした全知識点に対応する問題があることを表します。",
+  "Of the covered points, {annotated} use question annotations and source checks. The remaining {reviewed} were separately reviewed.": "カバーされた知識点のうち、{annotated} 件は出題時の注記と出典の検証に基づき、残りの {reviewed} 件は個別にレビューされました。",
   "Evaluation JSON or dataset generation JSON (required; no default).": "評価 JSON またはデータセット生成 JSON（必須、既定値なし）。",
   "LLaDAR Starting... Loading components, please wait.": "LLaDAR 起動中です。読み込みが完了するまでお待ちください…",
   "Does not exist": "存在しません",

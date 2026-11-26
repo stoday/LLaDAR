@@ -94,6 +94,124 @@ def test_independent_inventory_is_the_denominator_and_exclusions_are_reviewed(tm
     }
 
 
+class AnnotatedCoverageAgent(CoverageAgent):
+    def question_payload(self, request, number):
+        point = next(p for p in request["inventory_points"]["points"] if p["statement"].split()[1] == str(number))
+        evidence = self.tools["read_source"](**point["evidence_ranges"][0])
+        return {"question": f"How long does Service {number} keep data?", "expected_answer": f"{number} days",
+                "source_refs": [evidence["source_refs"][0]["ref_id"]], "answer_basis": "derived_criterion",
+                "rationale": point["statement"], "coverage_claims": [{"knowledge_point_id": point["id"], "covers_entire_point": True,
+                    "reason": "The question requires the service's retention duration to be correct."}]}
+
+
+@pytest.mark.parametrize("certifies_full_point", [True, False])
+def test_annotations_follow_accepted_question_revisions_and_final_selection(tmp_path, certifies_full_point):
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n".join(f"Service {n} retains data for {n} days." for n in range(1, 6)), encoding="utf-8")
+
+    class Author(AnnotatedCoverageAgent):
+        def __call__(self, request):
+            if request["stage"] != "generation":
+                return super().__call__(request)
+            self.tools["read_source"]("source_001")
+            first, second, third, fourth = [self.question_payload(request, number) for number in range(1, 5)]
+            second["coverage_claims"][0]["covers_entire_point"] = certifies_full_point
+            submit = self.tools["submit_question"]
+            unknown = [{"knowledge_point_id": "kp_000001", "reason": "A local evidence ID is invalid."}]
+            assert submit(request_id="unknown", **{**first, "coverage_claims": unknown})["issues"][0]["field"] == "coverage_claims"
+            wrong_range = {**second, "source_refs": first["source_refs"]}
+            assert submit(request_id="other-range", **wrong_range)["issues"][0]["field"] == "coverage_claims"
+            assert submit(request_id="first", **first)["status"] == "accepted"
+            duplicate = {**third, "question": first["question"], "expected_answer": first["expected_answer"]}
+            assert submit(request_id="duplicate", **duplicate)["status"] == "accepted"
+            draft = submit(request_id="draft", **third)
+            revise = self.tools["revise_question"]
+            revision = {"item_id": draft["item_id"], "revision": draft["revision"], "request_id": "revision", **second}
+            saved = revise(**revision)
+            assert saved["status"] == "accepted" and revise(**revision) == saved
+            assert submit(request_id="past-cap", **fourth)["status"] == "accepted"
+            return self.evidence()
+
+    output = tmp_path / "dataset.jsonl"
+    rows = create_test_dataset(source, output=output, count=2, skill_agent_factory=Author, verbose=False)
+    sidecar = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+    assert [row["expected_answer"] for row in rows] == ["1 days", "2 days"]
+    lines = sidecar["dataset"]["lines"]
+    assert [line["inventory_coverage"]["claims"][0]["knowledge_point_id"] for line in lines] == ["ikp_000001", "ikp_000002"]
+    reviews = sidecar["coverage"]["reviews"]
+    assert [(row["review_method"], bool(row["question_ids"])) for row in reviews] == [
+        ("review", True), ("generation" if certifies_full_point else "review", True),
+        ("review", False), ("review", False), ("review", False),
+    ]
+    assert sidecar["coverage"]["summary"]["all_coverage"] == 0.4
+    report = tmp_path / "coverage.md"
+    assert main(["report", str(output) + ".generation.json", "--output", str(report), "--lang", "zh-TW", "--no-verbose"]) == 0
+    if certifies_full_point:
+        assert "1 點採用出題註記與程式引文驗證，其餘 1 點經另外覆核" in report.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("publish", [False, True])
+def test_coverage_repair_only_reviews_points_with_changed_candidate_questions(tmp_path, publish):
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n".join(f"Service {n} retains data for {n} days." for n in range(1, 6)), encoding="utf-8")
+    reviewed = []
+
+    class Author(AnnotatedCoverageAgent):
+        def __call__(self, request):
+            if request["stage"] == "coverage_review":
+                reviewed.append([point["id"] for point in request["points"]])
+            if request["stage"] != "generation":
+                return super().__call__(request)
+            self.tools["read_source"]("source_001")
+            round_number = request.get("coverage_round", 0)
+            numbers = {0: [2, 3], 1: [1, 4], 2: []}[round_number]
+            for number in numbers:
+                assert self.tools["submit_question"](request_id=f"service-{number}",
+                    **self.question_payload(request, number))["status"] == "accepted"
+            return self.evidence()
+
+    rows = create_test_dataset(source, output=tmp_path / "dataset.jsonl" if publish else None,
+                               skill_agent_factory=Author, verbose=False)
+    assert [row["expected_answer"] for row in rows] == ["2 days", "3 days", "1 days", "4 days"]
+    assert reviewed == [["ikp_000001", "ikp_000004", "ikp_000005"], ["ikp_000001"]]
+
+
+def test_a_question_can_cover_multiple_independent_points_after_review(tmp_path):
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n".join(f"Service {n} retains data for {n} days." for n in range(1, 4)), encoding="utf-8")
+
+    class Author(AnnotatedCoverageAgent):
+        def __call__(self, request):
+            if request["stage"] == "coverage_review":
+                question_id = request["questions"][0]["id"]
+                reviews = []
+                for point in request["points"]:
+                    question_ids = [q["id"] for q in self.tools["list_coverage_questions"](
+                        knowledge_point_id=point["id"])["questions"]]
+                    expected = [] if "Service 1" in point["statement"] else [question_id]
+                    assert question_ids == expected
+                    reviews.append({"knowledge_point_id": point["id"], "answerability": "eligible",
+                                    "question_ids": question_ids, "reason": "Only Services 2 and 3 are requested."})
+                self.tools["submit_coverage_review"](reviews)
+                return self.evidence()
+            if request["stage"] != "generation":
+                return super().__call__(request)
+            self.tools["read_source"]("source_001")
+            second, third = [self.question_payload(request, number) for number in (2, 3)]
+            receipt = self.tools["submit_question"](request_id="compare-retention",
+                question="How long do Services 2 and 3 each keep data?", expected_answer="2 and 3 days, respectively.",
+                source_refs=second["source_refs"] + third["source_refs"], answer_basis="derived_criterion",
+                rationale="Both retention periods are required.", coverage_claims=second["coverage_claims"] + third["coverage_claims"])
+            assert receipt["status"] == "accepted"
+            return self.evidence()
+
+    output = tmp_path / "dataset.jsonl"
+    create_test_dataset(source, output=output, count=1, skill_agent_factory=Author, verbose=False)
+    saved = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+    assert saved["coverage"]["summary"]["covered_points"] == 2
+    assert all(review["review_method"] == "review" for review in saved["coverage"]["reviews"])
+
+
 def test_cli_report_reads_saved_inventory_and_highlights_gaps(tmp_path, capsys):
     source = tmp_path / "knowledge.md"
     source.write_text("\n\n".join(f"Service {n} retains data for {n} days." for n in range(1, 21)), encoding="utf-8")
@@ -727,7 +845,8 @@ def test_source_audit_is_followed_by_mandatory_semantic_reconciliation(tmp_path)
     assert saved["inventory"]["reconciliation"]["audit"]["status"] == "complete"
 
 
-def test_compound_fact_is_split_before_counting_incidental_answer_mentions(tmp_path):
+@pytest.mark.parametrize("split_in_audit", [False, True])
+def test_compound_fact_is_split_before_counting_incidental_answer_mentions(tmp_path, split_in_audit):
     fact = "The building was a police station and designated as a monument in 1998."
     source = tmp_path / "knowledge.md"
     source.write_text(fact, encoding="utf-8")
@@ -737,11 +856,15 @@ def test_compound_fact_is_split_before_counting_incidental_answer_mentions(tmp_p
         def __call__(self, request):
             evidence = [{"source_id": "source_001", "start_char": 0, "quote": fact}]
             if request["stage"] in {"inventory", "inventory_audit"}:
-                self.tools["submit_inventory_batch"](points=[{"statement": fact, "topic": "Building", "evidence": evidence}],
+                found_evidence = evidence
+                if split_in_audit and request["stage"] == "inventory_audit":
+                    quote = "designated as a monument in 1998."
+                    found_evidence = [{"source_id": "source_001", "start_char": fact.index(quote), "quote": quote}]
+                self.tools["submit_inventory_batch"](points=[{"statement": fact, "topic": "Building", "evidence": found_evidence}],
                     pending=[], reason="Extracted the original compound statement.", complete=True)
             elif request["stage"] == "inventory_reconciliation":
                 for point in self.tools["list_inventory_points"]()["points"]:
-                    if " and designated " in point["statement"]:
+                    if " and designated " in point["statement"] and (not split_in_audit or request["phase"] == "audit"):
                         replaced = self.tools["replace_inventory_point"](knowledge_point_id=point["id"],
                             points=[{"statement": s, "topic": "Building", "evidence": evidence} for s in children],
                             reason="Previous use and monument designation are independently testable facts.")
@@ -754,9 +877,12 @@ def test_compound_fact_is_split_before_counting_incidental_answer_mentions(tmp_p
                     "reason": "Question requires previous use; the designation year is incidental."} for p in request["points"]])
             else:
                 page = self.tools["read_source"]("source_001")
-                self.tools["submit_question"](request_id="previous-use", question="What was this building previously used for?",
+                annotation = {"coverage_claims": [{"knowledge_point_id": request["inventory_points"]["points"][0]["id"],
+                    "reason": "The expected answer must include the previous use."}]} if split_in_audit else {}
+                result = self.tools["submit_question"](request_id="previous-use", question="What was this building previously used for?",
                     expected_answer="A police station. It was designated as a monument in 1998.",
-                    source_refs=[page["source_refs"][0]["ref_id"]], answer_basis="derived_criterion", rationale=fact)
+                    source_refs=[page["source_refs"][0]["ref_id"]], answer_basis="derived_criterion", rationale=fact, **annotation)
+                assert result["status"] == "accepted"
             return self.evidence()
 
     output = tmp_path / "dataset.jsonl"
@@ -765,6 +891,9 @@ def test_compound_fact_is_split_before_counting_incidental_answer_mentions(tmp_p
     assert saved["coverage"]["summary"]["total_points"] == 2
     assert saved["coverage"]["summary"]["covered_points"] == 1
     assert saved["coverage"]["summary"]["all_coverage"] == 0.5
+    if split_in_audit:
+        assert saved["dataset"]["lines"][0]["inventory_coverage"]["claims"][0]["knowledge_point_id"] == "ikp_000001"
+        assert all(row["review_method"] == "review" for row in saved["coverage"]["reviews"])
 
 
 def test_unresolved_answerability_stays_in_the_denominator_and_review_queue(tmp_path):

@@ -107,6 +107,33 @@ def test_builtin_situation_skill_can_read_authoring_guide_and_submit():
     assert evidence["loaded_skills"] == ["create-situation"]
 
 
+def test_builtin_report_skill_reads_authoring_and_submits_valid_section():
+    import json
+    from lladar.reporting import BUILTIN_REPORT_SKILL_DIR, ReportWorkspace
+    from lladar.skill_agent import AkashaSkillAgent
+
+    workspace = ReportWorkspace({'summary': {}})
+    section = {'section': 'overview', 'text': 'This report summarizes the saved evaluation evidence.',
+               'source_refs': ['summary'], 'request_id': 'overview'}
+    model = ToolScriptModel(replies=[
+        AIMessage(content='', tool_calls=[{'name': 'load_skill', 'args': {'reference': 'report-evidence-summary'}, 'id': 'load'}]),
+        AIMessage(content='', tool_calls=[{'name': 'read_skill_resource', 'args': {'skill': 'report-evidence-summary', 'path': 'AUTHORING.md'}, 'id': 'read'}]),
+        AIMessage(content='', tool_calls=[{'name': 'submit_section', 'args': section, 'id': 'submit'}]),
+        AIMessage(content='Done'),
+    ])
+    agent = AkashaSkillAgent(skills=[str(BUILTIN_REPORT_SKILL_DIR)],
+        tools={'submit_section': workspace.submit_section}, model=model, env_file='',
+        max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+    evidence = agent({'stage': 'report', 'facts': {'summary': {}}})
+    assert evidence['loaded_skills'] == ['report-evidence-summary']
+    assert workspace.get_section('overview')['status'] == 'accepted'
+    assert '# Report authoring guide' in str(model.prompts[2])
+    guide = (BUILTIN_REPORT_SKILL_DIR / 'AUTHORING.md').read_text(encoding='utf-8')
+    examples = [json.loads(block.split('```', 1)[0]) for block in guide.split('```json\n')[1:]]
+    assert ReportWorkspace({'summary': {}}).submit_section(**examples[0])['status'] == 'accepted'
+    assert ReportWorkspace().submit_report(examples[1]) == {'accepted': True}
+
+
 def test_host_tool_requests_skill_loading_before_accepting_a_submission(tmp_path):
     from lladar.skill_agent import AkashaSkillAgent
     skill = tmp_path / 'fixture-method'

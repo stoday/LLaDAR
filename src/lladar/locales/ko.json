@@ -35,6 +35,8 @@
   "## Gaps and exclusions": "## 미출제 및 제외 항목",
   "| Knowledge point | Statement | Status | Reason |": "| 지식점 | 사실 | 상태 | 이유 |",
   "100% means every inventoried point in this version has a reviewed question mapping.": "100%는 이 버전에서 목록화한 모든 지식점에 검토된 질문 대응이 있음을 뜻합니다.",
+  "100% means every inventoried point in this version has a mapped question.": "100%는 이 버전에서 목록화한 모든 지식점에 대응하는 질문이 있음을 뜻합니다.",
+  "Of the covered points, {annotated} use question annotations and source checks. The remaining {reviewed} were separately reviewed.": "질문에 포함된 지식점 중 {annotated}건은 출제 시 주석과 출처 확인을 바탕으로 했으며, 나머지 {reviewed}건은 별도로 검토했습니다.",
   "Evaluation JSON or dataset generation JSON (required; no default).": "평가 JSON 또는 데이터셋 생성 JSON(필수, 기본값 없음).",
   "LLaDAR Starting... Loading components, please wait.": "LLaDAR 시작 중입니다. 구성 요소를 불러오는 동안 잠시 기다려 주세요…",
   "Does not exist": "존재하지 않음",

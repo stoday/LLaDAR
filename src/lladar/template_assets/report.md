@@ -1,5 +1,22 @@
 # Editing this report-writing Skill
 
+## Edit only Custom requirements to start
+
+Open `SKILL.md` and replace the text between **Custom requirements (edit here)** and **Execution contract (advanced)**. The template already contains a working default. Describe the result you want, its conditions and, if useful, a matching and non-matching example. No Python or JSON is needed for ordinary policy edits.
+
+Replacement example: “Write for a support manager; prioritize major issues, representative cases and actionable improvements.”
+
+Example of the distinction: Pointing out a missed refund condition with evidence fits; claiming universal reliability without evidence does not.
+
+Replace the existing policy rather than appending a competing rule. Keep the execution contract, tool names and fields intact. Advanced examples below are references, not additional instructions; editing only AUTHORING.md does not change the active policy.
+
+### Check a small run
+
+Use a small source or dataset first and a fresh output path. Read the saved results and compare them with your matching/non-matching examples. For execution, check selected cases and repeat counts in the run sidecars; for evaluation or reporting, reuse saved responses or evaluation facts. Template creation is offline; stage execution can call models and the target. Natural-language requirements guide behavior; they do not guarantee coverage or counts beyond host validation.
+
+## Advanced reference
+
+
 ## Start here
 
 Edit the prose policy in `SKILL.md` when changing the report audience, tone,

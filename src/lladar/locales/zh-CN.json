@@ -35,6 +35,8 @@
   "## Gaps and exclusions": "## 待补题与排除项目",
   "| Knowledge point | Statement | Status | Reason |": "| 知识点 | 事实陈述 | 状态 | 原因 |",
   "100% means every inventoried point in this version has a reviewed question mapping.": "100% 代表本版本已盘点知识点全部有经审查的题目对应。",
+  "100% means every inventoried point in this version has a mapped question.": "100% 代表本版本已盘点知识点全部有对应的题目。",
+  "Of the covered points, {annotated} use question annotations and source checks. The remaining {reviewed} were separately reviewed.": "已覆盖的知识点中，{annotated} 个采用出题标注与程序引文校验，其余 {reviewed} 个经过单独复核。",
   "Evaluation JSON or dataset generation JSON (required; no default).": "评估 JSON 或数据集生成记录 JSON（必填，无默认值）。",
   "LLaDAR Starting... Loading components, please wait.": "LLaDAR 正在启动，加载中，请稍候…",
   "Does not exist": "不存在",

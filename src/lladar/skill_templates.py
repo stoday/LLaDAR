@@ -56,6 +56,11 @@ def create_skill_template(stage: str, output: str | Path | None = None, *, force
     guide_text = (_ASSETS / "template_assets" / f"{stage}.md").read_text(encoding="utf-8")
 
     language = current_language()
+    # Editable English templates can differ from the bundled runtime defaults.
+    editable = _ASSETS / "localized_templates" / "en" / stage / "SKILL.md"
+    if language.ui_lang == "en" and editable.is_file():
+        skill_text = editable.read_text(encoding="utf-8")
+        skill_text = re.sub(r"(?m)^name: .+$", f"name: {destination.name}", skill_text, count=1)
     if language.ui_lang != "en":
         localized = _ASSETS / "localized_templates" / language.ui_lang / stage
         skill_text = (localized / "SKILL.md").read_text(encoding="utf-8")

@@ -24,6 +24,8 @@
   "## Gaps and exclusions": "## Gaps and exclusions",
   "| Knowledge point | Statement | Status | Reason |": "| Knowledge point | Statement | Status | Reason |",
   "100% means every inventoried point in this version has a reviewed question mapping.": "100% means every inventoried point in this version has a reviewed question mapping.",
+  "100% means every inventoried point in this version has a mapped question.": "100% means every inventoried point in this version has a mapped question.",
+  "Of the covered points, {annotated} use question annotations and source checks. The remaining {reviewed} were separately reviewed.": "Of the covered points, {annotated} use question annotations and source checks. The remaining {reviewed} were separately reviewed.",
   "Evaluation JSON or dataset generation JSON (required; no default).": "Evaluation JSON or dataset generation JSON (required; no default).",
   "LLaDAR Starting... Loading components, please wait.": "LLaDAR Starting... Loading components, please wait.",
   "Does not exist": "Does not exist",

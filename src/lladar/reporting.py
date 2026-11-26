@@ -169,6 +169,20 @@ def create_report(eval_output: str | Path, output: str | Path, *, skill: str | P
     for name, aggregate in evaluation["aggregates"].items():
         lines += [f"### {_escape(name)}", "", _escape(aggregate["description"]), "", tr('| Metric | Value |'), "| --- | ---: |"]
         lines += [f"| {_escape(tr(key))} | {_value(value)} |" for key, value in aggregate.items() if key not in {"description", "distribution"}]
+        distribution = aggregate.get("distribution")
+        if isinstance(distribution, dict):
+            categories = list(distribution)
+            quality = name == "answer_quality" and any(key in _ANSWER_DIFFERENCES for key in categories)
+            if quality:
+                categories = list(_ANSWER_DIFFERENCES) + [key for key in categories if key not in _ANSWER_DIFFERENCES]
+            lines += ["", tr('| Category | Count | Difference from expected answer |') if quality else tr('| Category | Count |'),
+                      '| --- | ---: | --- |' if quality else '| --- | ---: |']
+            for category in categories:
+                row = f"| {_escape(category)} | {_value(distribution.get(category, 0))} |"
+                if quality:
+                    row += f" {_escape(tr(_ANSWER_DIFFERENCES.get(category, 'Other saved category')))} |"
+                lines.append(row)
+    lines += _answer_difference_lines(evaluation)
     has_correctness = any(d["name"] == "correct" and d["kind"] == "boolean"
                           for d in evaluation["plan"]["dimensions"]) or any(
         type(item.get("values", {}).get("correct")) is bool for item in evaluation["items"])
@@ -279,6 +293,34 @@ def _report_narrative(evaluation, selected_skill, reporter, model, env_file,
             if workspace.narrative is None:
                 raise EvaluationError("report sections remain incomplete after review")
     return workspace, semantic_review
+
+
+_ANSWER_DIFFERENCES = {
+    "完全符合": "Matches expected answer",
+    "符合且有補充": "Additional content; needs verification",
+    "部分符合": "Partial match; required content missing",
+    "不符合": "Does not match expected answer",
+    "無法判定": "Cannot determine; needs review",
+}
+
+
+def _answer_difference_lines(evaluation: dict[str, Any]) -> list[str]:
+    distribution = evaluation.get("aggregates", {}).get("answer_quality", {}).get("distribution", {})
+    if not any(key in _ANSWER_DIFFERENCES for key in distribution):
+        return []
+    lines = ["", tr('## Differences from expected answers'), "",
+             tr('Saved answer-quality categories identify additional, missing or conflicting content; they do not establish that online facts have changed.'), "",
+             tr('| Record | Trial | Category | Difference | Expected answer | Actual response | Saved judgment reason |'),
+             '| ---: | ---: | --- | --- | --- | --- | --- |']
+    for item in evaluation["items"]:
+        category = item.get("values", {}).get("answer_quality")
+        if item.get("status") != "evaluated" or category == "完全符合":
+            continue
+        cells = [item["record_index"], item["trial"], category or tr('Missing category'),
+                 tr(_ANSWER_DIFFERENCES.get(category, 'Other saved category')),
+                 item["expected_answer"], item["actual_response"], item.get("reason", "")]
+        lines.append('| ' + ' | '.join(_cell(value) for value in cells) + ' |')
+    return lines
 
 
 def _evaluation_settings_lines(evaluation: dict[str, Any]) -> list[str]:

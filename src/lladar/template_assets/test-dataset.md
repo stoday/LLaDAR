@@ -1,5 +1,22 @@
 # Editing this test-dataset Skill
 
+## Edit only Custom requirements to start
+
+Open `SKILL.md` and replace the text between **Custom requirements (edit here)** and **Execution contract (advanced)**. The template already contains a working default. Describe the result you want, its conditions and, if useful, a matching and non-matching example. No Python or JSON is needed for ordinary policy edits.
+
+Replacement example: “Write questions a visitor would ask about transport and opening hours; preserve answer conditions.”
+
+Example of the distinction: Prefer “Can I visit on Monday?” over “What does the above say?”, which needs hidden context.
+
+Replace the existing policy rather than appending a competing rule. Keep the execution contract, tool names and fields intact. Advanced examples below are references, not additional instructions; editing only AUTHORING.md does not change the active policy.
+
+### Check a small run
+
+Use a small source or dataset first and a fresh output path. Read the saved results and compare them with your matching/non-matching examples. For execution, check selected cases and repeat counts in the run sidecars; for evaluation or reporting, reuse saved responses or evaluation facts. Template creation is offline; stage execution can call models and the target. Natural-language requirements guide behavior; they do not guarantee coverage or counts beyond host validation.
+
+## Advanced reference
+
+
 ## Start here
 
 This directory has two important files:
@@ -17,7 +34,7 @@ The usual edit loop is:
 4. Adjust the rules and run again with a new output path (or `--force` when
    replacing an output is intentional).
 
-You normally only need to edit the **Question policy** section in `SKILL.md`.
+For advanced changes, edit the **Question policy** section in `SKILL.md`.
 Do not change tool names, field names, or JSON contracts unless you are
 intentionally maintaining a compatible custom method.
 
