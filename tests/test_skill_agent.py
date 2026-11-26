@@ -266,3 +266,151 @@ def test_default_skill_budget_allows_work_past_the_old_forty_call_limit(tmp_path
                             max_output_tokens=2000, verbose=False)
     agent({'stage': 'knowledge_points', 'source_id': 'source_001'})
     assert agent.calls == 41
+
+
+def _python_skill(tmp_path, allowed_tools=""):
+    skill = tmp_path / "python-guard"
+    skill.mkdir()
+    frontmatter = f"allowed-tools: {allowed_tools}\n" if allowed_tools else ""
+    (skill / "SKILL.md").write_text(
+        f"---\nname: python-guard\ndescription: Guard.\n{frontmatter}---\nSubmit facts.\n", encoding="utf-8")
+    (skill / "note.md").write_text("Scoped reference content", encoding="utf-8")
+    return skill
+
+
+def test_python_execute_is_hidden_and_rejected_unless_the_skill_opts_in(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = _python_skill(tmp_path)
+    marker = tmp_path / "ran.txt"
+    code = f"open({str(marker)!r}, 'w').write('ran')"
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "python-guard"}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "python_execute", "args": {"skill": "python-guard", "source": code}, "id": "py"}]),
+        AIMessage(content="Done"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+
+    evidence = agent({"stage": "generation"})
+
+    assert not marker.exists()
+    assert "python_execute" not in model.offered[1]
+    assert "read_skill_resource" in model.offered[1]
+    assert "Use python_execute(" not in str(model.prompts[1])
+    assert "python_execute is not enabled" in str(model.prompts[2])
+    assert evidence["blocked_runtime_tools"] == ["python_execute"]
+    assert evidence["tool_calls"] == 1
+
+
+def test_python_execute_is_offered_when_allowed_tools_declares_it(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = _python_skill(tmp_path, "python_execute")
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "python-guard"}, "id": "load"}]),
+        AIMessage(content="", tool_calls=[{"name": "python_execute", "args": {"skill": "python-guard", "source": "print(6 * 7)"}, "id": "py"}]),
+        AIMessage(content="Done"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False)
+
+    evidence = agent({"stage": "generation"})
+
+    assert "python_execute" in model.offered[1]
+    assert "42" in str(model.prompts[2])
+    assert evidence["blocked_runtime_tools"] == []
+
+
+def test_akasha_runtime_tools_count_against_the_skill_tool_budget(tmp_path):
+    import pytest
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = _python_skill(tmp_path)
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "python-guard"}, "id": "load"}]),
+        *[AIMessage(content="", tool_calls=[{"name": "read_skill_resource",
+                                             "args": {"skill": "python-guard", "path": "note.md"}, "id": f"read-{i}"}])
+          for i in range(3)],
+        AIMessage(content="Done"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False, tool_call_limit=2)
+    with pytest.raises(RuntimeError, match="tool call budget"):
+        agent({"stage": "generation"})
+
+
+def test_input_token_budget_stops_a_work_item_with_its_evidence(tmp_path):
+    import pytest
+    from lladar.exceptions import SkillBudgetExceeded
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = _python_skill(tmp_path)
+    usage = {"input_tokens": 600, "output_tokens": 10, "total_tokens": 610}
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", usage_metadata=usage,
+                  tool_calls=[{"name": "load_skill", "args": {"reference": "python-guard"}, "id": "load"}]),
+        AIMessage(content="", usage_metadata=usage,
+                  tool_calls=[{"name": "read_skill_resource", "args": {"skill": "python-guard", "path": "note.md"}, "id": "read"}]),
+        AIMessage(content="Never reached"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={}, model=model, env_file="", temperature=0,
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False, input_token_budget=1000)
+    with pytest.raises(SkillBudgetExceeded) as raised:
+        agent({"stage": "generation"})
+    assert raised.value.skill_evidence["input_tokens"] == 1200
+    assert len(model.prompts) == 2
+
+
+def test_input_token_budget_also_bounds_host_scoped_inventory_work(tmp_path):
+    import pytest
+    from lladar.exceptions import SkillBudgetExceeded
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = _python_skill(tmp_path)
+    usage = {"input_tokens": 700, "output_tokens": 10, "total_tokens": 710}
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", usage_metadata=usage, tool_calls=[{"name": "note", "args": {"value": "a"}, "id": "n1"}]),
+        AIMessage(content="", usage_metadata=usage, tool_calls=[{"name": "note", "args": {"value": "b"}, "id": "n2"}]),
+        AIMessage(content="Never reached"),
+    ])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools={"note": lambda value: value}, model=model, env_file="",
+                             temperature=0, max_input_tokens=16000, max_output_tokens=2000, verbose=False,
+                             host_scoped=True, batch_complete=lambda: False, input_token_budget=1000)
+    with pytest.raises(SkillBudgetExceeded):
+        agent({"stage": "inventory"})
+
+
+def test_estimate_tokens_counts_cjk_text_per_character():
+    from langchain_core.messages import HumanMessage
+    from lladar.skill_agent import estimate_tokens
+
+    assert estimate_tokens([HumanMessage(content="警" * 400)]) >= 400
+    assert estimate_tokens([HumanMessage(content="a" * 400)]) < 120
+
+
+def test_old_tool_results_are_cleared_but_source_pages_and_recent_results_remain(tmp_path):
+    from lladar.skill_agent import AkashaSkillAgent
+
+    skill = _python_skill(tmp_path)
+    tools = {
+        "read_source": lambda source_id: "SOURCE-PAGE " + "原" * 300,
+        "inspect": lambda index: f"RESULT-{index} " + "查" * 300,
+    }
+    calls = [AIMessage(content="", tool_calls=[{"name": "load_skill", "args": {"reference": "python-guard"}, "id": "load"}]),
+             AIMessage(content="", tool_calls=[{"name": "read_source", "args": {"source_id": "s"}, "id": "src"}])]
+    calls += [AIMessage(content="", tool_calls=[{"name": "inspect", "args": {"index": str(i)}, "id": f"i{i}"}])
+              for i in range(8)]
+    model = ToolScriptModel(replies=[*calls, AIMessage(content="Done")])
+    agent = AkashaSkillAgent(skills=[str(skill)], tools=tools, model=model, env_file="", temperature=0,
+                             max_input_tokens=16000, max_output_tokens=2000, verbose=False, context_trigger_tokens=1500)
+
+    agent({"stage": "generation"})
+
+    final = str(model.prompts[-1])
+    assert "SOURCE-PAGE" in final
+    assert all(f"RESULT-{i}" not in final for i in range(4))
+    assert all(f"RESULT-{i}" in final for i in range(4, 8))
+    assert "Earlier tool result cleared" in final
+    # Only the request is edited; the first prompts saw full results before the trigger.
+    assert "RESULT-0" in str(model.prompts[3])

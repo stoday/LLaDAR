@@ -24,6 +24,18 @@ def inputs(tmp_path):
     return source, skill
 
 
+@pytest.fixture
+def python_inputs(inputs):
+    """A skill that opts into Akasha's python_execute and therefore candidate-file delivery."""
+    source, skill = inputs
+    (skill / "SKILL.md").write_text(
+        "---\nname: direct-qa\ndescription: Direct questions.\nallowed-tools: python_execute\n---\n"
+        "Read the source and generate one question per meaningful passage without a graph.\n",
+        encoding="utf-8",
+    )
+    return source, skill
+
+
 class DirectAgent:
     """Replace the external model, keeping source and result validation real."""
 
@@ -89,8 +101,8 @@ def test_direct_skill_can_publish_without_a_graph(inputs, tmp_path):
     assert sidecar["dataset"]["lines"][0]["generation_method"] == "direct_qa"
 
 
-def test_python_candidate_file_can_publish_without_submission_tools(inputs, tmp_path):
-    source, skill = inputs
+def test_python_candidate_file_can_publish_without_submission_tools(python_inputs, tmp_path):
+    source, skill = python_inputs
     output = tmp_path / "python.jsonl"
 
     class FileAgent(DirectAgent):
@@ -252,12 +264,12 @@ def test_cli_can_complete_direct_qa_and_report_that_no_graph_was_used(inputs, tm
     assert "graph_used=false" in capsys.readouterr().out
 
 
-def test_native_akasha_python_can_deliver_a_candidate_file(inputs, tmp_path):
+def test_native_akasha_python_can_deliver_a_candidate_file(python_inputs, tmp_path):
     from langchain_core.messages import AIMessage
     from lladar.skill_agent import AkashaSkillAgent
     from test_skill_agent import ToolScriptModel
 
-    source, skill = inputs
+    source, skill = python_inputs
     text = source.read_text(encoding="utf-8")
     candidate = {
         "reads": [{"read_id": "python_read", "source_id": "source_001", "start_char": 0, "end_char": len(text)}],
@@ -382,8 +394,8 @@ def test_direct_typed_qa_preserves_its_contract_without_a_graph(inputs, tmp_path
     assert not Path(str(output) + ".graph.json").exists()
 
 
-def test_valid_python_delivery_can_replace_earlier_rejected_tool_candidates(inputs):
-    source, skill = inputs
+def test_valid_python_delivery_can_replace_earlier_rejected_tool_candidates(python_inputs):
+    source, skill = python_inputs
 
     class RepairedAgent(DirectAgent):
         def __call__(self, request):
@@ -447,3 +459,147 @@ def test_graph_fact_feedback_explains_the_entity_label_contract(inputs):
 
     rows = create_test_dataset(source, skill=skill, skill_agent_factory=RepairingGraphAgent, verbose=False)
     assert len(rows) == 2
+
+
+def test_candidate_file_delivery_is_not_offered_without_python_opt_in(inputs):
+    source, skill = inputs
+    requests = []
+
+    class RecordingAgent(DirectAgent):
+        def __call__(self, request):
+            requests.append(request)
+            return super().__call__(request)
+
+    records = create_test_dataset(source, skill=skill, skill_agent_factory=RecordingAgent, verbose=False)
+    assert records[0]["expected_answer"] == "30 days"
+    assert requests and all("candidate_path" not in request for request in requests)
+
+
+def test_invalid_candidate_file_falls_back_to_accepted_tool_submissions(python_inputs):
+    source, skill = python_inputs
+    attempts = []
+
+    class BrokenFileAgent(DirectAgent):
+        def __call__(self, request):
+            attempts.append(request["attempt"])
+            result = super().__call__(request)
+            Path(request["candidate_path"]).write_text(json.dumps({"qa": [], "unexpected": True}), encoding="utf-8")
+            return result
+
+    records = create_test_dataset(source, skill=skill, skill_agent_factory=BrokenFileAgent, verbose=False)
+    assert records[0]["expected_answer"] == "30 days"
+    assert attempts == [1]
+
+
+def _failing(error, agent):
+    error.skill_evidence = {**agent.evidence(), "input_tokens": 400}
+    return error
+
+
+def test_budget_exhaustion_keeps_accepted_submissions_without_retrying(inputs):
+    from lladar.exceptions import SkillBudgetExceeded
+
+    source, skill = inputs
+    attempts = []
+
+    class SpendingAgent(DirectAgent):
+        def __call__(self, request):
+            attempts.append(request["attempt"])
+            super().__call__(request)
+            raise _failing(SkillBudgetExceeded("budget"), self)
+
+    records = create_test_dataset(source, skill=skill, skill_agent_factory=SpendingAgent, verbose=False)
+    assert records[0]["expected_answer"] == "30 days"
+    assert attempts == [1]
+
+
+def test_budget_exhaustion_without_results_stops_instead_of_retrying(inputs):
+    from lladar.exceptions import SkillBudgetExceeded
+
+    source, skill = inputs
+    attempts = []
+
+    class SpendingAgent(DirectAgent):
+        def __call__(self, request):
+            attempts.append(request["attempt"])
+            raise _failing(SkillBudgetExceeded("budget"), self)
+
+    with pytest.raises(SkillBudgetExceeded):
+        create_test_dataset(source, skill=skill, skill_agent_factory=SpendingAgent, verbose=False)
+    assert attempts == [1]
+
+
+def test_round_limit_is_retried_once_with_the_remaining_token_budget(inputs, monkeypatch):
+    from langgraph.errors import GraphRecursionError
+
+    monkeypatch.setenv("LLADAR_SKILL_ITEM_INPUT_TOKENS", "1000")
+    source, skill = inputs
+    budgets = []
+
+    class LoopingAgent(DirectAgent):
+        def __init__(self, **options):
+            budgets.append(options.get("input_token_budget"))
+            super().__init__(**options)
+
+        def __call__(self, request):
+            raise _failing(GraphRecursionError("rounds"), self)
+
+    with pytest.raises(DatasetValidationError):
+        create_test_dataset(source, skill=skill, skill_agent_factory=LoopingAgent, verbose=False)
+    assert budgets == [1000, 600]
+
+
+def test_retry_request_lists_only_the_remaining_work(tmp_path):
+    source = tmp_path / "notes.md"
+    source.write_text("Service A keeps data for 30 days. Service B keeps data for 7 days.", encoding="utf-8")
+    skill = tmp_path / "direct-qa"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: direct-qa\ndescription: Direct questions.\n---\nAsk.\n",
+                                    encoding="utf-8")
+    requests = []
+
+    class PartialAgent(DirectAgent):
+        def __call__(self, request):
+            requests.append(request)
+            if request["attempt"] == 1:
+                page = self.tools["read_source"]("source_001", 0, 33)
+                accepted = self.tools["submit_knowledge_points"]([{
+                    "statement": page["text"], "topic": "A", "evidence": [{"read_id": page["read_id"], "quote": page["text"]}]}])
+                self.tools["submit_knowledge_points"]([{
+                    "statement": "Service A retention", "topic": "A",
+                    "evidence": [{"read_id": page["read_id"], "quote": "30 days"}]}])
+                self.tools["submit_qa"]({"knowledge_point_id": accepted["accepted"][0],
+                                         "question": "How long does A keep data?", "expected_answer": "30 days"})
+                return self.evidence()
+            return super().__call__(request)
+
+    create_test_dataset(source, skill=skill, skill_agent_factory=PartialAgent, verbose=False)
+    assert "remaining_work" not in requests[0]
+    remaining = requests[1]["remaining_work"]
+    assert remaining["unread_ranges"] == {"source_001": [[33, len(source.read_text(encoding="utf-8"))]]}
+    assert remaining["accepted_qa_count"] == 1
+    assert remaining["knowledge_points_without_qa"] == ["kp_000002"]
+    assert "unread ranges" in remaining["problems"][0]
+
+
+def test_existing_results_are_bounded_outside_inventory_mode(inputs):
+    source, skill = inputs
+    sizes = []
+
+    class BusyAgent(DirectAgent):
+        def __call__(self, request):
+            sizes.append(len(json.dumps(request["existing_results"], ensure_ascii=False).encode("utf-8")))
+            if request["attempt"] == 1:
+                super().__call__(request)
+                page = self.tools["read_source"]("source_001")
+                point = self.tools["submit_knowledge_points"]([{
+                    "statement": page["text"], "topic": "Retention",
+                    "evidence": [{"read_id": page["read_id"], "quote": page["text"]}]}])["accepted"][0]
+                for index in range(200):
+                    self.tools["submit_qa"]({"knowledge_point_id": point, "question": f"Variant {index} " + "x" * 80 + "?",
+                                             "expected_answer": "30 days"})
+                raise _failing(RuntimeError("stop"), self)
+            return super().__call__(request)
+
+    create_test_dataset(source, skill=skill, skill_agent_factory=BusyAgent, verbose=False)
+    assert sizes[-1] <= 6000

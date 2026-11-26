@@ -39,7 +39,12 @@ DEFAULT_LIMITS = {
     "MANUAL_VERIFICATION_TIMEOUT_SECONDS": 3600,
     "CSV_FIELD_CHARS": 16 * 1024 * 1024,
     "SKILL_TOOL_CALLS": 1000,
-    "SKILL_ROUNDS": 100,
+    # A complete healthy generation stage uses about 50 model calls in total.
+    "SKILL_ROUNDS": 40,
+    # Input tokens one work item may spend across its attempts, as reported by the provider.
+    "SKILL_ITEM_INPUT_TOKENS": 1_000_000,
+    # Estimated conversation size above which older tool results are replaced by a placeholder.
+    "SKILL_CONTEXT_TRIGGER_TOKENS": 40_000,
     "AUTO_ADAPTER_REPAIR_ATTEMPTS": 50,
     "EXPLORATION_TOOL_CALLS": 1000,
     "EXPLORATION_READ_CHARACTERS": 4 * 1024 * 1024,

@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 from threading import RLock
+import unicodedata
 
 from .exceptions import DatasetValidationError
 from .method_skill import invoke_skill
@@ -58,6 +59,11 @@ class KnowledgeCoverage:
         self.skill_hash = hashlib.sha256((self.skill / "SKILL.md").read_bytes()).hexdigest()
         self.page_chars = min(6000, max(1, profile.max_input_tokens // 8))
         self.review_bytes = max(256, min(6000, profile.max_input_tokens // 4))
+        # Reconciliation compares facts across the whole inventory, so it receives a compact
+        # index plus its assigned facts with evidence instead of paging them one by one.
+        self.reconcile_bytes = max(self.review_bytes, min(48000, profile.max_input_tokens // 2))
+        # Review sees a one-line view of every question so it does not page through them.
+        self.question_index_bytes = min(24000, profile.max_input_tokens // 8)
         session = current_session()
         saved = session.data["state"].get("knowledge_coverage", {}) if session else {}
         self.inventory = deepcopy(saved.get("inventory", {
@@ -68,11 +74,13 @@ class KnowledgeCoverage:
                         for key, value in self.sources.items()],
         }))
         self.review_cache = deepcopy(saved.get("reviews", {}))
+        self.settled_reviews = deepcopy(saved.get("settled_reviews", {}))
 
     def checkpoint(self):
         session = current_session()
         if session:
-            session.put("knowledge_coverage", {"inventory": self.inventory, "reviews": self.review_cache})
+            session.put("knowledge_coverage", {"inventory": self.inventory, "reviews": self.review_cache,
+                                               "settled_reviews": self.settled_reviews})
 
     def invoke(self, stage, request, tools, prompt, *, batch_complete):
         def synchronized(function):
@@ -260,8 +268,9 @@ class KnowledgeCoverage:
                             points_digest=initial["points_digest"])
                 self.checkpoint()
                 return
-            views = [self.point_summary(point) for point in self.inventory["points"]]
-            work.update(assignments=[[p["id"] for p in batch] for batch in item_batches(views, self.review_bytes)],
+            work["host_merged"] = self.merge_identical_points()
+            views = [self.point_with_evidence(point) for point in self.inventory["points"]]
+            work.update(assignments=[[p["id"] for p in batch] for batch in item_batches(views, self.reconcile_bytes // 2)],
                         completed={}, status="working")
             self.checkpoint()
         for index, assigned in enumerate(work["assignments"]):
@@ -294,15 +303,23 @@ class KnowledgeCoverage:
             def replace_inventory_point(knowledge_point_id: str, points: list[dict], reason: str):
                 return self.replace_point(knowledge_point_id, points, reason)
 
+            other_points = self.inventory_index(exclude=assigned)
             self.invoke("inventory_reconciliation", {"phase": phase,
-                "points": self.with_inline_evidence(points, [self.point_summary(point) for point in points]),
-                "all_points_assigned": len(points) == len(self.inventory["points"])},
+                "points": self.with_inline_evidence([self.point_with_evidence(point) for point in points],
+                                                    [self.point_summary(point) for point in points],
+                                                    budget=self.reconcile_bytes // 2),
+                "all_points_assigned": len(points) == len(self.inventory["points"]),
+                "inventory_index": other_points,
+                "possible_duplicates": self.possible_duplicates(points)},
                 {**self.generation_tools(None), "revise_inventory_point": revise_inventory_point,
                  "replace_inventory_point": replace_inventory_point,
                  "finish_inventory_reconciliation": finish_inventory_reconciliation},
                 """Reconcile the independent fact inventory before questions or coverage are finalized.
-Use the supplied points and evidence. Use read_inventory_point only for details omitted from supplied views.
-Search related facts outside the assigned batch with list_inventory_points(query=...) when all_points_assigned is false.
+The request already contains the assigned points with their evidence, inventory_index (every other point's
+statement, unless it is null because the inventory is too large) and possible_duplicates (pairs the host found
+with similar wording). Work from these: do not page through list_inventory_points or read points one by one.
+Use read_inventory_point only for a point whose supplied text is cut off, and list_inventory_points(query=...)
+only when inventory_index is null. Identical statements were already merged by the host.
 Check every assigned point against related facts across the inventory. Merge semantic duplicates with revise_inventory_point
 and merge_ids even when wording or topic labels differ. Preserve all citations. Different events, dates, subjects,
 conditions and exceptions remain distinct. Split compound statements with replace_inventory_point into independently
@@ -322,10 +339,55 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
         return {"id": point["id"], "statement": short_text(point["statement"], self.review_bytes // 3),
                 "topic": short_text(point["topic"], self.review_bytes // 8)}
 
-    def with_inline_evidence(self, points, summaries):
-        if len(json.dumps(points, ensure_ascii=False).encode("utf-8")) <= self.review_bytes:
+    def with_inline_evidence(self, points, summaries, budget=None):
+        if len(json.dumps(points, ensure_ascii=False).encode("utf-8")) <= (budget or self.review_bytes):
             return deepcopy(points)
         return summaries
+
+    def point_with_evidence(self, point):
+        return {"id": point["id"], "statement": point["statement"], "topic": point["topic"],
+                "evidence": [{key: quote[key] for key in ("source_id", "start_char", "quote")}
+                             for quote in point["evidence"]]}
+
+    def inventory_index(self, *, exclude):
+        """Every other point's statement in one view, or None when it exceeds the reconciliation budget."""
+        index = [{"id": p["id"], "statement": short_text(p["statement"], 300)}
+                 for p in self.inventory["points"] if p["id"] not in exclude]
+        if len(json.dumps(index, ensure_ascii=False).encode("utf-8")) > self.reconcile_bytes:
+            return None
+        return index
+
+    def possible_duplicates(self, assigned, *, threshold=0.6, limit=50):
+        """Pairs of an assigned point and any other point whose statements share most character bigrams."""
+        grams = {p["id"]: _bigrams(p["statement"]) for p in self.inventory["points"]}
+        pairs = {}
+        for point in assigned:
+            mine = grams[point["id"]]
+            for other_id, theirs in grams.items():
+                if other_id == point["id"] or not mine or not theirs:
+                    continue
+                similarity = len(mine & theirs) / len(mine | theirs)
+                if similarity >= threshold:
+                    key = tuple(sorted((point["id"], other_id)))
+                    pairs[key] = max(pairs.get(key, 0), similarity)
+        ranked = sorted(pairs.items(), key=lambda item: -item[1])[:limit]
+        return [{"ids": list(ids), "similarity": round(score, 2)} for ids, score in ranked]
+
+    def merge_identical_points(self):
+        """Merge points whose statements are identical apart from spacing and punctuation; no model call needed."""
+        groups = {}
+        for point in self.inventory["points"]:
+            groups.setdefault(_normalized_statement(point["statement"]), []).append(point)
+        merged = []
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            keep = group[0]
+            self.revise_point(keep["id"], keep["statement"], keep["topic"],
+                [{key: quote[key] for key in ("source_id", "start_char", "quote")} for quote in keep["evidence"]],
+                "Host merged identical statements.", [point["id"] for point in group[1:]])
+            merged.append({"knowledge_point_id": keep["id"], "merged_ids": [point["id"] for point in group[1:]]})
+        return merged
 
     def replace_point(self, point_id, points, reason):
         original = next((p for p in self.inventory["points"] if p["id"] == point_id), None)
@@ -399,6 +461,18 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
             ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
         cached = self.review_cache.setdefault(fingerprint, {})
         by_id = {p["id"]: p for p in points}
+        question_fingerprints = {line["qa_id"]: line["record_fingerprint"] for line in result.provenance["dataset"]["lines"]}
+        # Settled judgments survive new questions: a covered point whose questions are unchanged,
+        # or an excluded point, is not reviewed again. Gaps and unresolved points are.
+        for point in points:
+            prior = self.settled_reviews.get(point["id"])
+            if point["id"] in cached or prior is None or prior["point"] != digest(point):
+                continue
+            judgment = prior["judgment"]
+            if judgment["answerability"] == "excluded" or judgment["question_ids"] and all(
+                    question_fingerprints.get(qa_id) == prior["questions"].get(qa_id) for qa_id in judgment["question_ids"]):
+                cached[point["id"]] = deepcopy(judgment)
+        candidates = self.candidate_questions(result)
 
         def list_coverage_questions(start: int = 0, limit: int = 5):
             if type(start) is not int or not 0 <= start <= len(questions) or type(limit) is not int or not 1 <= limit <= 5:
@@ -428,10 +502,23 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
         views = [{**self.point_summary(point), "evidence": [
             {key: quote[key] for key in ("source_id", "start_char", "end_char")}
             for quote in point["evidence"][:3]]} for point in points if point["id"] not in cached]
-        first_questions = list_coverage_questions()
+        index = [{"id": q["id"], "question": short_text(q["question"], self.review_bytes // 8)} for q in questions]
+        if len(json.dumps(index, ensure_ascii=False).encode("utf-8")) > self.question_index_bytes:
+            index = None
 
         for batch in item_batches(views, self.review_bytes):
             point_ids = {point["id"] for point in batch}
+            batch_candidates = {point["id"]: candidates.get(point["id"], []) for point in batch}
+            # Overlapping candidates first, then other questions while the request budget allows.
+            question_views = []
+            by_question = {q["id"]: q for q in questions}
+            ordered = dict.fromkeys([qa_id for ids in batch_candidates.values() for qa_id in ids] + list(by_question))
+            for qa_id in ordered:
+                view = {"id": qa_id, **{key: short_text(by_question[qa_id][key], self.review_bytes // 4)
+                                        for key in ("question", "expected_answer")}}
+                if question_views and len(json.dumps(question_views + [view], ensure_ascii=False).encode("utf-8")) > self.review_bytes:
+                    break
+                question_views.append(view)
             completed = False
 
             def submit_coverage_review(judgments: list[dict]):
@@ -451,17 +538,26 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
                     if item["answerability"] != "eligible" and item["question_ids"]:
                         raise ValueError("excluded or unresolved points cannot also be covered")
                 cached.update({item["knowledge_point_id"]: deepcopy(item) for item in judgments})
+                for item in judgments:
+                    self.settled_reviews[item["knowledge_point_id"]] = {
+                        "point": digest(by_id[item["knowledge_point_id"]]), "judgment": deepcopy(item),
+                        "questions": {qa_id: question_fingerprints[qa_id] for qa_id in item["question_ids"]}}
                 self.checkpoint()
                 completed = True
                 return {"accepted": True}
 
             self.invoke("coverage_review", {
                 "points": self.with_inline_evidence([by_id[point["id"]] for point in batch], batch),
-                "questions": first_questions["questions"],
-                "questions_next_start": first_questions["next_start"]},
+                "candidate_question_ids": batch_candidates,
+                "questions": question_views,
+                "question_index": index,
+                "question_count": len(questions)},
                 {**tools, "submit_coverage_review": submit_coverage_review}, REVIEW_PROMPT +
-                "\nUse the supplied points, evidence and questions. Only fetch omitted details with read_coverage_item. "
-                "If questions_next_start is set, start any further question lookup there.",
+                "\nUse the supplied points, evidence and questions. candidate_question_ids lists, per point, the "
+                "questions whose source evidence overlaps that point; questions holds those candidates first. "
+                "question_index briefly lists every published question when it fits. Judge from these; do not page "
+                "through all questions. Use read_coverage_item only for a complete text you must check, and "
+                "list_coverage_questions only when question_index is null and a point has no suitable candidate.",
                 batch_complete=lambda: completed)
             if not completed:
                 raise DatasetValidationError("coverage review did not judge the inventory")
@@ -480,8 +576,32 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
                                if r["question_ids"] or r["answerability"] == "excluded"}
         return [p["id"] for p in self.inventory["points"] if p["id"] not in covered_or_excluded]
 
+    def candidate_questions(self, result):
+        """Map each inventory point to the questions whose generation evidence overlaps its evidence."""
+        spans = {point["id"]: [(item["source_id"], item["start_char"], item["end_char"])
+                               for item in point.get("evidence", [])]
+                 for point in result.provenance.get("knowledge_points", [])}
+        question_spans = {line["qa_id"]: [span for point_id in line.get("knowledge_point_ids", [])
+                                          for span in spans.get(point_id, [])]
+                          for line in result.provenance["dataset"]["lines"]}
+        mapping = {}
+        for point in self.inventory["points"]:
+            ranges = [(item["source_id"], item["start_char"], item["end_char"]) for item in point["evidence"]]
+            mapping[point["id"]] = [qa_id for qa_id, qa_ranges in question_spans.items() if any(
+                source == other_source and start < other_end and other_start < end
+                for source, start, end in ranges for other_source, other_start, other_end in qa_ranges)]
+        return mapping
+
+    def repair_targets(self, point_ids):
+        """Missing points with their exact evidence, so repair work needs no per-point lookups."""
+        by_id = {p["id"]: p for p in self.inventory["points"]}
+        return [{"id": point_id, "statement": by_id[point_id]["statement"], "topic": by_id[point_id]["topic"],
+                 "evidence": [{key: quote[key] for key in ("source_id", "start_char", "end_char", "quote")}
+                              for quote in by_id[point_id]["evidence"]]}
+                for point_id in point_ids if point_id in by_id]
+
     def generation_tools(self, workspace):
-        def list_inventory_points(start: int = 0, limit: int = 5, query: str = ""):
+        def list_inventory_points(start: int = 0, limit: int = 20, query: str = ""):
             points = [p for p in self.inventory["points"] if workspace is None or not workspace.assigned_ranges or any(
                 q["source_id"] in workspace.assigned_ranges
                 and workspace.assigned_ranges[q["source_id"]][0] <= q["start_char"] < workspace.assigned_ranges[q["source_id"]][1]
@@ -491,8 +611,8 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
             if query:
                 points = [p for p in points if all(word in (p["statement"] + " " + p["topic"]).casefold()
                                                   for word in query.casefold().split())]
-            if type(start) is not int or not 0 <= start <= len(points) or type(limit) is not int or not 1 <= limit <= 5:
-                raise ValueError("inventory page requires a valid start and limit from 1 to 5")
+            if type(start) is not int or not 0 <= start <= len(points) or type(limit) is not int or not 1 <= limit <= 50:
+                raise ValueError("inventory page requires a valid start and limit from 1 to 50")
             rows = [{"id": p["id"], "statement": short_text(p["statement"], self.review_bytes // 5)}
                     for p in points[start:start + limit]]
             end = start + len(rows)
@@ -529,6 +649,16 @@ def coverage_summary(inventory, reviews, output_records):
         "output_records": output_records,
         "all_coverage": len(covered) / len(point_ids) if point_ids else None,
         "eligible_coverage": len(covered) / len(eligible) if eligible else None}
+
+
+def _normalized_statement(text):
+    return "".join(char for char in unicodedata.normalize("NFKC", text).casefold()
+                   if not unicodedata.category(char).startswith(("P", "Z", "C")))
+
+
+def _bigrams(text):
+    normalized = _normalized_statement(text)
+    return {normalized[index:index + 2] for index in range(len(normalized) - 1)}
 
 
 def short_text(text, byte_limit):

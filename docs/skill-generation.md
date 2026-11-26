@@ -48,18 +48,49 @@ metadata:
 不是固定切分方法。長來源依 `next_start` 續讀。
 
 直接問答附知識段落 ID、問題、預期答案及可定位的原文引用，沒有圖譜也可成功。
+`submit_qa_batch` 一次最多提交 50 題，每題逐筆接受或拒絕，只需修正並重送被拒的項目。
+每次工具呼叫都會重送整段對話，Skill 宜批次提交，並在同一輪平行發出互不相依的呼叫。
 圖譜方法提交實體、事實、關係與推論概念，再產生依賴圖譜的題目。
 空圖譜不能通過驗證；一般直接事實圖譜可以沒有概念或關係邊。
 
-Agent 可使用 Akasha 原生 `python_execute` 探索、計算與修正候選，包括直接調整
-執行中的工作區。也可依 request 的 `candidate_contract`，直接寫入預先指定的
-`candidate_path` JSON。候選檔存在時代表完整交付快照，不是與工作區合併的增量；
+Akasha 原生 `python_execute` 預設關閉：模型看不到這個工具，呼叫也會被拒絕。
+Skill 須在 SKILL.md frontmatter 宣告 `allowed-tools: python_execute` 才會開放，
+此時 request 才會附上 `candidate_path` 與 `candidate_contract`，Agent 可用 Python
+探索、計算、修正候選，或直接寫入該 JSON。`python_execute` 與 `read_skill_resource`
+都計入 `SKILL_TOOL_CALLS` 預算。候選檔存在時代表完整交付快照，不是與工作區合併的
+增量；候選檔驗證失敗時，改用已透過工具提交的工作區快照，兩者都失敗才重試。
 不掃描目錄猜測輸出。作者指南提供 reads、knowledge_points、qa、graph、plans
 及 method_reason 的欄位說明。
 
 結果不要求全部經工具提交。主程式收集並固定最終快照，再重新檢查原文位置、
 問題格式及適用的圖譜／probe 契約；不能沿用早期 accepted 當成免驗證證明。
 正式寫檔仍遵守輸出路徑、覆寫保護與發布復原規則。
+
+## 用量上限與重試
+
+每個模型工作項（一個生成批次，或盤點／對齊／稽核／覆蓋審查的一批）都受下列上限約束，
+可用 `LLADAR_<名稱>` 環境變數覆蓋：
+
+| 名稱 | 預設 | 作用 |
+| --- | ---: | --- |
+| `SKILL_ROUNDS` | 40 | 單次 agent 執行的模型輪數上限 |
+| `SKILL_TOOL_CALLS` | 1000 | 主機工具與 Akasha 執行期工具的呼叫總數 |
+| `SKILL_ITEM_INPUT_TOKENS` | 1000000 | 單一工作項所有嘗試合計的供應商回報 input tokens |
+| `SKILL_CONTEXT_TRIGGER_TOKENS` | 40000 | 對話估計長度超過此值時，較舊的工具結果改以佔位文字送出 |
+
+上下文裁剪只改送給模型的請求，不改 agent 狀態；保留最近 4 個工具結果，以及全部
+`read_source` 與 `load_skill` 結果。估算時 CJK 字元以約 1 token 計，其他文字約 4 字元 1 token。
+
+重試規則：
+
+- 輪數用盡（`GraphRecursionError`）時，先收集已提交的結果；不足時只再試一次。
+- token 預算用盡時不重試：已提交的結果足夠就完成，否則保存進度後結束，可用 `--resume` 續跑。
+- 重試請求附上 `remaining_work`，列出未讀範圍、尚無題目的知識點與驗證問題，
+  已接受的項目不必重讀或重送。`existing_results.questions` 只保留最近的題目，大小有上限。
+- Agent 錯誤後若本次嘗試沒有任何新提交，即使沿用前面批次的結果可通過驗證，也會在預算內重試。
+  非供應商錯誤在執行紀錄保存截斷並遮蔽機密的 `error_message`。
+- 補題輪帶入全部缺題知識點及其引文（含可直接引用的 `read_id`），依引文位置分配批次；
+  沒有目標的批次直接略過。
 
 ## 圖譜 probe 與題型
 
@@ -83,7 +114,7 @@ lladar create test-dataset --knowledge .\knowledge --controlled-variant-topics c
 - `--count 0` 保留所有去重後候選；正整數是全域上限。
 - 去重正規化空白後精確比較問題與答案；配對題完整保留或完整略過。
 - 同段可有多題；重複交付不重複增加題數。來源耗盡與略過原因保存於紀錄。
-- 每次生成最多三次嘗試；每次最多 40 次 host 工具呼叫、30 個 Agent 回合。
+- 每個生成批次最多三次嘗試；工具呼叫、模型輪數與 token 上限見「用量上限與重試」。
 - request 的 existing_results 與 validation_errors 協助修正未完成資料。
 - Agent 交付後才發生回合上限等錯誤時，若最終快照有效，保留產物及錯誤紀錄，
   不要求再次提交。初始化、Skill 載入失敗仍不能假裝成功。

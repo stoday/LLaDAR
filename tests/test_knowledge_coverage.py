@@ -808,3 +808,227 @@ def test_coverage_report_honors_an_explicit_report_skill(tmp_path):
     text = report.read_text(encoding="utf-8")
     assert "Coverage-focused findings." in text
     assert "1 / 1" in text
+
+
+def _inventory_lines(agent, request, topics=None):
+    page = request["source"]
+    lines = [line for line in page["text"].splitlines() if line.strip()]
+    agent.tools["submit_inventory_batch"](points=[{
+        "statement": line.rstrip("."), "topic": (topics or {}).get(index, "Station"),
+        "evidence": [{"source_id": page["source_id"], "start_char": page["start_char"] + page["text"].index(line), "quote": line}],
+    } for index, line in enumerate(lines)], pending=[], reason="Facts extracted.", complete=True)
+
+
+def _station_agent_other_stages(agent, request):
+    if request["stage"] == "coverage_review":
+        agent.tools["submit_coverage_review"]([{"knowledge_point_id": p["id"], "answerability": "eligible",
+            "question_ids": [request["questions"][0]["id"]], "reason": "The question asks this fact."} for p in request["points"]])
+    else:
+        page = agent.tools["read_source"]("source_001")
+        agent.tools["submit_question"](request_id="opening", question="When did this station open?", expected_answer="1931.",
+            source_refs=[page["source_refs"][0]["ref_id"]], answer_basis="derived_criterion", rationale="The source gives 1931.")
+    return agent.evidence()
+
+
+def test_identical_statements_are_merged_by_the_host_before_reconciliation(tmp_path):
+    source = tmp_path / "knowledge.md"
+    source.write_text("The station opened in 1931.\n\nThe station opened in 1931!", encoding="utf-8")
+    reconciliation_requests = []
+
+    class TwoTopics(CoverageAgent):
+        def __call__(self, request):
+            if request["stage"] in {"inventory", "inventory_audit"}:
+                _inventory_lines(self, request, topics={1: "Opening"})
+                return self.evidence()
+            if request["stage"] == "inventory_reconciliation":
+                reconciliation_requests.append(request)
+                return super().__call__(request)
+            return _station_agent_other_stages(self, request)
+
+    output = tmp_path / "dataset.jsonl"
+    create_test_dataset(source, output=output, skill_agent_factory=TwoTopics, verbose=False)
+    first = reconciliation_requests[0]
+    assert [point["id"] for point in first["points"]] == ["ikp_000001"]
+    assert len(first["points"][0]["evidence"]) == 2
+    saved = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+    assert saved["coverage"]["summary"]["total_points"] == 1
+
+
+def test_reconciliation_request_carries_the_inventory_index_and_similar_pairs(tmp_path):
+    lines = ["The station opened in 1931.", "The station was opened in 1931.",
+             "Officers patrolled the market district on foot every morning."]
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n\n".join(lines), encoding="utf-8")
+    requests = []
+
+    class Recording(CoverageAgent):
+        def __call__(self, request):
+            if request["stage"] in {"inventory", "inventory_audit"}:
+                _inventory_lines(self, request)
+                return self.evidence()
+            if request["stage"] == "inventory_reconciliation":
+                requests.append(request)
+                assert "list_inventory_points" in self.tools
+                return super().__call__(request)
+            return _station_agent_other_stages(self, request)
+
+    create_test_dataset(source, output=tmp_path / "dataset.jsonl", skill_agent_factory=Recording,
+                        max_input_tokens=1200, max_output_tokens=600, verbose=False)
+    batched = [request for request in requests if not request["all_points_assigned"]]
+    assert batched, "a small budget should split reconciliation into batches"
+    for request in batched:
+        assigned = {point["id"] for point in request["points"]}
+        indexed = {point["id"] for point in request["inventory_index"]}
+        assert assigned.isdisjoint(indexed) and len(assigned | indexed) == 3
+        assert all("evidence" in point for point in request["points"])
+    pairs = [pair for request in requests for pair in request["possible_duplicates"]]
+    assert {tuple(pair["ids"]) for pair in pairs} == {("ikp_000001", "ikp_000002")}
+
+
+def test_inventory_points_can_be_listed_in_larger_pages(tmp_path):
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n\n".join(f"Service {n} retains data for {n} days." for n in range(1, 31)), encoding="utf-8")
+
+    class Listing(CoverageAgent):
+        def __call__(self, request):
+            if request["stage"] == "inventory_reconciliation":
+                page = self.tools["list_inventory_points"](limit=50)
+                assert len(page["points"]) == 30 and page["next_start"] is None
+                assert len(self.tools["list_inventory_points"]()["points"]) == 20
+            return super().__call__(request)
+
+    create_test_dataset(source, output=tmp_path / "dataset.jsonl", skill_agent_factory=Listing, verbose=False)
+
+
+class PreciseServiceAgent(CoverageAgent):
+    """Cites each service sentence exactly, so question evidence maps to one inventory point."""
+
+    initial_services = range(1, 11)
+
+    def submit_services(self, numbers, read_id):
+        statements = [f"Service {n} retains data for {n} days." for n in numbers]
+        accepted = self.tools["submit_knowledge_points"]([{
+            "statement": text, "topic": "Retention", "evidence": [{"read_id": read_id, "quote": text}]}
+            for text in statements])["accepted"]
+        return self.tools["submit_qa_batch"]([{
+            "knowledge_point_id": point_id, "question": f"How long does Service {n} keep data?",
+            "expected_answer": f"{n} days"} for n, point_id in zip(numbers, accepted)])
+
+    def __call__(self, request):
+        if request["stage"] == "generation" and not request.get("coverage_repair"):
+            page = self.tools["read_source"]("source_001")
+            receipt = self.submit_services(list(self.initial_services), page["read_id"])
+            assert receipt == {"accepted": len(self.initial_services), "rejected": []}
+            return self.evidence()
+        if request["stage"] == "coverage_review":
+            self.tools["submit_coverage_review"]([{
+                "knowledge_point_id": point["id"], "answerability": "eligible",
+                "question_ids": request["candidate_question_ids"][point["id"]],
+                "reason": "The overlapping question asks this retention period."} for point in request["points"]])
+            return self.evidence()
+        return super().__call__(request)
+
+
+def test_qa_batch_accepts_and_rejects_records_independently(tmp_path):
+    source = tmp_path / "knowledge.md"
+    source.write_text("Service 1 retains data for 1 days.", encoding="utf-8")
+    receipts = []
+
+    class BatchAgent(PreciseServiceAgent):
+        def __call__(self, request):
+            if request["stage"] == "generation" and not request.get("coverage_repair"):
+                page = self.tools["read_source"]("source_001")
+                point = self.tools["submit_knowledge_points"]([{"statement": page["text"], "topic": "Retention",
+                    "evidence": [{"read_id": page["read_id"], "quote": page["text"]}]}])["accepted"][0]
+                receipts.append(self.tools["submit_qa_batch"]([
+                    {"knowledge_point_id": point, "question": "How long does Service 1 keep data?", "expected_answer": "1 days"},
+                    {"knowledge_point_id": point, "question": "Extra field?", "expected_answer": "x", "id": "bad"},
+                    {"knowledge_point_id": "kp_999999", "question": "Unknown point?", "expected_answer": "x"},
+                ]))
+                return self.evidence()
+            return super().__call__(request)
+
+    records = create_test_dataset(source, output=tmp_path / "dataset.jsonl", skill_agent_factory=BatchAgent, verbose=False)
+    assert len(records) == 1
+    assert receipts[0]["accepted"] == 1
+    assert [item["index"] for item in receipts[0]["rejected"]] == [1, 2]
+
+
+def test_coverage_repair_carries_every_missing_target_inline_and_review_is_incremental(tmp_path):
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n\n".join(f"Service {n} retains data for {n} days." for n in range(1, 31)), encoding="utf-8")
+    repairs, reviewed = [], []
+
+    class RepairAgent(PreciseServiceAgent):
+        def __call__(self, request):
+            if request.get("coverage_repair"):
+                repairs.append(request)
+                targets = request["coverage_targets"]
+                assert all(item["evidence"][0]["read_id"] for item in targets)
+                accepted = self.tools["submit_knowledge_points"]([{
+                    "statement": item["statement"], "topic": item["topic"],
+                    "evidence": [{"read_id": quote["read_id"], "quote": quote["quote"]} for quote in item["evidence"]]}
+                    for item in targets])["accepted"]
+                numbers = [int(item["statement"].split()[1]) for item in targets]
+                self.tools["submit_qa_batch"]([{"knowledge_point_id": point_id,
+                    "question": f"How long does Service {n} keep data?", "expected_answer": f"{n} days"}
+                    for n, point_id in zip(numbers, accepted)])
+                return self.evidence()
+            if request["stage"] == "coverage_review":
+                reviewed.extend(point["id"] for point in request["points"])
+                questions = {q["id"]: q["question"] for q in request["questions"]}
+                for point in request["points"]:
+                    number = int(point["statement"].split()[1])
+                    assert [questions[qa_id] for qa_id in request["candidate_question_ids"][point["id"]]] in (
+                        [], [f"How long does Service {number} keep data?"])
+            return super().__call__(request)
+
+    records = create_test_dataset(source, output=tmp_path / "dataset.jsonl", skill_agent_factory=RepairAgent, verbose=False)
+    saved = json.loads((tmp_path / "dataset.jsonl.generation.json").read_text(encoding="utf-8"))
+    assert len(records) == 30
+    assert saved["coverage"]["summary"]["covered_points"] == 30
+    assert saved["coverage"]["stop_reason"] == "covered"
+    # All twenty gaps go out in one round, not just the first twenty IDs of a larger list.
+    assert len(repairs) == 1 and len(repairs[0]["coverage_targets"]) == 20
+    assert "more_target_ids" not in repairs[0]
+    # The second review revisits only the twenty former gaps; settled points are reused.
+    assert len(reviewed) == 30 + 20
+    assert set(reviewed[30:]) == {r["knowledge_point_id"] for r in saved["coverage"]["reviews"]
+                                  if int(r["question_ids"][0].split("_")[1]) > 10}
+
+
+def test_repair_targets_go_to_the_batch_holding_their_evidence():
+    from lladar.skill_generation import _assign_repair_targets
+
+    assignments = [{"source_001": [0, 100]}, {"source_001": [100, 200]}]
+    targets = [{"id": "ikp_000001", "evidence": [{"source_id": "source_001", "start_char": 150, "end_char": 160}]},
+               {"id": "ikp_000002", "evidence": [{"source_id": "source_001", "start_char": 120, "end_char": 130},
+                                                 {"source_id": "source_001", "start_char": 10, "end_char": 20}]}]
+    per_batch = _assign_repair_targets({"coverage_repair": True, "coverage_targets": targets}, assignments)
+    assert [[item["id"] for item in batch] for batch in per_batch] == [["ikp_000002"], ["ikp_000001"]]
+    assert _assign_repair_targets({}, assignments) is None
+
+
+def test_failed_repair_attempt_without_submissions_is_retried_with_its_error_message(tmp_path):
+    source = tmp_path / "knowledge.md"
+    source.write_text("\n\n".join(f"Service {n} retains data for {n} days." for n in range(1, 13)), encoding="utf-8")
+    attempts = []
+
+    class FlakyRepairAgent(PreciseServiceAgent):
+        def __call__(self, request):
+            if request.get("coverage_repair"):
+                attempts.append(request["attempt"])
+                if request["attempt"] == 1:
+                    error = RuntimeError("agent stopped after reading targets")
+                    error.skill_evidence = {**self.evidence(), "input_tokens": 10}
+                    raise error
+                self.submit_services([11, 12], request["coverage_targets"][0]["evidence"][0]["read_id"])
+                return self.evidence()
+            return super().__call__(request)
+
+    create_test_dataset(source, output=tmp_path / "dataset.jsonl", skill_agent_factory=FlakyRepairAgent, verbose=False)
+    saved = json.loads((tmp_path / "dataset.jsonl.generation.json").read_text(encoding="utf-8"))
+    assert attempts == [1, 2]
+    assert saved["coverage"]["summary"]["covered_points"] == 12
+    failures = [item for item in saved["executions"] if item.get("error_type") == "RuntimeError"]
+    assert failures[0]["error_message"] == "agent stopped after reading targets"
