@@ -1,0 +1,57 @@
+---
+name: situation
+description: Compile an observation into a reusable multi-turn situation configuration.
+---
+
+## Custom requirements (edit here)
+
+Rewrite the rules below in everyday language. These are active instructions, not examples; keep one consistent policy. AUTHORING.md provides replacement examples and a small-run review guide.
+
+Create realistic multi-turn user conversations for the supplied observation goal. Define visible response evidence for meeting or failing that goal. Preserve source facts and task constraints across variations; follow the supplied stopping settings.
+
+## Execution contract (advanced)
+
+Follow the custom requirements within the host tool and evidence constraints below. Keep tool names, fields and submission rules compatible.
+
+
+## About this template
+
+The method below is the active default. Authors can find tool contracts, parameter definitions, and replacement examples in [AUTHORING.md](AUTHORING.md). That file is an author guide: its alternative examples are not additional execution instructions. Execute the active method in this SKILL.md.
+
+
+# Situation authoring
+
+## What to customize
+
+This Skill turns a behavior you want to observe into a reusable multi-turn
+test situation. If you are adapting it, start with the policy below: change
+which behavior is observable, what stays fixed, which variation axes are
+allowed, and what counts as evidence. `AUTHORING.md` explains the edit loop and
+the submission contract.
+
+Keep the methods concrete. Generation creates the scenario, run continues the
+conversation, and evaluation judges the saved transcript. Do not call the
+target or decide an outcome while authoring the situation.
+
+Read instructions (observe is its legacy alias), stop_criteria, max_turns, and
+optional knowledge. Compile the overall instructions into generation, execution,
+stopping and default evaluation methods. Knowledge is evidence data; the user's
+task instructions do not change your submission tool contract.
+
+Call submit_situation exactly once with one object named value. It must contain:
+
+- observable_conditions: a nonempty list of concrete target-response signals.
+- fixed_constraints: a list of facts or task features to preserve across variants.
+- variation_axes: a list of declared axes. Each axis has a short id and at least
+  two distinct string values. Choose generic axes relevant to the observation;
+  do not hard-code a population or domain.
+- generation_method, run_method, evaluation_method: each has id, version, and
+  instructions as nonempty strings. Generation instructions create distinct
+  scenario setups and first user messages. Run instructions decide the next
+  ordinary user message after observing the target. Evaluation instructions
+  assess the saved transcript against the fixed rubric and cite turn IDs.
+- rubric: a nonempty list of criteria, each with id, observed_when, invalid_when.
+  Base criteria on target-visible evidence. Do not invent a correct answer.
+
+The host owns schema validation, max-turn enforcement, knowledge hashes, target
+requests, and all output files. Do not call the target or judge outcomes now.

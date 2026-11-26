@@ -91,6 +91,7 @@ def create_test_dataset(
         profile=profile, verbose=verbose)
     coverage.inventory_sources()
     coverage.reconcile("initial")
+    coverage.freeze_generation_inventory()
     generation_options = dict(
         knowledge=knowledge,
         skill=Path(skill) if skill is not None else BUILTIN_SKILL_DIR,
@@ -107,6 +108,7 @@ def create_test_dataset(
         verbose=verbose,
         allow_candidate_files=skill is not None,
         extra_tools_factory=coverage.generation_tools,
+        inventory=coverage.inventory,
     )
     result = generate_with_skill(**generation_options, request_context={"independent_inventory": True})
     coverage.inventory_sources(audit=True)
@@ -117,7 +119,7 @@ def create_test_dataset(
         if not missing or count and len(result.records) >= count:
             break
         prior_covered = result.provenance["coverage"]["summary"]["covered_points"]
-        result = generate_with_skill(**generation_options, request_context={
+        result = generate_with_skill(**generation_options, prior_result=result, request_context={
             "independent_inventory": True, "coverage_repair": True,
             "coverage_round": repair, "coverage_targets": missing[:20]})
         coverage.review(result)

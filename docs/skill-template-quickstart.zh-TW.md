@@ -1,5 +1,25 @@
 # 自訂 Skill 範本：實際操作範例
 
+範本已包含完整執行流程。一般只需開啟 `SKILL.md`，修改「自訂需求（修改這裡）」到
+「執行契約（進階）」之間的文字，用平常說話的方式描述想要的結果。
+目前繁體中文與英文範本提供這個編輯區塊；其餘語言維持原本範本。
+
+| 步驟 | 可以改什麼 | 可以怎麼說 |
+| --- | --- | --- |
+| 產生題目 | 對象、範圍、問句風格與答案要求 | 用一般遊客的口吻詢問交通與開放時間，答案保留限制條件。 |
+| 執行 Agent | 全量或抽樣、每題次數 | 隨機抽五題，每題測三次；不足五題時執行全部。 |
+| 評估回答 | 通過條件、允許差異、不可接受的錯誤 | 接受同義說法，但日期、金額與適用條件不能錯。 |
+| 產生報告 | 讀者、語氣、重點順序 | 給客服主管閱讀，先說主要問題，再列代表案例與改善建議。 |
+
+多輪情境使用 `situation-skill`，在同一區塊描述觀察目標與可見的成功／失敗證據。
+例如：「資訊不足時應先追問日期；直接宣稱預約成功不符合期待。」
+
+請替換原有需求，保留一組一致的規則；保留進階區塊的工具名稱、欄位與提交流程。
+`AUTHORING.md` 提供正反例、試跑方式與進階契約；只改指南不會改變執行需求。
+先用少量資料與新的輸出路徑試跑，檢查結果是否符合自己的例子。
+自然語言需求提供行為指引，不保證固定題數或完整覆蓋率。
+只想調整評估標準時，也可直接使用 `eval --criteria`，不必建立 Skill。
+
 這個例子用一筆已保存的 Agent 回覆，經過自訂 `eval` Skill 評估，再用自訂 `report` Skill 寫報告。它會實際呼叫 Gemini；請先依目前的 LLaDAR 設定準備 `.env`，或用 `--env-file` 指向你的設定檔。建立範本本身不呼叫模型。
 
 ## 1. 準備輸入
@@ -15,10 +35,10 @@
 ## 2. 產生並檢閱評估 Skill
 
 ```sh
-lladar create eval-skill --output ./my-eval
+lladar create eval-skill --output ./my-eval --lang zh-TW
 ```
 
-閱讀 `./my-eval/SKILL.md` 的評估步驟與 `./my-eval/AUTHORING.md` 的工具契約。先保留原樣完成基準執行；之後可改寫 `SKILL.md` 中判斷正確性的準則，再用新的輸出檔比較結果。
+開啟 `./my-eval/SKILL.md`，先保留預設需求完成基準執行；之後只改「自訂需求」，再用新的輸出檔比較結果。需要例子時閱讀 `./my-eval/AUTHORING.md`。
 
 ```sh
 lladar eval ./responses.jsonl --skill ./my-eval --output ./evaluation.json --model gemini:gemini-2.5-flash
@@ -29,7 +49,7 @@ lladar eval ./responses.jsonl --skill ./my-eval --output ./evaluation.json --mod
 ## 3. 產生並使用報告 Skill
 
 ```sh
-lladar create report-skill --output ./my-report
+lladar create report-skill --output ./my-report --lang zh-TW
 lladar report ./evaluation.json --skill ./my-report --output ./report.md --model gemini:gemini-3.7-flash
 ```
 

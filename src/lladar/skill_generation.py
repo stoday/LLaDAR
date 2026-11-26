@@ -77,6 +77,7 @@ class GenerationResult:
     provenance: dict
     graph: dict | None = None
     artifacts: dict[Path, str] = field(default_factory=dict)
+    _workspace: GenerationWorkspace | None = field(default=None, repr=False)
 
     def publish(self, output: Path, *, force: bool) -> None:
         for record in self.records:
@@ -102,15 +103,17 @@ class GenerationResult:
         retired = [Path(str(output) + ".graph.json")] if force and self.graph is None else []
         publish_bundle(dict(zip(targets, payloads)), force=force, result=self.records, retired=retired)
 
-from .work_session import current_session, publish_bundle, publication_metadata
+from .work_session import current_session, digest, publish_bundle, publication_metadata
 
 
 class GenerationWorkspace:
     """Own source positions and candidates for tool or Python delivery."""
 
     def __init__(self, sources: list[tuple[Path, str]], page_chars: int = 12000,
-                 question_type: str = "free", reporter: ProgressReporter | None = None, restore: bool = True):
+                 question_type: str = "free", reporter: ProgressReporter | None = None, restore: bool = True,
+                 inventory: dict | None = None):
         self.reporter = reporter
+        self.inventory = inventory
         self.sources = {
             f"source_{index:03d}": {"path": str(path.resolve()), "text": text}
             for index, (path, text) in enumerate(sources, 1)
@@ -237,10 +240,13 @@ class GenerationWorkspace:
                                           "start_char": start_char, "end_char": end_char}]}
 
     def submit_question(self, request_id: str, question: str, expected_answer: str,
-                        source_refs: list[str], answer_basis: str, rationale: str) -> dict:
+                        source_refs: list[str], answer_basis: str, rationale: str,
+                        coverage_claims: list[dict] | None = None) -> dict:
         """Submit a question and its answer evidence together, without file delivery."""
         payload = dict(question=question, expected_answer=expected_answer, source_refs=source_refs,
                        answer_basis=answer_basis, rationale=rationale)
+        if coverage_claims is not None:
+            payload["coverage_claims"] = coverage_claims
         if not isinstance(request_id, str) or not request_id.strip():
             return {"status": "needs_revision", "issues": [{"field": "request_id", "code": "required",
                      "message": "Provide a non-empty request ID."}]}
@@ -269,13 +275,15 @@ class GenerationWorkspace:
 
     def revise_question(self, item_id: str, request_id: str, revision: int,
                         question: str, expected_answer: str, source_refs: list[str],
-                        answer_basis: str, rationale: str) -> dict:
+                        answer_basis: str, rationale: str, coverage_claims: list[dict] | None = None) -> dict:
         """Revise one draft using its current ID and revision."""
         if not isinstance(request_id, str) or not request_id.strip():
             return {"status": "needs_revision", "issues": [{"field": "request_id", "code": "required",
                      "message": "Provide a non-empty request ID."}]}
         payload = dict(question=question, expected_answer=expected_answer, source_refs=source_refs,
                        answer_basis=answer_basis, rationale=rationale)
+        if coverage_claims is not None:
+            payload["coverage_claims"] = coverage_claims
         identity = {"item_id": item_id, "revision": revision, **payload}
         previous = self.question_requests.get(request_id)
         if previous is not None:
@@ -293,11 +301,9 @@ class GenerationWorkspace:
         if draft["status"] == "rejected":
             return {"status": "rejected", "item_id": item_id, "revision": draft["revision"],
                     "issues": deepcopy(draft["issues"])}
-        result = self._apply_question(item_id, request_id, payload)
-        self.question_requests[request_id]["payload"] = identity
-        return result
+        return self._apply_question(item_id, request_id, payload, identity=identity)
 
-    def _apply_question(self, item_id: str, request_id: str, payload: dict) -> dict:
+    def _apply_question(self, item_id: str, request_id: str, payload: dict, *, identity: dict | None = None) -> dict:
         draft = self.question_drafts[item_id]
         previous_qa = draft.get("qa_id")
         result = self._submit_question_payload(request_id, **payload)
@@ -316,7 +322,8 @@ class GenerationWorkspace:
             draft["qa_id"] = qa_id
             self.answer_bases[qa_id]["question_id"] = item_id
         result = {**result, "item_id": item_id, "revision": draft["revision"]}
-        self.question_requests[request_id] = {"payload": deepcopy(payload), "result": deepcopy(result)}
+        self.question_requests[request_id] = {"payload": deepcopy(identity if identity is not None else payload),
+                                              "result": deepcopy(result)}
         return result
 
     def original_answer_mapping(self, expected_answer, source_refs):
@@ -344,10 +351,40 @@ class GenerationWorkspace:
                                         "row_start_char": start, "row_end_char": end})
         return matches
 
+    def validate_coverage_claims(self, claims: list[dict], source_refs: list[str]) -> dict:
+        if self.inventory is None or not isinstance(claims, list) or not claims:
+            raise ValueError("Coverage claims require a nonempty list and an independent inventory.")
+        points = {point["id"]: point for point in self.inventory["points"]}
+        references = [self.source_refs[ref] for ref in source_refs]
+        validated = {}
+        required = {"knowledge_point_id", "reason"}
+        for claim in claims:
+            if not isinstance(claim, dict) or not required <= claim.keys() or claim.keys() - required - {"covers_entire_point"}:
+                raise ValueError("Each coverage claim requires a knowledge_point_id and reason.")
+            point_id, reason = claim["knowledge_point_id"], claim["reason"]
+            complete = claim.get("covers_entire_point", False)
+            if not isinstance(point_id, str) or point_id not in points or point_id in validated:
+                raise ValueError("Use distinct IDs from list_inventory_points.")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError("Explain why the fact is required to answer the question.")
+            if type(complete) is not bool:
+                raise ValueError("covers_entire_point must be a boolean.")
+            point = points[point_id]
+            if not any(ref["source_id"] == quote["source_id"]
+                       and ref["start_char"] <= quote["start_char"] < quote["end_char"] <= ref["end_char"]
+                       for ref in references for quote in point["evidence"]):
+                raise ValueError(f"Question source references must contain evidence for {point_id}.")
+            validated[point_id] = {"knowledge_point_id": point_id, "reason": reason.strip(), "covers_entire_point": complete,
+                                   "point_fingerprint": digest(point)}
+        return {"inventory_revision": self.inventory["revision"], "claims": list(validated.values())}
+
     def _submit_question_payload(self, request_id: str, question: str, expected_answer: str,
-                                 source_refs: list[str], answer_basis: str, rationale: str) -> dict:
+                                 source_refs: list[str], answer_basis: str, rationale: str,
+                                 coverage_claims: list[dict] | None = None) -> dict:
         payload = dict(question=question, expected_answer=expected_answer, source_refs=source_refs,
                        answer_basis=answer_basis, rationale=rationale)
+        if coverage_claims is not None:
+            payload["coverage_claims"] = coverage_claims
         if not isinstance(request_id, str) or not request_id.strip():
             return {"status": "needs_revision", "issues": [{"field": "request_id", "code": "required",
                      "message": "Provide a non-empty request ID."}]}
@@ -369,6 +406,13 @@ class GenerationWorkspace:
         ):
             return {"status": "needs_revision", "issues": [{"field": "source_refs", "code": "unknown_source",
                      "message": "Use reference IDs returned by read_source."}]}
+        inventory_coverage = None
+        if coverage_claims is not None:
+            try:
+                inventory_coverage = self.validate_coverage_claims(coverage_claims, source_refs)
+            except ValueError as error:
+                return {"status": "needs_revision", "issues": [{"field": "coverage_claims", "code": "invalid_coverage_claims",
+                         "message": str(error)}]}
         original_mapping = self.original_answer_mapping(expected_answer, source_refs) if answer_basis == "source_answer" else []
         if answer_basis == "source_answer" and not original_mapping:
             return {"status": "needs_revision", "issues": [{"field": "expected_answer", "code": "original_answer_mismatch",
@@ -392,6 +436,8 @@ class GenerationWorkspace:
         self.answer_bases[qa_id] = {"answer_basis": answer_basis, "basis_rationale": rationale,
                                     "basis_point_ids": [point_id], "source_refs": list(source_refs),
                                     "source_answer_mapping": original_mapping}
+        if inventory_coverage is not None:
+            self.answer_bases[qa_id]["inventory_coverage"] = inventory_coverage
         self.stats["qa_candidates"] += 1
         result = {"status": "accepted", "item_id": qa_id, "revision": 1, "issues": []}
         self.question_submissions[request_id] = {"payload": deepcopy(payload), "result": result}
@@ -884,7 +930,8 @@ def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path:
                 "qa": qa, "graph": workspace.semantic_graph,
                 "plans": workspace.test_plans, "method_reason": workspace.method_reason,
             })
-    checked = GenerationWorkspace(sources, page_chars=workspace.page_chars, question_type=workspace.question_type, restore=False)
+    checked = GenerationWorkspace(sources, page_chars=workspace.page_chars, question_type=workspace.question_type,
+                                  restore=False, inventory=workspace.inventory)
     checked.current_stage = "generation"
     for read in candidate.get("reads", []):
         source_id, read_id = read["source_id"], read["read_id"]
@@ -970,7 +1017,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         temperature: float, profile, verbose: bool,
                         extra_tools_factory: Callable | None = None, request_context: dict | None = None,
                         candidate_validator: Callable | None = None,
-                        runtime_options: dict | None = None, allow_candidate_files: bool = True) -> GenerationResult:
+                        runtime_options: dict | None = None, allow_candidate_files: bool = True,
+                        inventory: dict | None = None, prior_result: GenerationResult | None = None) -> GenerationResult:
     skill = skill.resolve()
     if not (skill / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill is missing SKILL.md: {skill}")
@@ -986,12 +1034,16 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     if not sources:
         raise KnowledgeLoadError("no supported knowledge files were found")
     reporter = ProgressReporter(verbose)
-    workspace = GenerationWorkspace(
-        sources,
-        page_chars=min(12000, max(1, profile.max_input_tokens // 4)),
-        question_type=question_type,
-        reporter=reporter,
-    )
+    if prior_result is not None and prior_result._workspace is not None:
+        workspace = prior_result._workspace
+        if [(source["path"], source["text"]) for source in workspace.sources.values()] != [
+            (str(path.resolve()), text) for path, text in sources
+        ]:
+            raise DatasetValidationError("knowledge sources changed after independent inventory; start a new work session")
+        workspace.reporter = reporter
+    else:
+        workspace = GenerationWorkspace(sources, page_chars=min(12000, max(1, profile.max_input_tokens // 4)),
+                                        question_type=question_type, reporter=reporter, inventory=inventory)
     reporter.configuration({"skill": skill, "model": model, "sources": len(sources), "count": count,
                             "question_type": question_type, "seed": seed})
     skill_files = {"SKILL.md": hashlib.sha256((skill / "SKILL.md").read_bytes()).hexdigest()}
@@ -1027,6 +1079,16 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 "source_coverage": {key: workspace.coverage(key) for key in workspace.sources},
             }
             if (request_context or {}).get("independent_inventory"):
+                if inventory is not None and question_type in {"free", "auto"}:
+                    work["inventory_points"] = stage_tools["list_inventory_points"]()
+                    work["coverage_claims"] = (
+                        "For direct free QA, use inventory_points and continue list_inventory_points from next_start. "
+                        "Include coverage_claims [{knowledge_point_id, reason, covers_entire_point}] in submit_question "
+                        "and revise_question. Set covers_entire_point=true only when the question requires every part "
+                        "of the inventory statement for scoring. Use false if it tests only a portion or if uncertain. "
+                        "Skip incidental mentions. Give a short reason. Use inventory IDs and source refs containing the evidence. "
+                        "Reuse suitable refs from read_source. Omit coverage_claims if no inventory point matches."
+                    )
                 existing = work["existing_results"]
                 existing["source_coverage"] = {key: workspace.coverage(key)
                     for key in workspace.assigned_ranges}
@@ -1189,6 +1251,9 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                       "knowledge_point_ids": contract.get("knowledge_point_ids", [point_id]),
                       "record_fingerprint": record_fingerprint(row), "generation_method": "direct_qa",
                       "plan_type": "direct_qa", **contract})
+        inventory_coverage = workspace.answer_bases.get(qa_id, {}).get("inventory_coverage")
+        if inventory_coverage is not None:
+            lines[-1]["inventory_coverage"] = inventory_coverage
     for plan in probe_plans:
         pair_id = plan.get("pair_id")
         if pair_id is not None:
@@ -1264,4 +1329,4 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                   "deduplicated_qa": max(0, len(workspace.qa) + len(probe_plans) - len(records) - count_excluded),
                   "not_attempted_count_limit": sum(p.get("status") == "not_attempted_count_limit"
                                                    for p in workspace.points.values())},
-    }, graph)
+    }, graph, _workspace=workspace if inventory is not None and session is None else None)
