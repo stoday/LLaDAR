@@ -2,13 +2,16 @@
 
 import hashlib
 import json
+from functools import partial
 from pathlib import Path
 
 import pytest
 
-from lladar.api import create_test_dataset
+from lladar.api import create_test_dataset as generate_dataset
 from lladar.cli import main
 from lladar.exceptions import DatasetValidationError
+
+create_test_dataset = partial(generate_dataset, workflow_level=3)
 
 
 class CoverageAgent:
@@ -802,7 +805,7 @@ def test_cli_generation_shows_both_denominators_and_the_report_command(tmp_path,
     source = tmp_path / "knowledge.md"
     source.write_text("\n\n".join(f"Service {n} retains data for {n} days." for n in range(1, 21)), encoding="utf-8")
     output = tmp_path / "dataset.jsonl"
-    assert main(["create", "test-dataset", "--knowledge", str(source), "--output", str(output),
+    assert main(["create", "test-dataset", "--knowledge", str(source), "--output", str(output), "--workflow-level", "3",
                  "--count", "16", "--no-verbose"], skill_agent_factory=CoverageAgent) == 0
     text = capsys.readouterr().out
     assert "16 / 20" in text and "16 / 18" in text

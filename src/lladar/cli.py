@@ -391,6 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
     dataset.add_argument("--output", default="runs/", metavar="PATH",
                          help=f"Output directory or file path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file; new paths without a suffix are directories (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
+    dataset.add_argument("--workflow-level", type=int, choices=(1, 2, 3),
+                         help="Knowledge workflow: 1 combines generation (default); 2 adds selective review and a sampled source audit; 3 uses staged generation and a full audit. Existing custom skills and controlled variants default to 3.")
     dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
                          default="free", help="Preferred generated question type; free uses source-grounded open answers (default: free).")
     dataset.add_argument("--controlled-variant-probes", action="store_true",
@@ -947,6 +949,7 @@ def _execute(
                 output=output,
                 count=args.count,
                 question_type=args.question_type,
+                workflow_level=args.workflow_level,
                 controlled_variant_topics=controlled_variant_topics,
                 controlled_variant_selector=controlled_variant_selector,
                 seed=args.seed,
@@ -963,6 +966,12 @@ def _execute(
                 verbose=args.verbose,
             )
             metadata = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))
+            if not args.from_github:
+                from .dataset_workflow import workflow_summary
+
+                level = metadata.get("workflow_level", 3)
+                print(workflow_summary(level))
+                current_operation().workflow_level = level
             current_operation().record(count=len(records), status=metadata.get("status"))
             current_operation().record(summary=metadata.get("stats"))
             if isinstance(metadata.get("skipped"), list):
@@ -996,7 +1005,9 @@ def _execute(
                 print(f"{tr('Points needing questions')}: {summary['pending_points']}; "
                       f"{tr('Excluded points')}: {summary['excluded_points']}; "
                       f"{tr('Points awaiting review')}: {summary['pending_review_points']}")
-                if metadata["inventory"]["status"] != "complete" or coverage["audit_status"] != "complete" or summary["pending_review_points"]:
+                expected_audit = {1: "generation_only", 2: "sampled"}.get(metadata.get("workflow_level"), "complete")
+                if (metadata["inventory"]["status"] != "complete"
+                        or coverage["audit_status"] != expected_audit or summary["pending_review_points"]):
                     print(tr("Provisional: inventory or review requires attention."))
                 report_command = _display_command(["lladar", "report", str(output) + ".generation.json",
                     "--output", str(output.parent / "report.md"), "--lang", args.lang])

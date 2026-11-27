@@ -65,7 +65,7 @@ class _CoverageAgent(NativeAkashaAgent):
         @wrap_tool_call
         async def submit_final_call_separately(request, handler):
             call = request.tool_call
-            is_final = (call["name"] in {"finish_inventory_batch", "finish_inventory_reconciliation", "submit_coverage_review"}
+            is_final = (call["name"] in {"finish_inventory_batch", "finish_inventory_reconciliation", "submit_coverage_review", "submit_dataset_batch"}
                         or call["name"] == "submit_inventory_batch" and call["args"].get("complete") is True)
             if is_final and len(getattr(request.state["messages"][-1], "tool_calls", ())) > 1:
                 return ToolMessage(content="Submit the completed batch in a separate tool call after other work.",

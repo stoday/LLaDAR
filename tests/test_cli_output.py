@@ -164,7 +164,7 @@ def test_interrupted_generation_prints_executable_resume_command_and_locations(t
     class Interrupted(DirectAgent):
         def __call__(self, request):
             raise KeyboardInterrupt()
-    argv=['create','test-dataset','--knowledge',str(knowledge),'--output','results folder',
+    argv=['create','test-dataset','--knowledge',str(knowledge),'--output','results folder','--workflow-level','3',
           '--count','1','--seed','7','--no-verbose']
     assert cli.main(argv,skill_agent_factory=Interrupted,coverage_agent_factory=SourceCoverageAgent)==130
     captured=capsys.readouterr()

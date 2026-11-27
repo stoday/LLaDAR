@@ -1,8 +1,7 @@
 # Skill-based dataset generation / Skill 生成資料集
 
 `create test-dataset` 透過隨套件提供或本地的 Akasha Skill 讀取知識段落並生成問答。
-Agent 依 Skill、來源與使用者選項選用直接問答或圖譜；主程式不強制建立圖譜。
-內建方法保留來源事實題及有來源支持的概念映射指引。
+內建方法按批次合併盤點與出題。分步流程可依 Skill、來源與使用者選項選用直接問答或圖譜。
 
 ## 使用
 
@@ -15,6 +14,17 @@ lladar create test-dataset --knowledge .\knowledge --skill .\my-skill --output d
 
 `--knowledge` 可重複指定，支援 `.md`／`.txt` 檔案與目錄。
 `--output` 接受 `.jsonl` 檔案或用來建立時間戳檔名的目錄。
+
+| `--workflow-level` | `--knowledge` 的行為 |
+|---|---|
+| `1`（內建方法預設） | 每批一起盤點與出題。程式驗證證據與格式，覆蓋判定源自生成階段。 |
+| `2` | 合併生成後，覆審有疑義的對應，自動抽查 10% 的原文批次（至少一批）。 |
+| `3` | 使用分步生成、全文獨立覆核及必要補題。 |
+
+三個層級都接受 `--question-type` 的五種選項。既有自訂 Skill 及受控變體省略層級時使用層級 3。
+自訂 Skill 可明確選擇層級 1 或 2，以 `SKILL.md` 作為問句及盤點指引，按合併批次提交結果。
+需要圖譜工具、受控變體、資源讀取或自訂候選檔交付時使用層級 3。續跑沿用工作階段的層級。
+
 本地方法必須有符合 Akasha 命名規則、與目錄同名的 frontmatter name、description
 及非空的 `SKILL.md` 正文。不需要額外 manifest 或方法選擇旗標。
 
@@ -25,7 +35,7 @@ lladar create test-dataset --knowledge .\knowledge --skill .\my-skill --output d
 
 ### 自訂文件盤點與覆蓋審查
 
-`--knowledge` 的盤點、原文覆核、知識點整理和對應審查使用各自的內建指令與工具。
+層級 3 的盤點、原文覆核、知識點整理和對應審查使用各自的內建指令與工具。
 出題階段仍完整讀取 `SKILL.md` 正文。如果原本在正文寫了盤點範圍或可出題條件，
 請把適用規則補到同一份 `SKILL.md` 的 YAML frontmatter `metadata`。各欄位皆可省略。
 
@@ -43,7 +53,7 @@ metadata:
 
 ## 可選工具與交付
 
-一次生成工作提供來源讀取、知識點、直接／題型化問答、圖譜與測試計畫工具。
+層級 3 的生成工作提供來源讀取、知識點、直接／題型化問答、圖譜與測試計畫工具。
 `read_source` 使用解碼後文本的零起算、尾端不包含的字元區間；分頁是傳輸限制，
 不是固定切分方法。長來源依 `next_start` 續讀。
 

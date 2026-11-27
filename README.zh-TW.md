@@ -70,8 +70,9 @@ lladar report evaluation.json --output report.md
 這四步串起 **文件 → 測試問題 → 真實回答 → 評估 → 報告**。
 開啟 `report.md` 檢視結果與逐筆測試證據。也可以使用既有題庫，或重新評估已保存的回答。
 
-文件出題會先分批盤點知識點、整理重複與粒度，再獨立覆核原文。知識清單、題目對應、
-排除原因與兩種覆蓋率集中保存於既有 `dataset.jsonl.generation.json`。需要閱讀覆蓋與待補題明細時執行：
+文件出題會分批盤點知識點與出題。流程層級 2 會獨立抽查原文批次，層級 3 會獨立覆核全文。
+知識清單、題目對應、原文覆核範圍、排除原因與兩種覆蓋率都保存在
+`dataset.jsonl.generation.json`。需要閱讀覆蓋與待補題明細時執行：
 
 ```bash
 lladar report dataset.jsonl.generation.json --output coverage-report.md
