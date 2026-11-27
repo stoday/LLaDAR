@@ -194,7 +194,9 @@ class CombinedGeneration:
                 local[local_id] = point
 
             normalized = [self.validate_question(item, local, targets) for item in questions]
-            work = {"stage": stage, "batch_id": batch["id"], "attempt": attempt}
+            work = {"stage": stage, "batch_id": batch["id"], "attempt": attempt,
+                    "loaded_skills": [self.finish_options["skill"].name],
+                    "skill_files": self.finish_options["skill_files"]}
             receipt = {"points": list(local.values()) if known is None else [], "assessments": assessments,
                        "questions": normalized, "work": work}
             if self.session:

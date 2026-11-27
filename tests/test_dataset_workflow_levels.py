@@ -65,6 +65,9 @@ def test_default_workflow_uses_one_provider_response_and_counts_output_gaps(tmp_
     assert len(model.prompts) == 1
     assert saved["coverage"]["audit_status"] == "generation_only"
     assert saved["coverage"]["summary"]["pending_points"] == 2
+    execution, = saved["executions"]
+    assert execution["loaded_skills"] == ["knowledge-point-qa"]
+    assert len(execution["skill_files"]["SKILL.md"]) == 64
     assert "Workflow level 1 · Combined generation" in capsys.readouterr().out
     assert "Source inventory and coverage claims were generated in one pass." in render_coverage_report(saved)
 
@@ -188,6 +191,9 @@ def test_resume_reuses_accepted_batches_and_requires_same_level(tmp_path):
         create_test_dataset(inputs, workflow_level=2, resume=resume, **options)
     assert len(create_test_dataset(inputs, resume=resume, **options)) == 2
     assert calls == ["source_001", "source_002", "source_002"]
+    first, second = read_sidecar(output)["executions"]
+    assert first["skill_files"] == second["skill_files"]
+    assert first["loaded_skills"] == second["loaded_skills"] == ["knowledge-point-qa"]
 
 
 def test_resume_before_workflow_level_uses_staged_path(tmp_path):
