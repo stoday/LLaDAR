@@ -8,7 +8,7 @@ import pytest
 from lladar.api import create_test_dataset
 from lladar.combined_generation import select_audit_batches, source_batches
 from lladar.knowledge_coverage import render_coverage_report
-from lladar.skill_agent import AkashaSkillAgent
+from lladar.skill_agent import AKASHA_SKILL_PRELOAD_AVAILABLE, AkashaSkillAgent
 from lladar.work_session import digest
 from test_skill_agent import ToolScriptModel
 
@@ -44,7 +44,9 @@ class BatchAgent:
                 "skill_files": {"SKILL.md": hashlib.sha256((self.skill / "SKILL.md").read_bytes()).hexdigest()}}
 
 
-def test_default_workflow_uses_one_provider_response_and_counts_output_gaps(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("custom_skill", [False, True], ids=["builtin", "custom"])
+@pytest.mark.parametrize("level", [None, 2], ids=["default", "level-2"])
+def test_combined_workflow_uses_one_provider_response_for_each_batch(tmp_path, monkeypatch, capsys, custom_skill, level):
     from lladar.cli import main
 
     source, output = tmp_path / "source.txt", tmp_path / "out.jsonl"
@@ -53,23 +55,86 @@ def test_default_workflow_uses_one_provider_response_and_counts_output_gaps(tmp_
         "points": [fact(i) for i in range(3)], "questions": [question(0), question(1)], "complete": True}}],
         usage_metadata={"input_tokens": 100, "output_tokens": 40, "total_tokens": 140})
     model = ToolScriptModel(replies=[reply])
-    monkeypatch.setattr("lladar.skill_agent.AkashaSkillAgent",
-                        lambda **kwargs: AkashaSkillAgent(**{**kwargs, "model": model}))
-    assert main(["create", "test-dataset", "--knowledge", str(source), "--output", str(output),
-                 "--count", "1", "--no-verbose", "--lang", "en"]) == 0
+    native_agents = []
+
+    def generation_agent(**kwargs):
+        adapter = AkashaSkillAgent(**{**kwargs, "model": model})
+        native_agents.append(adapter.agent)
+        return adapter
+
+    monkeypatch.setattr("lladar.skill_agent.AkashaSkillAgent", generation_agent)
+    args = ["create", "test-dataset", "--knowledge", str(source), "--output", str(output),
+            "--count", "1", "--no-verbose", "--lang", "en"]
+    skill_name = "knowledge-point-qa"
+    if custom_skill:
+        skill_name = "counter-questions"
+        skill = tmp_path / skill_name
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: counter-questions\ndescription: Generate counter questions.\n---\n"
+            "Use the opening times when writing questions.\n",
+            encoding="utf-8",
+        )
+        args.extend(["--skill", str(skill)])
+
+    class AuditAgent(BatchAgent):
+        def __call__(self, request):
+            assert request["stage"] == "inventory_audit"
+            self.tools["submit_dataset_batch"]([fact(i) for i in range(3)], [], True)
+            return self.evidence()
+
+    if level is not None:
+        args.extend(["--workflow-level", str(level)])
+    assert main(args, coverage_agent_factory=AuditAgent) == 0
     saved = read_sidecar(output)
-    assert saved["workflow_level"] == 1
+    assert saved["workflow_level"] == (level or 1)
     assert saved["token_usage"]["stages"]["generation"]["reported_calls"] == 1
     assert saved["token_usage"]["total_tokens"] == 140
     assert model.offered == [["submit_dataset_batch"]]
     assert len(model.prompts) == 1
-    assert saved["coverage"]["audit_status"] == "generation_only"
+    native_agent, = native_agents
+    if AKASHA_SKILL_PRELOAD_AVAILABLE:
+        assert native_agent.skill_middleware.loaded_skill_names == [skill_name]
+        assert native_agent.skill_middleware.preloaded_references
+    if custom_skill:
+        assert any("Use the opening times when writing questions." in message.content
+                   for message in model.prompts[0] if isinstance(message.content, str))
+    assert saved["coverage"]["audit_status"] == ("sampled" if level == 2 else "generation_only")
     assert saved["coverage"]["summary"]["pending_points"] == 2
-    execution, = saved["executions"]
-    assert execution["loaded_skills"] == ["knowledge-point-qa"]
+    execution, = [item for item in saved["executions"] if item["stage"] == "generation"]
+    assert execution["loaded_skills"] == [skill_name]
     assert len(execution["skill_files"]["SKILL.md"]) == 64
-    assert "Workflow level 1 · Combined generation" in capsys.readouterr().out
-    assert "Source inventory and coverage claims were generated in one pass." in render_coverage_report(saved)
+    assert f"Workflow level {level or 1} · Combined generation" in capsys.readouterr().out
+    if level is None:
+        assert "Source inventory and coverage claims were generated in one pass." in render_coverage_report(saved)
+
+
+@pytest.mark.skipif(not AKASHA_SKILL_PRELOAD_AVAILABLE, reason="requires an Akasha runtime with Skill preloading")
+def test_level_three_cli_uses_native_skill_from_the_first_turn(tmp_path, monkeypatch):
+    from coverage_test_support import SourceCoverageAgent
+    from lladar.cli import main
+
+    source, output = tmp_path / "source.txt", tmp_path / "out.jsonl"
+    source.write_text(FACTS[0], encoding="utf-8")
+    source_sha = hashlib.sha256(FACTS[0].encode("utf-8")).hexdigest()
+    ref = "ref_" + hashlib.sha256(f"source_001:{source_sha}:0:{len(FACTS[0])}".encode("utf-8")).hexdigest()[:24]
+    model = ToolScriptModel(replies=[
+        AIMessage(content="", tool_calls=[{"name": "read_source", "id": "read", "args": {"source_id": "source_001"}}]),
+        AIMessage(content="", tool_calls=[{"name": "submit_question", "id": "submit", "args": {
+            "request_id": "fixture", "question": "When does the East counter open?", "expected_answer": "08:00",
+            "source_refs": [ref], "answer_basis": "source_annotation", "rationale": "The time is stated in the source."}}]),
+        AIMessage(content="Complete."),
+    ])
+    monkeypatch.setattr("lladar.skill_agent.AkashaSkillAgent",
+                        lambda **kwargs: AkashaSkillAgent(**{**kwargs, "model": model}))
+    assert main(["create", "test-dataset", "--knowledge", str(source), "--output", str(output),
+                 "--workflow-level", "3", "--count", "1", "--no-verbose", "--lang", "en"],
+                coverage_agent_factory=SourceCoverageAgent) == 0
+    assert {"read_skill_resource", "python_execute", "submit_question"} <= set(model.offered[0])
+    assert all("load_skill" not in offered for offered in model.offered)
+    assert any("For free questions prefer" in message.content
+               for message in model.prompts[0] if isinstance(message.content, str))
+    assert read_sidecar(output)["workflow_level"] == 3
 
 
 @pytest.mark.parametrize("level", [1, 2])
@@ -196,17 +261,25 @@ def test_resume_reuses_accepted_batches_and_requires_same_level(tmp_path):
     assert first["loaded_skills"] == second["loaded_skills"] == ["knowledge-point-qa"]
 
 
-def test_resume_before_workflow_level_uses_staged_path(tmp_path):
+@pytest.mark.parametrize("legacy_checkpoint", [False, True], ids=["saved-level", "legacy"])
+def test_cli_resume_uses_staged_path_for_existing_work(tmp_path, legacy_checkpoint):
+    from lladar.api import BUILTIN_SKILL_DIR
+    from lladar.cli import main
     from test_knowledge_coverage import CoverageAgent
 
     source, output = tmp_path / "knowledge.md", tmp_path / "qa.jsonl"
     source.write_text("Service 1 retains data for 1 days.", encoding="utf-8")
-    options = dict(output=output, skill_agent_factory=CoverageAgent, verbose=False)
+    options = dict(output=output, skill=BUILTIN_SKILL_DIR, skill_agent_factory=CoverageAgent, verbose=False)
     rows = create_test_dataset(source, workflow_level=3, **options)
     resume = Path(f"{output}.work")
-    path = resume / "session.json"
-    saved = json.loads(path.read_text(encoding="utf-8"))
-    del saved["data"]["configuration"]["workflow_level"]
-    saved["sha256"] = digest(saved["data"])
-    path.write_text(json.dumps(saved), encoding="utf-8")
-    assert create_test_dataset(source, resume=resume, **options) == rows
+    if legacy_checkpoint:
+        path = resume / "session.json"
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        del saved["data"]["configuration"]["workflow_level"]
+        saved["sha256"] = digest(saved["data"])
+        path.write_text(json.dumps(saved), encoding="utf-8")
+
+    assert main(["create", "test-dataset", "--knowledge", str(source), "--skill", str(BUILTIN_SKILL_DIR),
+                 "--resume", str(resume), "--no-verbose"], skill_agent_factory=CoverageAgent) == 0
+    assert [json.loads(line) for line in output.read_text(encoding="utf-8").splitlines()] == rows
+    assert read_sidecar(output)["workflow_level"] == 3

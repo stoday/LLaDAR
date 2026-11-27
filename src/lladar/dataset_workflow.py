@@ -10,8 +10,6 @@ def resolve_workflow_level(level, *, from_github, skill, controlled_variants):
         if level is not None:
             raise ValueError(tr("Workflow level applies to --knowledge only."))
         return None
-    if controlled_variants and level in (1, 2):
-        raise ValueError(tr("Controlled variants require workflow level 3."))
     return level if level is not None else 3 if skill is not None or controlled_variants else 1
 
 

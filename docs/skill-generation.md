@@ -1,7 +1,7 @@
 # Skill-based dataset generation / Skill 生成資料集
 
 `create test-dataset` 透過隨套件提供或本地的 Akasha Skill 讀取知識段落並生成問答。
-內建方法按批次合併盤點與出題。分步流程可依 Skill、來源與使用者選項選用直接問答或圖譜。
+CLI 預設按批次合併盤點與出題。分步流程可依 Skill、來源與使用者選項選用直接問答或圖譜。
 
 ## 使用
 
@@ -17,13 +17,19 @@ lladar create test-dataset --knowledge .\knowledge --skill .\my-skill --output d
 
 | `--workflow-level` | `--knowledge` 的行為 |
 |---|---|
-| `1`（內建方法預設） | 每批一起盤點與出題。程式驗證證據與格式，覆蓋判定源自生成階段。 |
+| `1`（CLI 預設） | 每批一起盤點與出題。程式驗證證據與格式，覆蓋判定源自生成階段。 |
 | `2` | 合併生成後，覆審有疑義的對應，自動抽查 10% 的原文批次（至少一批）。 |
 | `3` | 使用分步生成、全文獨立覆核及必要補題。 |
 
-三個層級都接受 `--question-type` 的五種選項。既有自訂 Skill 及受控變體省略層級時使用層級 3。
-自訂 Skill 可明確選擇層級 1 或 2，以 `SKILL.md` 作為問句及盤點指引，按合併批次提交結果。
-需要圖譜工具、受控變體、資源讀取或自訂候選檔交付時使用層級 3。續跑沿用工作階段的層級。
+三個層級都接受 `--question-type` 的五種選項。一般本地文件新工作使用內建或自訂 Skill 時，CLI 預設採用層級 1。
+層級 1、2 以 `SKILL.md` 作為問句及盤點指引，按合併批次提交結果。
+需要讓 Skill 直接操作圖譜工具、讀取資源或提交自訂候選檔時，請指定 `--workflow-level 3`。續跑沿用工作階段的層級。
+直接呼叫 Python API 時，提供自訂 Skill 或啟用受控變體且省略 `workflow_level`，仍採用層級 3。
+
+搭配支援 `preload_skills` 的 Akasha 時，三個層級的出題會在第一個模型回合前啟用選定的 Skill。
+層級 1、2 的合併出題與受控變體規劃依各自的批次提示與工具契約執行。自訂 Skill 的出題規則由 Akasha 加入提示。
+層級 3 的出題保留完整 Skill 指示與資源工具。盤點、稽核和覆審採用各自的階段指示。
+搭配舊版 Akasha 時，合併出題由主程式準備提示，層級 3 的出題由 Agent 呼叫 `load_skill`。
 
 本地方法必須有符合 Akasha 命名規則、與目錄同名的 frontmatter name、description
 及非空的 `SKILL.md` 正文。不需要額外 manifest 或方法選擇旗標。
@@ -82,6 +88,7 @@ lladar create test-dataset --knowledge .\knowledge --controlled-variant-topics c
 ```
 
 互動選項需要終端輸入；非互動選項使用已記錄、同一語料指紋的維度 ID。
+三個層級都支援受控變體。CLI 省略層級時使用層級 1。層級 1、2 在合併出題後，從已驗證的知識點規劃配對，並在題數允許時優先保留完整配對。層級 3 在分步出題時規劃配對。
 明確要求受控變體時，需要有效圖譜與可比較配對，不能悄悄改成一般問答。
 每對只改一個已宣告控制值，保留問題骨架、來源候選與答案契約。
 

@@ -1019,7 +1019,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         extra_tools_factory: Callable | None = None, request_context: dict | None = None,
                         candidate_validator: Callable | None = None,
                         runtime_options: dict | None = None, allow_candidate_files: bool = True,
-                        inventory: dict | None = None, prior_result: GenerationResult | None = None) -> GenerationResult:
+                        inventory: dict | None = None, prior_result: GenerationResult | None = None,
+                        preload_skill: bool = False) -> GenerationResult:
     skill = skill.resolve()
     if not (skill / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill is missing SKILL.md: {skill}")
@@ -1049,9 +1050,12 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                             "question_type": question_type, "seed": seed})
     skill_files = {"SKILL.md": hashlib.sha256((skill / "SKILL.md").read_bytes()).hexdigest()}
     executions = []
+    activation_options = {}
     if agent_factory is None:
         from .skill_agent import AkashaSkillAgent
         agent_factory = AkashaSkillAgent
+        if preload_skill:
+            activation_options["preload_skill"] = True
 
     def execute(request: dict) -> dict:
         nonlocal workspace
@@ -1066,7 +1070,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             if extra_tools_factory is not None:
                 stage_tools.update(extra_tools_factory(workspace))
             from .skill_agent import SYSTEM_PROMPT
-            runtime = dict(runtime_options or {})
+            runtime = {**activation_options, **(runtime_options or {})}
             runtime["system_prompt"] = language_prompt(runtime.get("system_prompt", SYSTEM_PROMPT))
             agent = agent_factory(skills=[str(skill)], tools=stage_tools,
                                   model=model, env_file=str(env_file), temperature=temperature,
@@ -1205,9 +1209,15 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
         retain_workspace=inventory is not None and session is None)
 
 
+def controlled_plan_dimensions(plans):
+    return tuple({plan["varied_dimension"]: plan["control_dimension"]
+                  for plan in plans if plan["type"] == "controlled_invariance"}.values())
+
+
 def finalize_generation(workspace, generation_work, *, skill, skill_files, executions, count, question_type,
                         seed, model, temperature, profile, reporter, controlled_variant_topics=(),
-                        controlled_variant_selector=None, retain_workspace=False, allow_empty=False):
+                        controlled_variant_selector=None, retain_workspace=False, allow_empty=False,
+                        prioritize_controlled_pairs=False):
     for source in workspace.sources.values():
         source["work"] = generation_work
     records = []
@@ -1223,8 +1233,7 @@ def finalize_generation(workspace, generation_work, *, skill, skill_files, execu
             "".join(source["text"] for source in workspace.sources.values()).encode("utf-8")
         ).hexdigest()
     probe_plans = workspace.test_plans
-    dimensions = tuple({plan["varied_dimension"]: plan["control_dimension"]
-                        for plan in probe_plans if plan["type"] == "controlled_invariance"}.values())
+    dimensions = controlled_plan_dimensions(probe_plans)
     if (controlled_variant_topics or controlled_variant_selector is not None) and not dimensions:
         raise DatasetValidationError("controlled variant request requires a verified graph and controlled test plans")
     if controlled_variant_topics and controlled_variant_selector is not None:
@@ -1244,6 +1253,51 @@ def finalize_generation(workspace, generation_work, *, skill, skill_files, execu
     if graph is not None:
         graph["control_dimensions"] = list(dimensions)
     count_excluded = 0
+
+    def add_probe_plans(plans):
+        nonlocal count_excluded
+        for plan in plans:
+            pair_id = plan.get("pair_id")
+            if pair_id is not None:
+                pair = [item for item in plans if item.get("pair_id") == pair_id]
+                if plan is not pair[0]:
+                    continue
+                if count and len(records) + len(pair) > count:
+                    skipped.append({"pair_id": pair_id, "reason": "count_limit"})
+                    count_excluded += len(pair)
+                    continue
+                identities = [(normalize(item["question"]), normalize(item["expected_answer"])) for item in pair]
+                if len(set(identities)) != len(identities) or any(identity in seen_qa for identity in identities):
+                    skipped.append({"pair_id": pair_id, "reason": "duplicate_question"})
+                    continue
+                selected_plans = pair
+            else:
+                if count and len(records) >= count:
+                    count_excluded += 1
+                    continue
+                selected_plans = [plan]
+            for selected in selected_plans:
+                row = validate_record({"question": selected["question"], "expected_answer": selected["expected_answer"],
+                                       "actual_response": None})
+                identity = (normalize(row["question"]), normalize(row["expected_answer"]))
+                if identity in seen_qa:
+                    continue
+                seen_qa[identity] = len(records)
+                records.append(row)
+                reporter.record(row, context=f"generated record={len(records)}")
+                lines.append({"line": len(records), "qa_id": selected["plan_id"], "qa_ids": [selected["plan_id"]],
+                              "knowledge_point_ids": [item["evidence_ref"] for item in selected.get("candidates", [])]
+                              or list(selected["evidence_refs"]),
+                              "record_fingerprint": record_fingerprint(row), "question_type": "free",
+                              "generation_method": "graph",
+                              "answer_protocol": "natural_language", "plan_type": selected["type"],
+                              **{key: value for key, value in selected.items() if key not in {
+                                  "question", "expected_answer", "type", "plan_id"}}})
+
+    remaining_plans = probe_plans
+    if prioritize_controlled_pairs:
+        add_probe_plans([plan for plan in probe_plans if plan["type"] == "controlled_invariance"])
+        remaining_plans = [plan for plan in probe_plans if plan["type"] != "controlled_invariance"]
     unresolved_qa = {draft.get("qa_id") for draft in workspace.question_drafts.values() if draft["status"] != "accepted"}
     active_qa = [(key, row) for key, row in workspace.qa.items() if key not in unresolved_qa]
     for qa_index, (qa_id, row) in enumerate(active_qa):
@@ -1265,43 +1319,7 @@ def finalize_generation(workspace, generation_work, *, skill, skill_files, execu
         inventory_coverage = workspace.answer_bases.get(qa_id, {}).get("inventory_coverage")
         if inventory_coverage is not None:
             lines[-1]["inventory_coverage"] = inventory_coverage
-    for plan in probe_plans:
-        pair_id = plan.get("pair_id")
-        if pair_id is not None:
-            pair = [item for item in probe_plans if item.get("pair_id") == pair_id]
-            if plan is not pair[0]:
-                continue
-            if count and len(records) + len(pair) > count:
-                skipped.append({"pair_id": pair_id, "reason": "count_limit"})
-                count_excluded += len(pair)
-                continue
-            identities = [(normalize(item["question"]), normalize(item["expected_answer"])) for item in pair]
-            if len(set(identities)) != len(identities) or any(identity in seen_qa for identity in identities):
-                skipped.append({"pair_id": pair_id, "reason": "duplicate_question"})
-                continue
-            selected_plans = pair
-        else:
-            if count and len(records) >= count:
-                count_excluded += 1
-                continue
-            selected_plans = [plan]
-        for selected in selected_plans:
-            row = validate_record({"question": selected["question"], "expected_answer": selected["expected_answer"],
-                                   "actual_response": None})
-            identity = (normalize(row["question"]), normalize(row["expected_answer"]))
-            if identity in seen_qa:
-                continue
-            seen_qa[identity] = len(records)
-            records.append(row)
-            reporter.record(row, context=f"generated record={len(records)}")
-            lines.append({"line": len(records), "qa_id": selected["plan_id"], "qa_ids": [selected["plan_id"]],
-                          "knowledge_point_ids": [item["evidence_ref"] for item in selected.get("candidates", [])]
-                          or list(selected["evidence_refs"]),
-                          "record_fingerprint": record_fingerprint(row), "question_type": "free",
-                          "generation_method": "graph",
-                          "answer_protocol": "natural_language", "plan_type": selected["type"],
-                          **{key: value for key, value in selected.items() if key not in {
-                              "question", "expected_answer", "type", "plan_id"}}})
+    add_probe_plans(remaining_plans)
     if not records and not allow_empty:
         raise DatasetValidationError("no valid question records were generated")
     reporter.done(len(records))

@@ -44,6 +44,8 @@ def _invoke_skill(
     verbose: bool | None = None,
     host_scoped: bool = False,
     batch_complete: Callable[[], bool] | None = None,
+    preload_skill: bool = False,
+    include_skill_instructions: bool = True,
 ) -> dict[str, Any]:
     """Run a local skill or host-scoped method and require its recorded evidence."""
     runtime_options = {}
@@ -52,6 +54,12 @@ def _invoke_skill(
         agent_factory = AkashaSkillAgent
         if host_scoped:
             runtime_options.update(host_scoped=True, batch_complete=batch_complete)
+        if preload_skill:
+            runtime_options.update(preload_skill=True, include_skill_instructions=include_skill_instructions)
+    elif preload_skill and include_skill_instructions:
+        from akasha.agent.skills.loader import load_skill_directory
+
+        system_prompt += "\n\n" + load_skill_directory(skill).instructions.strip()
     profile = resolve_model_profile(model, max_input_tokens=max_input_tokens,
                                     max_output_tokens=max_output_tokens)
     agent = agent_factory(
