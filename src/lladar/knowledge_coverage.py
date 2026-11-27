@@ -256,7 +256,7 @@ class KnowledgeCoverage:
         self.checkpoint()
         return {"accepted": True, "knowledge_point_id": point_id, "revision": self.inventory["revision"]}
 
-    def reconcile(self, phase):
+    def reconcile(self, phase, *, point_ids=None):
         phases = self.inventory.setdefault("reconciliation", {})
         work = phases.setdefault(phase, {})
         if work.get("status") == "complete":
@@ -270,7 +270,8 @@ class KnowledgeCoverage:
                             points_digest=initial["points_digest"])
                 self.checkpoint()
                 return
-            views = [self.point_summary(point) for point in self.inventory["points"]]
+            views = [self.point_summary(point) for point in self.inventory["points"]
+                     if point_ids is None or point["id"] in point_ids]
             work.update(assignments=[[p["id"] for p in batch] for batch in item_batches(views, self.review_bytes)],
                         completed={}, status="working")
             self.checkpoint()
@@ -306,8 +307,8 @@ class KnowledgeCoverage:
 
             self.invoke("inventory_reconciliation", {"phase": phase,
                 "points": self.with_inline_evidence(points, [self.point_summary(point) for point in points]),
-                "all_points_assigned": len(points) == len(self.inventory["points"])},
-                {**self.generation_tools(None), "revise_inventory_point": revise_inventory_point,
+                "all_points_assigned": len(points) == (len(self.inventory["points"]) if point_ids is None else len(point_ids))},
+                {**self.generation_tools(None, point_ids=point_ids), "revise_inventory_point": revise_inventory_point,
                  "replace_inventory_point": replace_inventory_point,
                  "finish_inventory_reconciliation": finish_inventory_reconciliation},
                 """Reconcile the independent fact inventory before questions or coverage are finalized.
@@ -396,7 +397,7 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
                 "end_char": start + len(text), "quote": text})
         return {"statement": point["statement"].strip(), "topic": point["topic"].strip(), "evidence": normalized}
 
-    def coverage_candidates(self, lines, points):
+    def coverage_candidates(self, lines, points, *, sample_points=True):
         by_id = {point["id"]: point for point in points}
         point_hashes = {key: digest(point) for key, point in by_id.items()}
         initial = self.generation_inventory
@@ -408,7 +409,7 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
                 changed.update(point["id"] for point in (after if isinstance(after, list) else [after]))
 
         proposed = defaultdict(dict)
-        needs_review = changed | {point["id"] for point in points[::10]}
+        needs_review = changed | ({point["id"] for point in points[::10]} if sample_points else set())
         legacy = set()
         for line in lines:
             question_id = line["qa_id"]
@@ -435,7 +436,7 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
                         needs_review.add(point_id)
         return proposed, changed, needs_review, legacy
 
-    def review(self, result):
+    def review(self, result, *, combined_assessments=None, review_generated=True):
         self.freeze_generation_inventory()
         original_sources = {s["id"]: s["sha256"] for s in self.inventory["sources"]}
         generated_sources = {s["id"]: s["sha256"] for s in result.provenance["sources"]}
@@ -446,7 +447,8 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
         order = {key: index for index, key in enumerate(questions)}
         points = self.inventory["points"]
         by_id = {p["id"]: p for p in points}
-        proposed, changed, needs_review, legacy = self.coverage_candidates(lines, points)
+        proposed, changed, needs_review, legacy = self.coverage_candidates(lines, points,
+            sample_points=combined_assessments is None)
         scoped = len(legacy) != len(questions)
         old_reviews = {}
         if not scoped and self.review_cache:
@@ -465,13 +467,35 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
 
         reviews = {}
         pending_reviews = {}
+        full_claims = defaultdict(dict)
+        if not review_generated:
+            for line in lines:
+                for claim in line.get("inventory_coverage", {}).get("claims", []):
+                    if claim["covers_entire_point"]:
+                        full_claims[claim["knowledge_point_id"]][line["qa_id"]] = claim["reason"]
         for point_id, point in by_id.items():
             claims = proposed[point_id]
             cached = self.point_reviews.get(point_id, {})
             previous_answerability = cached.get("judgment", {}).get("answerability")
+            assessment = (combined_assessments or {}).get(point_id, {})
+            if not review_generated:
+                full = full_claims[point_id]
+                reviews[point_id] = {"knowledge_point_id": point_id,
+                    "answerability": "eligible" if full else assessment.get("answerability", "eligible"),
+                    "question_ids": list(full), "review_method": "generation" if full else "generation_assessment",
+                    "reason": next(iter(full.values()), assessment.get("reason") or
+                                   "No published question tests the entire point.")}
+                continue
+            if assessment.get("answerability") in {"excluded", "unresolved"}:
+                needs_review.add(point_id)
             if claims and point_id not in needs_review and not legacy and previous_answerability not in {"excluded", "unresolved"}:
                 reviews[point_id] = {"knowledge_point_id": point_id, "answerability": "eligible",
                     "question_ids": list(claims), "reason": next(iter(claims.values())), "review_method": "generation"}
+                continue
+            if combined_assessments is not None and not claims and point_id not in needs_review and not legacy:
+                reviews[point_id] = {"knowledge_point_id": point_id, "answerability": "eligible",
+                    "question_ids": [], "reason": "No published question tests the entire point.",
+                    "review_method": "generation_assessment"}
                 continue
             question_ids = set(claims) | legacy
             if not claims or point_id in changed:
@@ -501,11 +525,17 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
 
         ordered_reviews = [reviews[p["id"]] for p in points]
         result.provenance["inventory"] = deepcopy(self.inventory)
+        if combined_assessments is not None:
+            audit_status = self.inventory.get("audit_status", "generation_only")
+            if self.inventory.get("reconciliation", {}).get("sample", {}).get("status") == "partial":
+                audit_status = "partial"
+        else:
+            audit_status = (self.inventory.get("audit_status", "pending") if
+                self.inventory.get("reconciliation", {}).get("audit", {}).get("status") == "complete" else "partial")
         result.provenance["coverage"] = {"schema_version": 1,
             "inventory_revision": self.inventory["revision"], "reviews": ordered_reviews,
             "question_fingerprints": {line["qa_id"]: line["record_fingerprint"] for line in lines},
-            "audit_status": self.inventory.get("audit_status", "pending") if
-            self.inventory.get("reconciliation", {}).get("audit", {}).get("status") == "complete" else "partial",
+            "audit_status": audit_status,
             "summary": coverage_summary(self.inventory, ordered_reviews, len(questions))}
 
     def review_batch(self, points, summaries, questions, work, *, scoped):
@@ -591,12 +621,13 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
                                if r["question_ids"] or r["answerability"] == "excluded"}
         return [p["id"] for p in self.inventory["points"] if p["id"] not in covered_or_excluded]
 
-    def generation_tools(self, workspace):
+    def generation_tools(self, workspace, *, point_ids=None):
         def list_inventory_points(start: int = 0, limit: int = 5, query: str = ""):
-            points = [p for p in self.inventory["points"] if workspace is None or not workspace.assigned_ranges or any(
+            points = [p for p in self.inventory["points"] if (point_ids is None or p["id"] in point_ids)
+                and (workspace is None or not workspace.assigned_ranges or any(
                 q["source_id"] in workspace.assigned_ranges
                 and workspace.assigned_ranges[q["source_id"]][0] <= q["start_char"] < workspace.assigned_ranges[q["source_id"]][1]
-                for q in p["evidence"])]
+                for q in p["evidence"]))]
             if not isinstance(query, str):
                 raise ValueError("inventory search query must be a string")
             if query:
@@ -612,6 +643,8 @@ must name the assigned knowledge_point_id and a concrete reason. Do not generate
             return {"points": rows, "next_start": end if end < len(points) else None}
 
         def read_inventory_point(knowledge_point_id: str, start_char: int = 0):
+            if point_ids is not None and knowledge_point_id not in point_ids:
+                raise ValueError("knowledge point is outside this reconciliation")
             point = next((p for p in self.inventory["points"] if p["id"] == knowledge_point_id), None)
             if point is None:
                 change = next((item for item in reversed(self.inventory["changes"])
@@ -668,6 +701,11 @@ def render_coverage_report(generation):
         return tr("Not applicable") if value is None else f"{100 * value:.1f}".rstrip("0").rstrip(".") + "%"
 
     lines = [tr("# LLaDAR question coverage report"), ""]
+    level = generation.get("workflow_level")
+    if level is not None:
+        from .dataset_workflow import workflow_summary
+
+        lines += [workflow_summary(level), ""]
     if generation.get("token_usage") is not None:
         from .token_usage import usage_report_lines
         lines += usage_report_lines(generation["token_usage"]) + [""]
@@ -703,10 +741,25 @@ def render_coverage_report(generation):
             if not review["question_ids"] or any(claim not in published_claims[key] for key in review["question_ids"]):
                 raise DatasetValidationError("coverage data has inconsistent published question annotations")
     summary = coverage_summary(inventory, reviews, len(generation["dataset"]["lines"]))
-    provisional = (inventory["status"] != "complete" or coverage.get("audit_status") != "complete"
+    expected_audit = {1: "generation_only", 2: "sampled"}.get(level, "complete")
+    provisional = (inventory["status"] != "complete" or coverage.get("audit_status") != expected_audit
                    or summary["pending_review_points"] > 0 or coverage.get("summary") != summary
                    or coverage.get("question_fingerprints") is None)
-    lines += [tr("Provisional: inventory or review requires attention.") if provisional else tr("Source audit completed."), "",
+    if provisional:
+        lines += [tr("Provisional: inventory or review requires attention."), ""]
+    if level == 1:
+        lines += [tr("Source inventory and coverage claims were generated in one pass."), ""]
+    elif level == 2:
+        sample = inventory["sample_audit"]
+        lines += [tr("Independent source audit sampled {sampled} / {total} batches.",
+                    sampled=len(sample["selected_batches"]), total=sample["total_batches"]), "",
+                  tr("| Source | Start | End |"), "| --- | ---: | ---: |"]
+        lines.extend(f"| {cell(batch['source_id'])} | {batch['start_char']} | {batch['end_char']} |"
+                     for batch in sample["selected_batches"])
+        lines.append("")
+    elif not provisional:
+        lines += [tr("Source audit completed."), ""]
+    lines += [
         tr("| Coverage | Tested points / Inventory points | Rate |"), "| --- | ---: | ---: |",
         f"| {tr('All inventoried points')} | {summary['covered_points']} / {summary['total_points']} | {percent(summary['all_coverage'])} |",
         f"| {tr('Question-eligible points')} | {summary['covered_points']} / {summary['eligible_points']} | {percent(summary['eligible_coverage'])} |", "",
@@ -739,7 +792,7 @@ def render_coverage_report(generation):
         else:
             status = "Points needing questions"
         lines.append(f"| {cell(point['id'])} | {cell(point['statement'])} | {tr(status)} | {cell(review['reason']) if review else tr('Points awaiting review')} |")
-    definition = ("100% means every inventoried point in this version has a mapped question." if annotated else
+    definition = ("100% means every inventoried point in this version has a mapped question." if annotated or level in (1, 2) else
                   "100% means every inventoried point in this version has a reviewed question mapping.")
     lines += ["", tr(definition), ""]
     return "\n".join(lines)

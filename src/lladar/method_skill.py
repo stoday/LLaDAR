@@ -39,6 +39,7 @@ def _invoke_skill(
     agent_factory: SkillAgentFactory | None = None,
     max_input_tokens: int | None = None,
     max_output_tokens: int | None = None,
+    temperature: float | None = None,
     debug: bool = False,
     verbose: bool | None = None,
     host_scoped: bool = False,
@@ -57,6 +58,7 @@ def _invoke_skill(
         skills=[str(skill)], tools=tools, model=model, env_file=str(env_file),
         system_prompt=language_prompt(system_prompt), max_input_tokens=profile.max_input_tokens,
         max_output_tokens=profile.max_output_tokens,
+        **({"temperature": temperature} if temperature is not None else {}),
         **runtime_options,
         **({"verbose": verbose} if verbose is not None else {"verbose": True} if debug else {}),
     )

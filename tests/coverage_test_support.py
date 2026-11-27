@@ -41,9 +41,13 @@ class SourceCoverageAgent:
 
 def create_test_dataset(*args, **kwargs):
     kwargs.setdefault("coverage_agent_factory", SourceCoverageAgent)
+    if kwargs.get("from_github") is None:
+        kwargs.setdefault("workflow_level", 3)
     return generate_dataset(*args, **kwargs)
 
 
-def main(*args, **kwargs):
+def main(argv, **kwargs):
     kwargs.setdefault("coverage_agent_factory", SourceCoverageAgent)
-    return run_cli(*args, **kwargs)
+    if "test-dataset" in argv and "--knowledge" in argv and "--workflow-level" not in argv:
+        argv = [*argv, "--workflow-level", "3"]
+    return run_cli(argv, **kwargs)

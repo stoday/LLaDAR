@@ -113,7 +113,7 @@ def test_dataset_cli_sidecar_report_and_completed_resume(tmp_path, capsys, monke
     monkeypatch.chdir(tmp_path)
     source, output = tmp_path / "knowledge.md", tmp_path / "qa.jsonl"
     source.write_text("Service 1 retains data for 1 days.")
-    args = ["create", "test-dataset", "--knowledge", str(source), "--output", str(output),
+    args = ["create", "test-dataset", "--knowledge", str(source), "--output", str(output), "--workflow-level", "3",
             "--lang", "en", "--verbose" if verbose else "--no-verbose"]
     assert main(args, skill_agent_factory=MeteredAgent) == 0
     sidecar = json.loads(Path(str(output) + ".generation.json").read_text(encoding="utf-8"))

@@ -752,7 +752,7 @@ class GenerationWorkspace:
             self.reporter.record(row, context=f"candidate point={point_id}")
         return {"accepted": True}
 
-    def validate_qa(self, record: Any) -> tuple[dict[str, Any], dict[str, Any], str]:
+    def validate_qa(self, record: Any, *, points=None) -> tuple[dict[str, Any], dict[str, Any], str]:
         base_fields = {"knowledge_point_id", "question", "expected_answer"}
         if not isinstance(record, dict):
             raise ValueError("QA requires a JSON object")
@@ -764,13 +764,14 @@ class GenerationWorkspace:
                                    "actual_response": None})
             contract = {"question_type": "free", "answer_protocol": "natural_language"}
         else:
-            row, contract, point_id = self.validate_typed_qa(record)
+            row, contract, point_id = self.validate_typed_qa(record, points=points)
         expected_type = _REQUEST_TO_TYPE.get(self.question_type)
         if self.question_type != "auto" and contract["question_type"] != expected_type:
             raise ValueError(f"QA type must be {expected_type} for --question-type {self.question_type}")
         return row, contract, point_id
 
-    def validate_typed_qa(self, record: dict) -> tuple[dict[str, Any], dict[str, Any], str]:
+    def validate_typed_qa(self, record: dict, *, points=None) -> tuple[dict[str, Any], dict[str, Any], str]:
+        points = self.points if points is None else points
         common = {"knowledge_point_id", "knowledge_point_ids", "question", "expected_answer",
                   "question_type", "answer_protocol", "options", "correct_option_ids"}
         question_type = record.get("question_type")
@@ -783,10 +784,10 @@ class GenerationWorkspace:
         point_id = record["knowledge_point_id"]
         point_ids = record["knowledge_point_ids"]
         if (not isinstance(point_ids, list) or not point_ids or len(set(point_ids)) != len(point_ids)
-                or any(not isinstance(value, str) or value not in self.points for value in point_ids)
+                or any(not isinstance(value, str) or value not in points for value in point_ids)
                 or point_id not in point_ids):
             raise ValueError("typed QA must reference known distinct knowledge points")
-        topics = {self.points[value]["topic"] for value in point_ids}
+        topics = {points[value]["topic"] for value in point_ids}
         if len(topics) != 1:
             raise ValueError("typed QA options must share one source topic")
         options = record["options"]
@@ -799,8 +800,8 @@ class GenerationWorkspace:
                 raise ValueError("typed QA option has an invalid schema")
             option_id, text, option_point = option["id"], option["text"], option["knowledge_point_id"]
             if (not isinstance(option_id, str) or re.fullmatch(r"[A-Z]", option_id) is None
-                    or not isinstance(text, str) or not text.strip() or option_point not in self.points
-                    or text != self.points[option_point]["statement"]):
+                    or not isinstance(text, str) or not text.strip() or option_point not in points
+                    or text != points[option_point]["statement"]):
                 raise ValueError("typed QA option must be a source-grounded labeled statement")
             option_ids.append(option_id)
             option_points.append(option_point)
@@ -1197,6 +1198,16 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
         details = "; ".join(generation_work.get("validation_errors", []))
         raise DatasetValidationError("dataset generation did not produce complete valid questions" +
                                      (f": {details}" if details else ""))
+    return finalize_generation(workspace, generation_work, skill=skill, skill_files=skill_files,
+        executions=executions, count=count, question_type=question_type, seed=seed, model=model,
+        temperature=temperature, profile=profile, controlled_variant_topics=controlled_variant_topics,
+        controlled_variant_selector=controlled_variant_selector, reporter=reporter,
+        retain_workspace=inventory is not None and session is None)
+
+
+def finalize_generation(workspace, generation_work, *, skill, skill_files, executions, count, question_type,
+                        seed, model, temperature, profile, reporter, controlled_variant_topics=(),
+                        controlled_variant_selector=None, retain_workspace=False, allow_empty=False):
     for source in workspace.sources.values():
         source["work"] = generation_work
     records = []
@@ -1291,7 +1302,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                           "answer_protocol": "natural_language", "plan_type": selected["type"],
                           **{key: value for key, value in selected.items() if key not in {
                               "question", "expected_answer", "type", "plan_id"}}})
-    if not records:
+    if not records and not allow_empty:
         raise DatasetValidationError("no valid question records were generated")
     reporter.done(len(records))
     return GenerationResult(records, {
@@ -1329,4 +1340,4 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                   "deduplicated_qa": max(0, len(workspace.qa) + len(probe_plans) - len(records) - count_excluded),
                   "not_attempted_count_limit": sum(p.get("status") == "not_attempted_count_limit"
                                                    for p in workspace.points.values())},
-    }, graph, _workspace=workspace if inventory is not None and session is None else None)
+    }, graph, _workspace=workspace if retain_workspace else None)

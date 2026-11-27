@@ -78,6 +78,7 @@ class OperationReport:
         self.done = False
         self.issues = False
         self.token_usage = None
+        self.workflow_level = None
 
     def identify(self, prog):
         parts = prog.split()
@@ -188,6 +189,10 @@ class OperationReport:
                 value = getattr(self.args, key, None)
                 if isinstance(value, (int, float, bool)) or (key == "question_type" and value in {"contrastive", "positive", "negative"}):
                     lines.append(f"- `{key}`: `{_safe(value)}`")
+        if self.workflow_level is not None:
+            from .dataset_workflow import workflow_summary
+
+            lines.append("- " + workflow_summary(self.workflow_level))
         lines += ["", "## " + tr("Statistics"), ""]
         lines += [f"- `{key}`: {value}" for key, value in self.statistics.items()] or [tr("No operation statistics available.")]
         if self.stage == "test-dataset":
