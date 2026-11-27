@@ -135,7 +135,7 @@ def create_test_dataset(
         prior_covered = result.provenance["coverage"]["summary"]["covered_points"]
         result = generate_with_skill(**generation_options, prior_result=result, request_context={
             "independent_inventory": True, "coverage_repair": True,
-            "coverage_round": repair, "coverage_targets": missing[:20]})
+            "coverage_round": repair, "coverage_targets": coverage.repair_targets(missing)})
         coverage.review(result)
         if result.provenance["coverage"]["summary"]["covered_points"] <= prior_covered:
             break

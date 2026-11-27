@@ -20,12 +20,17 @@ from typing import Any
 
 from llama_index.core.schema import Document, MetadataMode
 
-from .exceptions import DatasetValidationError, KnowledgeLoadError, ProviderError
+from .exceptions import DatasetValidationError, KnowledgeLoadError, ProviderError, SkillBudgetExceeded
 from .loaders import load_knowledge
+from .resource_limits import resource_limit
 from .records import validate_record
 from .progress import ProgressReporter
 from .question_types import GENERATION_SIDECAR_VERSION, record_fingerprint
 
+
+QA_BATCH_LIMIT = 50
+# Coverage-repair targets carried inline in one generation batch request.
+REPAIR_TARGET_BYTES = 24000
 
 _REQUEST_TO_TYPE = {
     "free": "free",
@@ -727,6 +732,26 @@ class GenerationWorkspace:
                 self.reporter.record(plan, context=f"candidate plan={plan['plan_id']}")
         return {"accepted": len(normalized), "pairs": len(pair_groups)}
 
+    def submit_qa_batch(self, records: list[dict]) -> dict:
+        """Submit several QA records in one call; each record is accepted or rejected on its own."""
+        if not isinstance(records, list) or not 1 <= len(records) <= QA_BATCH_LIMIT:
+            raise ValueError(f"records must be a list of 1 to {QA_BATCH_LIMIT} QA records")
+        accepted, rejected, duplicates = 0, [], 0
+        for index, record in enumerate(records):
+            self.stats["qa_candidates"] += 1
+            try:
+                receipt = self.submit_qa(record)
+            except (ValueError, KeyError, TypeError, DatasetValidationError) as error:
+                self.stats["rejected_qa"] += 1
+                rejected.append({"index": index, "error": str(error)})
+            else:
+                accepted += 1
+                duplicates += bool(receipt.get("duplicate"))
+        result = {"accepted": accepted, "rejected": rejected}
+        if duplicates:
+            result["duplicates"] = duplicates
+        return result
+
     def submit_qa(self, record: dict) -> dict:
         row, contract, point_id = self.validate_qa(record)
         self.read_knowledge_point(point_id)
@@ -876,11 +901,11 @@ class GenerationWorkspace:
             return invoke
         names_by_stage = {
             "generation": ("list_sources", "read_source", "submit_knowledge_points", "read_knowledge_point",
-                           "list_knowledge_points", "submit_qa", "submit_question", "revise_question", "get_question", "get_question_request",
+                           "list_knowledge_points", "submit_qa", "submit_qa_batch", "submit_question", "revise_question", "get_question", "get_question_request",
                            "submit_semantic_graph", "read_semantic_graph",
                            "submit_test_plans", "record_method"),
             "knowledge_points": ("list_sources", "read_source", "submit_knowledge_points"),
-            "qa": ("read_knowledge_point", "list_knowledge_points", "submit_qa"),
+            "qa": ("read_knowledge_point", "list_knowledge_points", "submit_qa", "submit_qa_batch"),
             "semantic_graph": ("list_knowledge_points", "submit_semantic_graph"),
             "test_plans": ("read_semantic_graph", "submit_test_plans"),
         }
@@ -1011,6 +1036,63 @@ def _collect_candidates(workspace: GenerationWorkspace, sources, candidate_path:
     return checked
 
 
+def _submission_count(workspace: GenerationWorkspace) -> int:
+    return len(workspace.qa) + len(workspace.test_plans) + len(workspace.points)
+
+
+def _error_message(error: BaseException, limit: int = 300) -> str:
+    from .plan_events import redact
+    message = redact(" ".join(str(error).split()))
+    return message if len(message) <= limit else message[:limit] + "…"
+
+
+def _assign_repair_targets(request_context: dict | None, assignments: list[dict]) -> list[list[dict]] | None:
+    """Give each coverage target to the one batch holding its first evidence."""
+    if not (request_context or {}).get("coverage_repair"):
+        return None
+    per_batch = [[] for _ in assignments]
+    for target in request_context.get("coverage_targets") or []:
+        if not isinstance(target, dict):
+            continue
+        evidence = sorted(target.get("evidence") or [], key=lambda item: (item["source_id"], item["start_char"]))
+        index = next((position for position, assigned in enumerate(assignments) for item in evidence[:1]
+                      if item["source_id"] in assigned
+                      and assigned[item["source_id"]][0] <= item["start_char"] < assigned[item["source_id"]][1]), 0)
+        per_batch[index].append(target)
+    return per_batch
+
+
+def _repair_request(workspace: GenerationWorkspace, targets: list[dict], byte_limit: int) -> dict:
+    """Carry repair targets inline, citing earlier reads so no point or page has to be fetched again."""
+    included, overflow = [], []
+    for target in targets:
+        view = {key: target[key] for key in ("id", "statement", "topic")}
+        view["evidence"] = []
+        for item in target["evidence"]:
+            quote = {key: item[key] for key in ("source_id", "start_char", "end_char", "quote")}
+            read = next((read for read in workspace.reads.values() if read["source_id"] == item["source_id"]
+                         and read["start_char"] <= item["start_char"] and item["end_char"] <= read["end_char"]), None)
+            if read is not None:
+                quote["read_id"] = read["read_id"]
+            view["evidence"].append(quote)
+        if included and len(json.dumps(included + [view], ensure_ascii=False).encode("utf-8")) > byte_limit:
+            overflow.append(target["id"])
+        else:
+            included.append(view)
+    request = {
+        "coverage_targets": included,
+        "coverage_instruction": (
+            "Write natural questions for coverage_targets; they are independent inventory facts without a question yet. "
+            "Each target already includes its statement and exact evidence. Evidence with read_id can be cited directly "
+            "in submit_knowledge_points as {read_id, quote}; call read_source only for evidence without read_id. "
+            "Do not call read_inventory_point for supplied targets and do not re-read finished ranges. Submit the "
+            "knowledge points for all targets in one call, then all questions in one submit_qa_batch call."),
+    }
+    if overflow:
+        request["more_target_ids"] = overflow
+    return request
+
+
 def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | None,
                         count: int, question_type: str, controlled_variant_topics: tuple[str, ...],
                         controlled_variant_selector: Callable[[tuple[dict[str, Any], ...]], Any] | None,
@@ -1052,10 +1134,63 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
     if agent_factory is None:
         from .skill_agent import AkashaSkillAgent
         agent_factory = AkashaSkillAgent
+    from .skill_agent import skill_allows_python
+    # Only python_execute can write a candidate file, so offering candidate_path to a
+    # skill without it just invites the model to search for another way to write it.
+    allow_candidate_files = allow_candidate_files and skill_allows_python(skill)
+
+    def collect(request: dict) -> None:
+        """Freeze the delivered result; an invalid candidate file falls back to host submissions."""
+        nonlocal workspace
+        host_snapshot = Path(candidate_dir) / "host-only-snapshot"
+        path = Path(request["candidate_path"]) if allow_candidate_files else host_snapshot
+        require_questions = not (request_context or {}).get("independent_inventory", False)
+        submitted = workspace
+        try:
+            workspace = _collect_candidates(submitted, sources, path, require_questions=require_questions)
+            if candidate_validator is not None:
+                candidate_validator(workspace)
+        except (ValueError, KeyError, TypeError, OSError) as file_error:
+            if path == host_snapshot or not path.exists():
+                raise
+            try:
+                workspace = _collect_candidates(submitted, sources, host_snapshot, require_questions=require_questions)
+                if candidate_validator is not None:
+                    candidate_validator(workspace)
+            except (ValueError, KeyError, TypeError, OSError):
+                raise file_error from None
+            path.unlink(missing_ok=True)
+
+    def remaining_work(request: dict) -> dict:
+        """Tell a retry exactly what is missing so it does not rediscover finished work."""
+        assigned = workspace.assigned_ranges or {key: [0, len(source["text"])]
+                                                 for key, source in workspace.sources.items()}
+        unread = {}
+        for key, (start, end) in assigned.items():
+            gaps = [[max(gap_start, start), min(gap_end, end)]
+                    for gap_start, gap_end in workspace.coverage(key)["unread_ranges"]
+                    if gap_start < end and gap_end > start]
+            if gaps:
+                unread[key] = gaps
+        # Generation keys QA by qa_* with a point mapping; per-point stages key QA by point ID.
+        answered = set(workspace.qa_points.values()) | set(workspace.qa)
+        return {
+            "unread_ranges": unread,
+            "accepted_qa_count": len(workspace.qa),
+            "knowledge_points_without_qa": [point_id for point_id in workspace.points if point_id not in answered][:50],
+            "problems": list(request.get("validation_errors", [])),
+            "instruction": ("Accepted reads, knowledge points and questions are already saved. Read only unread_ranges, "
+                            "add questions for knowledge_points_without_qa when the source supports a natural question, "
+                            "and fix the listed problems. Do not re-read finished ranges or resubmit accepted items."),
+        }
 
     def execute(request: dict) -> dict:
         nonlocal workspace
         errors = []
+        item_budget = resource_limit("SKILL_ITEM_INPUT_TOKENS")
+        spent_input_tokens = 0
+        round_limit_hits = 0
+        submissions_before = _submission_count(workspace)
         for attempt in range(1, 4):
             event_start = len(workspace.events)
             reporter.emit(request["stage"].upper(),
@@ -1068,6 +1203,8 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             from .skill_agent import SYSTEM_PROMPT
             runtime = dict(runtime_options or {})
             runtime["system_prompt"] = language_prompt(runtime.get("system_prompt", SYSTEM_PROMPT))
+            # The budget covers the whole work item, so a retry only gets what earlier attempts left.
+            runtime.setdefault("input_token_budget", max(1, item_budget - spent_input_tokens))
             agent = agent_factory(skills=[str(skill)], tools=stage_tools,
                                   model=model, env_file=str(env_file), temperature=temperature,
                                   max_input_tokens=profile.max_input_tokens,
@@ -1079,6 +1216,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                 "plan_count": len(workspace.test_plans),
                 "source_coverage": {key: workspace.coverage(key) for key in workspace.sources},
             }
+            existing = work["existing_results"]
             if (request_context or {}).get("independent_inventory"):
                 if inventory is not None and question_type in {"free", "auto"}:
                     work["inventory_points"] = stage_tools["list_inventory_points"]()
@@ -1090,41 +1228,72 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         "Skip incidental mentions. Give a short reason. Use inventory IDs and source refs containing the evidence. "
                         "Reuse suitable refs from read_source. Omit coverage_claims if no inventory point matches."
                     )
-                existing = work["existing_results"]
                 existing["source_coverage"] = {key: workspace.coverage(key)
                     for key in workspace.assigned_ranges}
-                budget = max(256, min(6000, profile.max_input_tokens // 4))
-                while existing["questions"] and len(json.dumps(existing, ensure_ascii=False).encode("utf-8")) > budget:
-                    existing["questions"].pop(0)
+            # Accepted questions are saved by the host; the request only needs recent examples.
+            budget = max(256, min(6000, profile.max_input_tokens // 4))
+            while existing["questions"] and len(json.dumps(existing, ensure_ascii=False).encode("utf-8")) > budget:
+                existing["questions"].pop(0)
+            if attempt > 1:
+                work["remaining_work"] = remaining_work(request)
             if not allow_candidate_files:
                 work.pop("candidate_path", None)
                 work.pop("candidate_contract", None)
                 work["delivery"] = "Use host submission tools; no file delivery is required."
             try:
                 result = agent(work)
-            except (RuntimeError, ProviderError, ValueError) as error:
-                # Avoid persisting raw provider errors, which may contain secrets.
+            except SkillBudgetExceeded as error:
+                # Another attempt would spend the same budget again: keep what was
+                # submitted, otherwise stop with resumable progress.
                 evidence = getattr(error, "skill_evidence", {})
-                for name, digest in evidence.get("skill_files", {}).items():
-                    if name in skill_files and skill_files[name] != digest:
-                        raise DatasetValidationError(f"skill file changed during generation: {name}")
-                    skill_files[name] = digest
                 errors.append({"attempt": attempt, "error_type": type(error).__name__})
-                reporter.emit("RETRY", tr('stage={p0} attempt={p1}/3 error={p2}', p0=request['stage'], p1=attempt, p2=type(error).__name__))
                 executions.append({**request, "attempt": attempt, **evidence, "error_type": type(error).__name__,
                                    "host_tool_events": workspace.events[event_start:]})
                 if skill.name in evidence.get("loaded_skills", []):
                     try:
-                        workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot",
-                            require_questions=not (request_context or {}).get("independent_inventory", False))
-                        if candidate_validator is not None:
-                            candidate_validator(workspace)
-                    except (ValueError, KeyError, TypeError, OSError) as validation_error:
-                        request["validation_errors"] = [str(validation_error)]
+                        collect(request)
+                    except (ValueError, KeyError, TypeError, OSError):
+                        pass
                     else:
                         reporter.emit("RECOVERED", tr('final candidates passed validation after agent error'))
                         return {"status": "complete", "attempts": attempt, "errors": errors}
+                workspace.checkpoint()
+                raise
+            except (RuntimeError, ProviderError, ValueError) as error:
+                # Avoid persisting raw provider errors, which may contain secrets.
+                evidence = getattr(error, "skill_evidence", {})
+                spent_input_tokens += evidence.get("input_tokens", 0)
+                round_limit_hits += isinstance(error, RecursionError)
+                for name, digest in evidence.get("skill_files", {}).items():
+                    if name in skill_files and skill_files[name] != digest:
+                        raise DatasetValidationError(f"skill file changed during generation: {name}")
+                    skill_files[name] = digest
+                failure = {"attempt": attempt, "error_type": type(error).__name__}
+                if not isinstance(error, ProviderError):
+                    # Host and agent-runtime messages explain the failure; provider text stays out.
+                    failure["error_message"] = _error_message(error)
+                errors.append(failure)
+                reporter.emit("RETRY", tr('stage={p0} attempt={p1}/3 error={p2}', p0=request['stage'], p1=attempt, p2=type(error).__name__))
+                executions.append({**request, "attempt": attempt, **evidence, **failure,
+                                   "host_tool_events": workspace.events[event_start:]})
+                if skill.name in evidence.get("loaded_skills", []):
+                    progressed = _submission_count(workspace) > submissions_before
+                    try:
+                        collect(request)
+                    except (ValueError, KeyError, TypeError, OSError) as validation_error:
+                        request["validation_errors"] = [str(validation_error)]
+                    else:
+                        # Earlier batches already make the snapshot valid, so a failed attempt that
+                        # submitted nothing must not count as finishing this batch's work.
+                        if progressed or attempt == 3 or round_limit_hits >= 2:
+                            reporter.emit("RECOVERED", tr('final candidates passed validation after agent error'))
+                            return {"status": "complete", "attempts": attempt, "errors": errors}
+                if round_limit_hits >= 2:
+                    # A second exhausted round limit means more rounds will not finish this item.
+                    return {"status": "failed", "attempts": attempt, "errors": errors,
+                            "validation_errors": request.get("validation_errors", [])}
                 continue
+            spent_input_tokens += result.get("input_tokens", 0)
             if skill.name not in result.get("loaded_skills", []):
                 raise DatasetValidationError("agent did not load the selected skill")
             for name, digest in result.get("skill_files", {}).items():
@@ -1134,10 +1303,7 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
             executions.append({**request, "attempt": attempt, **result,
                                "host_tool_events": workspace.events[event_start:]})
             try:
-                workspace = _collect_candidates(workspace, sources, Path(request["candidate_path"]) if allow_candidate_files else Path(candidate_dir) / "host-only-snapshot",
-                    require_questions=not (request_context or {}).get("independent_inventory", False))
-                if candidate_validator is not None:
-                    candidate_validator(workspace)
+                collect(request)
             except (ValueError, KeyError, TypeError, OSError) as error:
                 errors.append({"attempt": attempt, "error_type": "InvalidCandidates"})
                 request["validation_errors"] = [str(error)]
@@ -1167,12 +1333,25 @@ def generate_with_skill(knowledge, *, skill: Path, agent_factory: Callable | Non
                         for start in range(0, len(source["text"]), batch_chars))
             completed_batches = dict(session.data["state"].get(batches_key, {})) if session else {}
             errors = []
+            repair_targets = _assign_repair_targets(request_context, assignments)
             for batch_index, assigned in enumerate(assignments, 1):
                 batch_id = str(batch_index)
                 if batch_id in completed_batches:
                     continue
                 workspace.assigned_ranges = assigned
-                generation_work = execute({**(request_context or {}), "stage": "generation",
+                batch_context = dict(request_context or {})
+                if repair_targets is not None:
+                    targets = repair_targets[batch_index - 1]
+                    if not targets:
+                        # Earlier rounds already read this range; without targets there is nothing to repair.
+                        completed_batches[batch_id] = {"status": "complete", "attempts": 0, "errors": [],
+                                                       "skipped": "no_coverage_targets"}
+                        if session:
+                            session.put(batches_key, completed_batches)
+                        continue
+                    batch_context.update(_repair_request(workspace, targets, max(
+                        1024, min(REPAIR_TARGET_BYTES, profile.max_input_tokens // 2))))
+                generation_work = execute({**batch_context, "stage": "generation",
                     "question_type": question_type, "count": count, "batch": batch_index,
                     "batch_count": len(assignments), "sources": workspace.list_sources(),
                     "candidate_path": str(Path(candidate_dir) / "candidates.json"),
