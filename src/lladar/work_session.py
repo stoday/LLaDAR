@@ -106,8 +106,16 @@ class WorkSession:
                 self.data = envelope["data"]
                 if digest(self.data) != envelope["sha256"]:
                     raise ValueError("checkpoint integrity check failed")
-                differences = sorted(key for key in set(configuration) | set(self.data["configuration"])
-                    if configuration.get(key) != self.data["configuration"].get(key))
+                saved = self.data["configuration"]
+                if stage == "generation" and "workflow_level" in configuration and saved.get("from_github") is None:
+                    if "workflow_level" not in saved:
+                        from .controlled_variants import normalize_controlled_variant_topics
+
+                        saved["workflow_level"] = 3
+                        saved["controlled_variant_topics"] = list(normalize_controlled_variant_topics(
+                            saved.get("controlled_variant_topics")))
+                differences = sorted(key for key in set(configuration) | set(saved)
+                    if configuration.get(key) != saved.get(key))
                 if self.data["stage"] != stage or self.data["contract_version"] != CONTRACT_VERSION:
                     differences.append("contract_version/stage")
                 if differences:
@@ -182,10 +190,22 @@ def stage_session(stage):
             if resume is not None and values.get("force"):
                 raise ValueError("resume and force cannot be combined")
             output = values.get("output")
+            if output is None and resume is not None:
+                raise ValueError("resume requires an output")
+            if stage == "generation" and "workflow_level" in values:
+                from .controlled_variants import normalize_controlled_variant_topics
+                from .dataset_workflow import resolve_workflow_level
+
+                level = values["workflow_level"]
+                if resume is not None and level is None and values["from_github"] is None:
+                    saved = json.loads((Path(resume) / "session.json").read_text(encoding="utf-8"))["data"]["configuration"]
+                    level = saved.get("workflow_level", 3)
+                values["controlled_variant_topics"] = normalize_controlled_variant_topics(values["controlled_variant_topics"])
+                values["workflow_level"] = resolve_workflow_level(level, from_github=values["from_github"],
+                    skill=values["skill"], controlled_variants=bool(values["controlled_variant_topics"])
+                    or values["controlled_variant_selector"] is not None)
             if output is None:
-                if resume is not None:
-                    raise ValueError("resume requires an output")
-                return function(*args, **kwargs)
+                return function(*bound.args, **bound.kwargs)
             output = Path(output).resolve()
             configuration = {"output": str(output), "stage_contract_version": 4 if stage == 'run-agent' and values.get('page_url') else 2 if stage == 'run-agent' else 1}
             from .resource_limits import configured_resource_limits

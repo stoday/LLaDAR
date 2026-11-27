@@ -32,6 +32,7 @@ def create_test_dataset(
     output: str | Path | None = None,
     count: int = 0,
     question_type: str = "free",
+    workflow_level: int | None = None,
     controlled_variant_topics: Iterable[str] = (),
     controlled_variant_selector: Callable[[tuple[dict[str, Any], ...]], Iterable[str]] | None = None,
     seed: int = 0,
@@ -81,16 +82,30 @@ def create_test_dataset(
                          controlled_variant_selector=controlled_variant_selector, seed=seed,
                          model=model, env_file=env_file, temperature=temperature, profile=profile, verbose=verbose),
         )
-    from .knowledge_coverage import KnowledgeCoverage
     from .loaders import load_knowledge
     from .method_skill import resolve_skill
 
     selected_skill = resolve_skill(skill, BUILTIN_SKILL_DIR)
-    coverage = KnowledgeCoverage(load_knowledge(knowledge), skill=selected_skill,
+    sources = load_knowledge(knowledge)
+    if workflow_level in (1, 2):
+        from .combined_generation import generate_combined
+
+        result = generate_combined(sources, skill=selected_skill, custom_skill=skill is not None,
+            workflow_level=workflow_level, agent_factory=skill_agent_factory,
+            coverage_agent_factory=coverage_agent_factory, question_type=question_type, count=count,
+            seed=seed, model=model, env_file=env_file, temperature=temperature, profile=profile, verbose=verbose)
+        if output is not None:
+            result.publish(Path(output), force=force)
+        return result.records
+
+    from .knowledge_coverage import KnowledgeCoverage
+
+    coverage = KnowledgeCoverage(sources, skill=selected_skill,
         agent_factory=coverage_agent_factory or skill_agent_factory, model=model, env_file=env_file,
         profile=profile, verbose=verbose)
     coverage.inventory_sources()
     coverage.reconcile("initial")
+    coverage.freeze_generation_inventory()
     generation_options = dict(
         knowledge=knowledge,
         skill=Path(skill) if skill is not None else BUILTIN_SKILL_DIR,
@@ -107,6 +122,7 @@ def create_test_dataset(
         verbose=verbose,
         allow_candidate_files=skill is not None,
         extra_tools_factory=coverage.generation_tools,
+        inventory=coverage.inventory,
     )
     result = generate_with_skill(**generation_options, request_context={"independent_inventory": True})
     coverage.inventory_sources(audit=True)
@@ -117,7 +133,7 @@ def create_test_dataset(
         if not missing or count and len(result.records) >= count:
             break
         prior_covered = result.provenance["coverage"]["summary"]["covered_points"]
-        result = generate_with_skill(**generation_options, request_context={
+        result = generate_with_skill(**generation_options, prior_result=result, request_context={
             "independent_inventory": True, "coverage_repair": True,
             "coverage_round": repair, "coverage_targets": coverage.repair_targets(missing)})
         coverage.review(result)
@@ -126,6 +142,7 @@ def create_test_dataset(
     result.provenance["coverage"]["stop_reason"] = (
         "covered" if not coverage.missing_points(result) else
         "count_limit" if count and len(result.records) >= count else "repair_budget_or_no_progress")
+    result.provenance["workflow_level"] = 3
     if output is not None:
         result.publish(Path(output), force=force)
     return result.records

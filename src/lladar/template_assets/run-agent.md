@@ -1,5 +1,22 @@
 # Writing a run-agent Skill: case selection and repeat counts
 
+## Edit only Custom requirements to start
+
+Open `SKILL.md` and replace the text between **Custom requirements (edit here)** and **Execution contract (advanced)**. The template already contains a working default. Describe the result you want, its conditions and, if useful, a matching and non-matching example. No Python or JSON is needed for ordinary policy edits.
+
+Replacement example: “Randomly sample five cases and repeat each three times; use all cases if fewer than five exist.”
+
+Example of the distinction: Five selected cases repeated three times matches; three cases repeated five times does not.
+
+Replace the existing policy rather than appending a competing rule. Keep the execution contract, tool names and fields intact. Advanced examples below are references, not additional instructions; editing only AUTHORING.md does not change the active policy.
+
+### Check a small run
+
+Use a small source or dataset first and a fresh output path. Read the saved results and compare them with your matching/non-matching examples. For execution, check selected cases and repeat counts in the run sidecars; for evaluation or reporting, reuse saved responses or evaluation facts. Template creation is offline; stage execution can call models and the target. Natural-language requirements guide behavior; they do not guarantee coverage or counts beyond host validation.
+
+## Advanced reference
+
+
 ## Start here
 
 Edit the selection policy in `SKILL.md`. Use it to choose all cases, a sample,

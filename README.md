@@ -81,10 +81,11 @@ This takes you from **documents → test questions → actual responses → eval
 → report**. Open `report.md` to review the results and individual test evidence.
 You can also use an existing question set or reevaluate saved responses.
 
-Document generation inventories facts in batches, reconciles duplicates and fact
-boundaries, and independently audits the source. The existing
-`dataset.jsonl.generation.json` saves the inventory, reviewed question mappings,
-exclusions and both coverage rates. To read coverage and outstanding gaps, run:
+Document generation inventories facts and writes questions in batches. Workflow
+levels `2` and `3` independently audit sampled batches or the full source,
+respectively. `dataset.jsonl.generation.json` saves the inventory, question
+mappings, audit scope, exclusions and both coverage rates. To read coverage and
+outstanding gaps, run:
 
 ```bash
 lladar report dataset.jsonl.generation.json --output coverage-report.md
@@ -161,12 +162,14 @@ or a directory in which the CLI creates a timestamped dataset.
 lladar create test-dataset --knowledge ./knowledge --output dataset.jsonl
 ```
 
-The bundled Akasha `knowledge-point-qa` skill reads source passages and generates
-source-grounded questions. The Agent follows the selected skill and chooses
-direct QA or an evidence graph for concept and controlled-variant probes; graphs
-are optional. Python can also produce or repair candidates. Final results are
-validated before publishing. Every dataset includes `dataset.jsonl.generation.json`;
-`dataset.jsonl.graph.json` is written only when a valid graph is used.
+Document generation defaults to `--workflow-level 1`, which extracts facts and
+writes questions in a single submission per source batch. Level `2` adds selective
+question review and samples the original source. Level `3` uses staged generation
+and a full source audit. All three levels accept the same `--question-type` values.
+Custom skills and controlled variants default to level `3` to retain the staged
+tools, including graph and candidate-file delivery. Final results are validated
+before publishing. Every dataset includes `dataset.jsonl.generation.json`.
+`dataset.jsonl.graph.json` is written when a valid graph is used.
 
 This step creates questions and expected answers from your knowledge documents. It is
 not a complete hallucination detector. Checking unsupported extra claims needs an

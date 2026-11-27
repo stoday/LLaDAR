@@ -35,8 +35,7 @@
 lladar create test-dataset --knowledge knowledge.md --lang zh-TW --output dataset.jsonl
 lladar run-agent dataset.jsonl --project ../my-agent --lang zh-TW
 lladar eval responses.jsonl --lang zh-TW
-lladar report evaluation.json --lang ko
-lladar create report-skill --lang zh-CN</code></pre>
+lladar report evaluation.json --lang ko</code></pre>
       <p>保存的問題、受測回答、引文、ID、欄位名稱、精確 probe 與數值保留原值。網站答案擷取保留原回答；技術診斷與第三方追蹤可能保留原始語言。情境模式自由文字使用指定語言；此選項不增加受測 Agent 語言要求或評分條件。</p>
       <p>下一步命令帶上語言。新階段省略時使用 <code>en</code>；<code>--resume</code> 省略語言時恢復保存值，明確指定時須相同。衝突會被拒絕；舊工作沒有語言紀錄時請使用原版本或建立新工作。Python 階段 API 接受 <code>lang="ja"</code>。紀錄區分 <code>lang</code> 與 <code>ui_lang</code>；範本的 <code>language.json</code> 另記錄 <code>template_lang</code>。</p>
     </section>
@@ -99,6 +98,30 @@ lladar run-agent artifacts/dataset.jsonl --page-url https://example.test/chat --
     <section id="report"><h2><code>report</code></h2><p>把評估輸出轉為不誇大結論、可回頭查的 Markdown 報告。</p><pre><code>lladar report EVALUATION [OPTIONS]</code></pre><table><thead><tr><th>參數</th><th>預設值</th><th>用途</th></tr></thead><tbody>
       <tr><td><code>EVALUATION</code></td><td>必填</td><td><code>eval</code> 產生的評估 JSON。</td></tr><tr><td><code>--output PATH</code></td><td><code>report.md</code></td><td>要產生的 Markdown 報告。</td></tr><tr><td><code>--skill DIRECTORY</code></td><td>單題：內建 <code>report-evidence-summary</code>；情境：無</td><td>本機報告方法；情境模式只增加敘述，不改已保存的判斷與統計。</td></tr><tr><td><code>--model MODEL</code></td><td><code>gemini:gemini-3.7-flash</code></td><td>用 skill 撰寫摘要的模型；情境報告未指定 <code>--skill</code> 時不呼叫模型。</td></tr><tr><td><code>--env-file PATH</code></td><td><code>.env</code></td><td>提供給報告 provider 的環境檔。</td></tr><tr><td><code>--force</code></td><td>關閉</td><td>覆寫既有報告。</td></tr>
     </tbody></table><pre><code>lladar report artifacts/evaluation.json --output artifacts/report.md</code></pre></section>
+    <section>
+      <h2 id="skill-templates">Skill 範本（進階）</h2>
+      <p>想自訂出題、情境編製、測試排程、評估或報告撰寫方式時，可用 <code>lladar create --help</code> 中的五個命令建立可編輯的 Skill。建立範本會在本機寫入檔案，無須呼叫模型。編輯後，在對應的工作流程用 <code>--skill DIRECTORY</code> 指向範本目錄。</p>
+      <table>
+        <thead><tr><th>建立範本的命令</th><th>可自訂的內容</th><th>在哪個命令使用 <code>--skill</code></th></tr></thead>
+        <tbody>
+          <tr><td><code>lladar create test-dataset-skill</code></td><td>出題範圍、問句風格、預期答案要求。</td><td><a href="#create"><code>lladar create test-dataset</code></a></td></tr>
+          <tr><td><code>lladar create situation-skill</code></td><td>多輪情境的觀察目標、可變條件，以及哪些對話證據算成功或失敗。</td><td><a href="#create-situation"><code>lladar create situation</code></a></td></tr>
+          <tr><td><code>lladar create run-agent-skill</code></td><td>單題測試的選題方式與重複次數，例如抽五題、每題測三次。</td><td><a href="#run-agent"><code>lladar run-agent</code></a> 的單題模式</td></tr>
+          <tr><td><code>lladar create eval-skill</code></td><td>回答的判定規則，例如同義說法是否可接受、哪些條件必須答到。</td><td><a href="#eval"><code>lladar eval</code></a>。使用 <code>--skill</code> 時省略 <code>--criteria</code>。</td></tr>
+          <tr><td><code>lladar create report-skill</code></td><td>報告的讀者、語氣與敘述重點。統計來自已保存的評估結果。</td><td><a href="#report"><code>lladar report</code></a></td></tr>
+        </tbody>
+      </table>
+      <p><code>SKILL.md</code> 保存執行時會讀取的規則。可先看 <code>AUTHORING.md</code> 的修改位置與範例，再在 <code>SKILL.md</code> 用自然語言調整需求，並保留工具與提交格式。<code>language.json</code> 記錄範本的語言設定。</p>
+      <ul>
+        <li><code>--output DIRECTORY</code> 指定範本目錄。省略時建立在目前工作目錄的 <code>./lladar-skills/&lt;stage&gt;/</code>，例如 <code>./lladar-skills/test-dataset/</code>。</li>
+        <li><code>--lang CODE</code> 選擇範本語言，預設 <code>en</code>。使用 <code>--lang zh-TW</code> 建立繁體中文版。</li>
+        <li><code>--force</code> 允許在既有目錄重新產生範本，會覆寫 <code>SKILL.md</code>、<code>AUTHORING.md</code> 和 <code>language.json</code>，包括手動修改。預設遇到既有目錄會停止。</li>
+      </ul>
+      <p>例如，先建立繁體中文的出題範本。</p>
+      <pre><code>lladar create test-dataset-skill --output ./my-qa --lang zh-TW</code></pre>
+      <p>在 <code>./my-qa/SKILL.md</code> 修改出題規則，例如「用顧客的口吻詢問退款期限，預期答案要保留適用條件」。準備好知識文件 <code>knowledge.md</code> 後，使用這份 Skill 出題。</p>
+      <pre><code>lladar create test-dataset --knowledge knowledge.md --skill ./my-qa --output dataset.jsonl --lang zh-TW</code></pre>
+    </section>
   </main>
   <footer>MIT License · <a href="https://github.com/stoday/LLaDAR">GitHub</a></footer>
 </body>

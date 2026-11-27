@@ -36,8 +36,7 @@
 lladar create test-dataset --knowledge knowledge.md --lang zh-TW --output dataset.jsonl
 lladar run-agent dataset.jsonl --project ../my-agent --lang zh-TW
 lladar eval responses.jsonl --lang zh-TW
-lladar report evaluation.json --lang ko
-lladar create report-skill --lang zh-CN</code></pre>
+lladar report evaluation.json --lang ko</code></pre>
       <p>Saved questions, target responses, quotes, IDs, schema keys, exact probes and measurements retain their original values. Browser extraction preserves the original answer. Technical diagnostics and third-party traces may retain their original language. Situation free-text generation uses the chosen language. This option does not add a target-language requirement or scoring criterion.</p>
       <p>Next-step commands carry the setting. A new stage without it uses <code>en</code>; <code>--resume</code> restores the saved language unless an identical value is supplied. Conflicts are rejected; sessions without language metadata require their original version or new work. Python stage APIs accept <code>lang="ja"</code>. Metadata distinguishes <code>lang</code> from <code>ui_lang</code>; templates include <code>language.json</code> with <code>template_lang</code>.</p>
     </section>
@@ -133,6 +132,30 @@ lladar run-agent artifacts/dataset.jsonl --page-url https://example.test/chat --
     <section id="report"><h2><code>report</code></h2><p>Render an evidence-bounded Markdown report from an evaluation output.</p><pre><code>lladar report EVALUATION [OPTIONS]</code></pre><table><thead><tr><th>Argument</th><th>Default</th><th>Use</th></tr></thead><tbody>
       <tr><td><code>EVALUATION</code></td><td>Required</td><td>Evaluation JSON created by <code>eval</code>.</td></tr><tr><td><code>--output PATH</code></td><td><code>report.md</code></td><td>Markdown report to create.</td></tr><tr><td><code>--skill DIRECTORY</code></td><td>QA: bundled <code>report-evidence-summary</code>; situation: none</td><td>One local <code>SKILL.md</code> report-summary method. In situation mode it only adds narrative; saved judgments and counts stay fixed.</td></tr><tr><td><code>--model MODEL</code></td><td><code>gemini:gemini-3.7-flash</code></td><td>Model used for a Skill-written summary; situation reports without <code>--skill</code> are rendered without a model call.</td></tr><tr><td><code>--env-file PATH</code></td><td><code>.env</code></td><td>Environment file supplied to the report provider.</td></tr><tr><td><code>--force</code></td><td>Off</td><td>Replace an existing report.</td></tr>
     </tbody></table><pre><code>lladar report artifacts/evaluation.json --output artifacts/report.md</code></pre></section>
+    <section>
+      <h2 id="skill-templates">Skill templates (advanced)</h2>
+      <p>Use the five commands listed in <code>lladar create --help</code> to customize question generation, situation authoring, test scheduling, evaluation, or reporting. Creating a template writes local files without a model call. After editing the template, pass its directory to the corresponding workflow command with <code>--skill DIRECTORY</code>.</p>
+      <table>
+        <thead><tr><th>Template command</th><th>What you can customize</th><th>Command that accepts the Skill</th></tr></thead>
+        <tbody>
+          <tr><td><code>lladar create test-dataset-skill</code></td><td>Question topics, wording, and expected-answer requirements.</td><td><a href="#create"><code>lladar create test-dataset</code></a></td></tr>
+          <tr><td><code>lladar create situation-skill</code></td><td>The behavior to observe, what can vary between scenarios, and what counts as evidence of success or failure.</td><td><a href="#create-situation"><code>lladar create situation</code></a></td></tr>
+          <tr><td><code>lladar create run-agent-skill</code></td><td>Which single-question cases to run and how often, such as five sampled cases with three runs each.</td><td><a href="#run-agent"><code>lladar run-agent</code></a> in single-question mode</td></tr>
+          <tr><td><code>lladar create eval-skill</code></td><td>How to judge answers, including acceptable paraphrases and required answer details.</td><td><a href="#eval"><code>lladar eval</code></a>. When using <code>--skill</code>, omit <code>--criteria</code>.</td></tr>
+          <tr><td><code>lladar create report-skill</code></td><td>The report audience, tone, and emphasis. Report statistics come from the saved evaluation.</td><td><a href="#report"><code>lladar report</code></a></td></tr>
+        </tbody>
+      </table>
+      <p><code>SKILL.md</code> contains the active rules. See <code>AUTHORING.md</code> for where to edit and what to try, then write your requirements in plain language in <code>SKILL.md</code>. Keep the tool names and submission formats intact. <code>language.json</code> records the template language.</p>
+      <ul>
+        <li><code>--output DIRECTORY</code> sets the template directory. The default is <code>./lladar-skills/&lt;stage&gt;/</code> under the current working directory, such as <code>./lladar-skills/test-dataset/</code>.</li>
+        <li><code>--lang CODE</code> selects the template language. It defaults to <code>en</code>. Use <code>--lang zh-TW</code> for Traditional Chinese.</li>
+        <li><code>--force</code> regenerates <code>SKILL.md</code>, <code>AUTHORING.md</code>, and <code>language.json</code> in an existing directory, replacing any edits to those files. By default, creation stops if the directory exists.</li>
+      </ul>
+      <p>For example, create a question-generation template.</p>
+      <pre><code>lladar create test-dataset-skill --output ./my-qa</code></pre>
+      <p>Edit <code>./my-qa/SKILL.md</code> to ask for questions about refund deadlines in a customer's own words and require expected answers to include eligibility conditions. With your source document saved as <code>knowledge.md</code>, generate a dataset using your Skill.</p>
+      <pre><code>lladar create test-dataset --knowledge knowledge.md --skill ./my-qa --output dataset.jsonl</code></pre>
+    </section>
   </main>
   <footer><div class="wrap">LLaDAR documentation</div></footer>
 </body>
