@@ -166,9 +166,12 @@ Document generation defaults to `--workflow-level 1`, which extracts facts and
 writes questions in a single submission per source batch. Level `2` adds selective
 question review and samples the original source. Level `3` uses staged generation
 and a full source audit. All three levels accept the same `--question-type` values.
-Custom skills and controlled variants default to level `3` to retain the staged
-tools, including graph and candidate-file delivery. Final results are validated
-before publishing. Every dataset includes `dataset.jsonl.generation.json`.
+The CLI also defaults to level `1` with `--skill` or either controlled-variant
+option. All three levels support controlled variants. Levels `1` and `2` plan
+pairs from the accepted source facts after combined generation. Set
+`--workflow-level 3` for custom skills that directly use staged graph or
+candidate-file tools. Final results are validated before publishing. Every
+dataset includes `dataset.jsonl.generation.json`.
 `dataset.jsonl.graph.json` is written when a valid graph is used.
 
 This step creates questions and expected answers from your knowledge documents. It is

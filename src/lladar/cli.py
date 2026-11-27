@@ -392,7 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help=f"Output directory or file path. A directory gets a new {_DATASET_FILENAME_DISPLAY} file; new paths without a suffix are directories (default: {_DEFAULT_DATASET_OUTPUT_DISPLAY}).")
     dataset.add_argument("--count", type=int, default=0, metavar="N", help="Maximum deduplicated records; 0 includes all candidates (default: 0).")
     dataset.add_argument("--workflow-level", type=int, choices=(1, 2, 3),
-                         help="Knowledge workflow: 1 combines generation (default); 2 adds selective review and a sampled source audit; 3 uses staged generation and a full audit. Existing custom skills and controlled variants default to 3.")
+                         help="Level 1 combines knowledge generation and is the default, including with --skill or controlled variants. Level 2 adds selective review and a sampled source audit. Level 3 uses staged generation and a full audit.")
     dataset.add_argument("--question-type", choices=("free", "auto", "single-choice", "multiple-choice", "ranking"),
                          default="free", help="Preferred generated question type; free uses source-grounded open answers (default: free).")
     dataset.add_argument("--controlled-variant-probes", action="store_true",
@@ -940,6 +940,9 @@ def _execute(
             else:
                 controlled_variant_selector = None
                 controlled_variant_topics = normalize_controlled_variant_topics(args.controlled_variant_topics)
+            workflow_level = args.workflow_level
+            if resume is None and workflow_level is None and args.knowledge:
+                workflow_level = 1
             output = _resolve_dataset_output(args.output)
             current_operation().set_output(output)
             records = create_test_dataset(
@@ -949,7 +952,7 @@ def _execute(
                 output=output,
                 count=args.count,
                 question_type=args.question_type,
-                workflow_level=args.workflow_level,
+                workflow_level=workflow_level,
                 controlled_variant_topics=controlled_variant_topics,
                 controlled_variant_selector=controlled_variant_selector,
                 seed=args.seed,

@@ -93,6 +93,7 @@ def create_test_dataset(
         result = generate_combined(sources, skill=selected_skill, custom_skill=skill is not None,
             workflow_level=workflow_level, agent_factory=skill_agent_factory,
             coverage_agent_factory=coverage_agent_factory, question_type=question_type, count=count,
+            controlled_variant_topics=controlled_variant_topics, controlled_variant_selector=controlled_variant_selector,
             seed=seed, model=model, env_file=env_file, temperature=temperature, profile=profile, verbose=verbose)
         if output is not None:
             result.publish(Path(output), force=force)
@@ -123,6 +124,7 @@ def create_test_dataset(
         allow_candidate_files=skill is not None,
         extra_tools_factory=coverage.generation_tools,
         inventory=coverage.inventory,
+        preload_skill=True,
     )
     result = generate_with_skill(**generation_options, request_context={"independent_inventory": True})
     coverage.inventory_sources(audit=True)

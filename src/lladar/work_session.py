@@ -208,6 +208,9 @@ def stage_session(stage):
                 return function(*bound.args, **bound.kwargs)
             output = Path(output).resolve()
             configuration = {"output": str(output), "stage_contract_version": 4 if stage == 'run-agent' and values.get('page_url') else 2 if stage == 'run-agent' else 1}
+            if (stage == "generation" and values.get("workflow_level") in (1, 2)
+                    and values.get("controlled_variant_selector") is not None):
+                configuration["controlled_variant_selector"] = True
             from .resource_limits import configured_resource_limits
             resource_overrides = configured_resource_limits()
             if resource_overrides:
